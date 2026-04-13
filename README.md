@@ -1,4 +1,4 @@
-# OdontoFlux
+# Odonto-Flux-IA
 
 Plataforma SaaS multi-tenant para operacao comercial e administrativa de clinicas odontologicas.
 
