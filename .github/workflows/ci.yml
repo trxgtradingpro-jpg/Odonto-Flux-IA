@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: odontoflux/apps/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: odontoflux
+          POSTGRES_USER: odontoflux
+          POSTGRES_PASSWORD: odontoflux
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U odontoflux -d odontoflux"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend deps
+        run: pip install -r requirements.txt
+      - name: Lint
+        run: ruff check app tests
+      - name: Test
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: odontoflux
+          POSTGRES_PASSWORD: odontoflux
+          POSTGRES_DB: odontoflux
+          REDIS_HOST: localhost
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: odontoflux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile=false
+      - name: Lint
+        run: pnpm --filter @odontoflux/web lint
