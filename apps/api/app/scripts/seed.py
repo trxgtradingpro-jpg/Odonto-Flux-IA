@@ -149,7 +149,7 @@ def create_unit_if_missing(db, tenant_id, code, name, phone):
     return item
 
 
-def create_user_if_missing(db, *, tenant_id, email, full_name, role_names, role_map):
+def create_user_if_missing(db, *, tenant_id, email, full_name, role_names, role_map, password: str = "Odonto@123"):
     user = db.scalar(select(User).where(User.email == email))
     if not user:
         user = User(
@@ -157,7 +157,7 @@ def create_user_if_missing(db, *, tenant_id, email, full_name, role_names, role_
             email=email,
             full_name=full_name,
             phone="5511999999999",
-            hashed_password=hash_password("Odonto@123"),
+            hashed_password=hash_password(password),
             is_active=True,
         )
         db.add(user)
@@ -166,6 +166,8 @@ def create_user_if_missing(db, *, tenant_id, email, full_name, role_names, role_
         user.tenant_id = tenant_id
         user.full_name = full_name
         user.phone = "5511999999999"
+        # Garante consistencia das credenciais demo em ambientes de teste/redeploy.
+        user.hashed_password = hash_password(password)
         user.is_active = True
         db.add(user)
         db.flush()
