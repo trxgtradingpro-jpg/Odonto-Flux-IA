@@ -11,6 +11,7 @@ from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
 from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
+from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
 from app.models import Setting, WhatsAppAccount, WhatsAppTemplate
 from app.models import Unit
 from app.services.ai_autoresponder_service import (
@@ -313,6 +314,8 @@ def test_whatsapp_connection(
 
     if provider_name == 'infobip':
         provider = InfobipWhatsAppProvider(base_url=business_account_id)
+    elif provider_name == 'twilio':
+        provider = TwilioWhatsAppProvider(account_sid=business_account_id)
     else:
         provider = WhatsAppCloudProvider()
 
@@ -348,6 +351,12 @@ def test_whatsapp_connection(
             or display_phone
             or phone_number_id
         )
+    if provider_name == 'twilio':
+        connected_number = (
+            (result.get('sender') if isinstance(result, dict) else None)
+            or display_phone
+            or phone_number_id
+        )
 
     record_audit(
         db,
@@ -373,6 +382,8 @@ def test_whatsapp_connection(
         'message': (
             'Conexao validada com sucesso na Infobip API'
             if provider_name == 'infobip'
+            else 'Conexao validada com sucesso na Twilio API'
+            if provider_name == 'twilio'
             else 'Conexao validada com sucesso na Meta Cloud API'
         ),
     }

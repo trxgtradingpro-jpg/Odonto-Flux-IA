@@ -16,3 +16,18 @@
 - Envie mensagem para numero de teste
 - Verifique criacao de `patient`, `lead`, `conversation`, `message`
 - Consulte logs em `audit` e `webhooks_inbox`
+
+## Setup Twilio WhatsApp
+
+1. No Twilio Console, habilite o canal WhatsApp e registre o sender.
+2. Copie:
+   - `Account SID` (ex.: `AC...`)
+   - `Auth Token`
+   - sender WhatsApp (ex.: `whatsapp:+5511999999999`)
+3. Configure webhook de entrada/status no Twilio:
+   - URL: `https://SEU-DOMINIO/api/v1/webhooks/whatsapp`
+4. Cadastre conta em `Configuracoes > WhatsApp` ou endpoint:
+   - `provider_name`: `twilio`
+   - `phone_number_id`: sender WhatsApp
+   - `business_account_id`: Account SID
+   - `access_token`: Auth Token

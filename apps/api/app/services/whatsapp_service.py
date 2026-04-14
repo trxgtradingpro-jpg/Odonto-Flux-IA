@@ -10,6 +10,7 @@ from app.core.exceptions import ApiError
 from app.core.logging import logger
 from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
 from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
+from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
 from app.models import (
     Conversation,
     Lead,
@@ -26,7 +27,7 @@ from app.services.automation_service import emit_event, pending_jobs_for_dispatc
 from app.utils.phone import normalize_phone
 
 
-SUPPORTED_WHATSAPP_PROVIDERS = {"meta_cloud", "infobip"}
+SUPPORTED_WHATSAPP_PROVIDERS = {"meta_cloud", "infobip", "twilio"}
 
 
 def verify_webhook_challenge(mode: str | None, token: str | None, challenge: str | None) -> str:
@@ -42,6 +43,8 @@ def normalize_whatsapp_provider_name(provider_name: str | None) -> str:
         return "meta_cloud"
     if value in {"infobip_whatsapp", "infobip_api"}:
         return "infobip"
+    if value in {"twilio_api", "twilio_whatsapp"}:
+        return "twilio"
     return value or "meta_cloud"
 
 
@@ -51,6 +54,23 @@ def _is_meta_provider(provider_name: str | None) -> bool:
 
 def _is_infobip_provider(provider_name: str | None) -> bool:
     return normalize_whatsapp_provider_name(provider_name) == "infobip"
+
+
+def _is_twilio_provider(provider_name: str | None) -> bool:
+    return normalize_whatsapp_provider_name(provider_name) == "twilio"
+
+
+def _strip_whatsapp_prefix(value: str | None) -> str:
+    raw = (value or '').strip()
+    if raw.lower().startswith('whatsapp:'):
+        return raw.split(':', 1)[1].strip()
+    return raw
+
+
+def _normalized_provider_phone(value: str | None) -> str:
+    stripped = _strip_whatsapp_prefix(value)
+    normalized = normalize_phone(stripped)
+    return normalized or stripped
 
 
 def whatsapp_account_issues(
@@ -67,7 +87,7 @@ def whatsapp_account_issues(
     token = (access_token or '').strip()
 
     if provider not in SUPPORTED_WHATSAPP_PROVIDERS:
-        issues.append('provider_name invalido (use meta_cloud ou infobip)')
+        issues.append('provider_name invalido (use meta_cloud, infobip ou twilio)')
         return issues
 
     if _is_meta_provider(provider):
@@ -80,7 +100,7 @@ def whatsapp_account_issues(
             issues.append('business_account_id ausente')
         elif not business_id.isdigit():
             issues.append('business_account_id deve ser o ID numerico da Meta')
-    else:
+    elif _is_infobip_provider(provider):
         if not phone_id:
             issues.append('sender_whatsapp ausente (campo phone_number_id)')
 
@@ -90,6 +110,16 @@ def whatsapp_account_issues(
             base = business_id.lower().replace('https://', '').replace('http://', '')
             if '.' not in base or '/' in base:
                 issues.append('base_url_infobip invalida (ex.: 3dd13w.api.infobip.com)')
+    else:
+        if not phone_id:
+            issues.append('sender_whatsapp ausente (campo phone_number_id)')
+        elif not _normalized_provider_phone(phone_id):
+            issues.append('sender_whatsapp invalido (ex.: whatsapp:+5511999999999)')
+
+        if not business_id:
+            issues.append('account_sid_twilio ausente (campo business_account_id)')
+        elif not (business_id.startswith('AC') and len(business_id) == 34):
+            issues.append('account_sid_twilio invalido (ex.: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx)')
 
     if not token:
         issues.append('access_token ausente')
@@ -97,7 +127,12 @@ def whatsapp_account_issues(
         token_lower = token.lower()
         if 'mock' in token_lower:
             issues.append('access_token de mock/simulacao detectado')
-        min_size = 32 if _is_meta_provider(provider) else 20
+        if _is_meta_provider(provider):
+            min_size = 32
+        elif _is_twilio_provider(provider):
+            min_size = 24
+        else:
+            min_size = 20
         if len(token) < min_size:
             issues.append('access_token muito curto para token de producao')
 
@@ -153,7 +188,7 @@ def _get_meta_account_by_phone_number_id(db: Session, phone_number_id: str) -> W
 def _get_infobip_account_by_sender(db: Session, sender: str | None) -> WhatsAppAccount | None:
     if not sender:
         return None
-    sender_normalized = normalize_phone(sender)
+    sender_normalized = _normalized_provider_phone(sender)
     accounts = db.execute(
         select(WhatsAppAccount).where(
             WhatsAppAccount.provider_name == "infobip",
@@ -163,7 +198,25 @@ def _get_infobip_account_by_sender(db: Session, sender: str | None) -> WhatsAppA
     for account in accounts:
         if account.phone_number_id == sender:
             return account
-        if normalize_phone(account.phone_number_id) == sender_normalized:
+        if _normalized_provider_phone(account.phone_number_id) == sender_normalized:
+            return account
+    return None
+
+
+def _get_twilio_account_by_destination(db: Session, destination: str | None) -> WhatsAppAccount | None:
+    if not destination:
+        return None
+    destination_normalized = _normalized_provider_phone(destination)
+    accounts = db.execute(
+        select(WhatsAppAccount).where(
+            WhatsAppAccount.provider_name == "twilio",
+            WhatsAppAccount.is_active.is_(True),
+        )
+    ).scalars().all()
+    for account in accounts:
+        if account.phone_number_id == destination:
+            return account
+        if _normalized_provider_phone(account.phone_number_id) == destination_normalized:
             return account
     return None
 
@@ -614,12 +667,210 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
     return stats
 
 
+def _normalize_twilio_delivery_status(status_payload: str | None) -> str:
+    status_name = str(status_payload or '').strip().lower()
+    if not status_name:
+        return 'sent'
+    if status_name in {'read', 'seen'}:
+        return 'read'
+    if status_name in {'delivered'}:
+        return 'delivered'
+    if status_name in {'undelivered', 'failed'}:
+        return 'failed'
+    if status_name in {'accepted', 'queued', 'sending', 'sent'}:
+        return 'sent'
+    if status_name in {'received'}:
+        return 'received'
+    return status_name
+
+
+def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
+    stats = {'received': 0, 'duplicates': 0, 'processed': 0, 'status_updates': 0}
+
+    message_sid = str(payload.get('MessageSid') or payload.get('SmsSid') or '').strip()
+    from_phone = str(payload.get('From') or '').strip()
+    to_phone = str(payload.get('To') or '').strip()
+    body = str(payload.get('Body') or '').strip()
+    raw_status = payload.get('MessageStatus') or payload.get('SmsStatus')
+    normalized_status = _normalize_twilio_delivery_status(raw_status)
+    num_media = str(payload.get('NumMedia') or '0').strip()
+
+    account = _get_twilio_account_by_destination(db, to_phone)
+    if not account:
+        account = _get_twilio_account_by_destination(db, from_phone)
+    if not account:
+        return stats
+
+    tenant_id = account.tenant_id
+    account_phone_normalized = _normalized_provider_phone(account.phone_number_id)
+    from_phone_normalized = _normalized_provider_phone(from_phone)
+    to_phone_normalized = _normalized_provider_phone(to_phone)
+
+    is_inbound = bool(
+        message_sid
+        and from_phone
+        and to_phone
+        and to_phone_normalized == account_phone_normalized
+        and from_phone_normalized != account_phone_normalized
+    )
+
+    if is_inbound:
+        stats['received'] += 1
+        event_id = f'twilio_inbound:{message_sid}'
+        inbox_event = WebhookInbox(
+            tenant_id=tenant_id,
+            provider='twilio_whatsapp',
+            event_id=event_id[:255],
+            payload=payload,
+            processed=False,
+        )
+        db.add(inbox_event)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            stats['duplicates'] += 1
+            return stats
+
+        sender_phone = _strip_whatsapp_prefix(from_phone)
+        normalized = normalize_phone(sender_phone)
+        patient = db.scalar(
+            select(Patient).where(
+                Patient.tenant_id == tenant_id,
+                Patient.normalized_phone == normalized,
+            )
+        )
+        lead = None
+        if not patient:
+            patient, lead = _create_patient_and_lead_from_phone(db, tenant_id, sender_phone)
+
+        conversation_id = _get_or_create_conversation(db, tenant_id, patient.id)
+        inbound_body = body
+        if not inbound_body and num_media != '0':
+            inbound_body = '[Mensagem com midia]'
+        if not inbound_body:
+            inbound_body = '[Mensagem sem texto]'
+        inferred_type = 'media' if num_media != '0' else 'text'
+
+        inbound_message = Message(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            direction=MessageDirection.INBOUND.value,
+            channel='whatsapp',
+            provider_message_id=message_sid or None,
+            sender_type='patient',
+            body=inbound_body,
+            message_type=inferred_type,
+            payload=payload,
+            status=MessageStatus.RECEIVED.value,
+        )
+        db.add(inbound_message)
+
+        conversation = db.get(Conversation, conversation_id)
+        if conversation:
+            conversation.last_message_at = datetime.now(UTC)
+            db.add(conversation)
+
+        db.add(
+            MessageEvent(
+                tenant_id=tenant_id,
+                event_type='webhook_message_received',
+                payload=payload,
+            )
+        )
+        inbox_event.processed = True
+        inbox_event.processed_at = datetime.now(UTC)
+        db.add(inbox_event)
+        db.commit()
+        stats['processed'] += 1
+
+        emit_event(
+            db,
+            tenant_id=tenant_id,
+            event_key='mensagem_recebida',
+            payload={
+                'conversation_id': str(conversation_id),
+                'patient_id': str(patient.id),
+                'lead_id': str(lead.id) if lead else None,
+                'phone': sender_phone,
+                'message': inbound_body,
+            },
+        )
+        try:
+            from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
+
+            process_ai_autoresponder_inbound(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                inbound_message_id=inbound_message.id,
+            )
+        except Exception as exc:
+            logger.exception(
+                'ai_autoresponder.inbound_failed',
+                tenant_id=str(tenant_id),
+                conversation_id=str(conversation_id),
+                message_id=str(inbound_message.id),
+                error=str(exc),
+            )
+        return stats
+
+    has_status_update = bool(message_sid and normalized_status and normalized_status != 'received')
+    if has_status_update:
+        event_id = f'twilio_status:{message_sid}:{normalized_status}'
+        db.add(
+            WebhookInbox(
+                tenant_id=tenant_id,
+                provider='twilio_whatsapp',
+                event_id=event_id[:255],
+                payload=payload,
+                processed=True,
+                processed_at=datetime.now(UTC),
+            )
+        )
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            stats['duplicates'] += 1
+            return stats
+
+        msg = db.scalar(
+            select(Message).where(
+                Message.tenant_id == tenant_id,
+                Message.provider_message_id == message_sid,
+            )
+        )
+        if msg:
+            msg.status = normalized_status
+            if normalized_status == 'delivered':
+                msg.delivered_at = datetime.now(UTC)
+            elif normalized_status == 'read':
+                msg.read_at = datetime.now(UTC)
+            db.add(msg)
+
+        db.add(
+            MessageEvent(
+                tenant_id=tenant_id,
+                message_id=msg.id if msg else None,
+                event_type=f'status_{normalized_status}',
+                payload=payload,
+            )
+        )
+        db.commit()
+        stats['status_updates'] += 1
+
+    return stats
+
+
 def ingest_webhook_payload(db: Session, payload: dict) -> dict:
     if isinstance(payload, dict):
         if isinstance(payload.get('entry'), list):
             return _ingest_meta_webhook_payload(db, payload)
         if isinstance(payload.get('results'), list):
             return _ingest_infobip_webhook_payload(db, payload)
+        if payload.get('MessageSid') or payload.get('SmsSid'):
+            return _ingest_twilio_webhook_payload(db, payload)
 
     return {'received': 0, 'duplicates': 0, 'processed': 0, 'status_updates': 0}
 
@@ -675,13 +926,15 @@ def _provider_for_account(account: WhatsAppAccount):
     provider_name = normalize_whatsapp_provider_name(account.provider_name)
     if provider_name == 'infobip':
         return InfobipWhatsAppProvider(base_url=account.business_account_id)
+    if provider_name == 'twilio':
+        return TwilioWhatsAppProvider(account_sid=account.business_account_id)
     return WhatsAppCloudProvider()
 
 
 def _extract_provider_message_id(response: dict | None) -> str | None:
     if not isinstance(response, dict):
         return None
-    top_level_id = response.get('messageId') or response.get('id')
+    top_level_id = response.get('messageId') or response.get('id') or response.get('sid')
     if isinstance(top_level_id, str) and top_level_id.strip():
         return top_level_id
     messages = response.get('messages')

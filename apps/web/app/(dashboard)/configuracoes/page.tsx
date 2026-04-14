@@ -21,7 +21,7 @@ type SettingItem = {
 
 type WhatsAppAccountItem = {
   id: string;
-  provider_name: "meta_cloud" | "infobip" | string;
+  provider_name: "meta_cloud" | "infobip" | "twilio" | string;
   phone_number_id: string;
   business_account_id: string;
   display_phone?: string | null;
@@ -233,7 +233,7 @@ export default function ConfiguracoesPage() {
   const [settingKey, setSettingKey] = useState("clinic.timezone");
   const [settingValue, setSettingValue] = useState("America/Sao_Paulo");
 
-  const [whatsappProvider, setWhatsappProvider] = useState<"meta_cloud" | "infobip">("meta_cloud");
+  const [whatsappProvider, setWhatsappProvider] = useState<"meta_cloud" | "infobip" | "twilio">("meta_cloud");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [businessAccountId, setBusinessAccountId] = useState("");
   const [accessToken, setAccessToken] = useState("");
@@ -517,19 +517,42 @@ export default function ConfiguracoesPage() {
     typeof timezoneSetting?.value === "string" ? timezoneSetting.value : "America/Sao_Paulo";
   const privacySummary = privacySummaryQuery.data;
   const isInfobipProvider = whatsappProvider === "infobip";
-  const providerDisplayName = isInfobipProvider ? "Infobip" : "Meta Cloud API";
-  const providerPhoneLabel = isInfobipProvider ? "Sender WhatsApp (Infobip)" : "ID do número (Meta)";
-  const providerBusinessLabel = isInfobipProvider ? "Base URL da API Infobip" : "ID da conta comercial (Meta)";
-  const providerTokenLabel = isInfobipProvider ? "Chave API Infobip" : "Token de acesso da Meta";
+  const isTwilioProvider = whatsappProvider === "twilio";
+  const providerDisplayName = isInfobipProvider
+    ? "Infobip"
+    : isTwilioProvider
+      ? "Twilio"
+      : "Meta Cloud API";
+  const providerPhoneLabel = isInfobipProvider
+    ? "Sender WhatsApp (Infobip)"
+    : isTwilioProvider
+      ? "Sender WhatsApp (Twilio)"
+      : "ID do número (Meta)";
+  const providerBusinessLabel = isInfobipProvider
+    ? "Base URL da API Infobip"
+    : isTwilioProvider
+      ? "Account SID (Twilio)"
+      : "ID da conta comercial (Meta)";
+  const providerTokenLabel = isInfobipProvider
+    ? "Chave API Infobip"
+    : isTwilioProvider
+      ? "Auth Token (Twilio)"
+      : "Token de acesso da Meta";
   const providerPhonePlaceholder = isInfobipProvider
     ? "Ex.: 5511940431906 (sender aprovado na Infobip)"
-    : "Ex.: 1101713436353674";
+    : isTwilioProvider
+      ? "Ex.: whatsapp:+5511999999999"
+      : "Ex.: 1101713436353674";
   const providerBusinessPlaceholder = isInfobipProvider
     ? "Ex.: 3dd13w.api.infobip.com"
-    : "Ex.: 936994182588219";
+    : isTwilioProvider
+      ? "Ex.: ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      : "Ex.: 936994182588219";
   const providerTokenPlaceholder = isInfobipProvider
     ? "Cole a chave App da Infobip"
-    : "Cole o access token da Meta";
+    : isTwilioProvider
+      ? "Cole o Auth Token da Twilio"
+      : "Cole o access token da Meta";
   const knowledgeServices = aiKnowledgeDraft.services.length ? aiKnowledgeDraft.services : [EMPTY_SERVICE];
   const knowledgeFaq = aiKnowledgeDraft.faq.length ? aiKnowledgeDraft.faq : [EMPTY_FAQ];
 
@@ -713,12 +736,18 @@ export default function ConfiguracoesPage() {
                   <select
                     className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
                     value={whatsappProvider}
-                    onChange={(event) =>
-                      setWhatsappProvider(event.target.value === "infobip" ? "infobip" : "meta_cloud")
-                    }
+                    onChange={(event) => {
+                      const provider = event.target.value;
+                      if (provider === "infobip" || provider === "twilio" || provider === "meta_cloud") {
+                        setWhatsappProvider(provider);
+                        return;
+                      }
+                      setWhatsappProvider("meta_cloud");
+                    }}
                   >
                     <option value="meta_cloud">Meta Cloud API</option>
                     <option value="infobip">Infobip</option>
+                    <option value="twilio">Twilio</option>
                   </select>
                 </div>
                 <div className="space-y-1">
@@ -761,7 +790,9 @@ export default function ConfiguracoesPage() {
                 <p className="rounded-md border border-stone-200 bg-stone-50 p-2 text-xs text-stone-600">
                   {isInfobipProvider
                     ? "Infobip: informe sender, base URL (ex.: 3dd13w.api.infobip.com) e App key."
-                    : "Meta: informe Phone Number ID, Business Account ID e Access Token oficiais da Meta."}
+                    : isTwilioProvider
+                      ? "Twilio: informe sender WhatsApp (whatsapp:+...), Account SID (AC...) e Auth Token."
+                      : "Meta: informe Phone Number ID, Business Account ID e Access Token oficiais da Meta."}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -790,7 +821,12 @@ export default function ConfiguracoesPage() {
               {
                 key: "provedor",
                 label: "Provedor",
-                render: (item) => (item.provider_name === "infobip" ? "Infobip" : "Meta Cloud"),
+                render: (item) =>
+                  item.provider_name === "infobip"
+                    ? "Infobip"
+                    : item.provider_name === "twilio"
+                      ? "Twilio"
+                      : "Meta Cloud",
               },
               { key: "numero", label: "Número conectado", render: (item) => item.display_phone || "-" },
               { key: "status", label: "Status", render: (item) => <StatusBadge value={item.is_active ? "ativo" : "inativo"} /> },

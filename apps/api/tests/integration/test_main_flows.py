@@ -203,3 +203,70 @@ def test_infobip_account_dispatches_outbox(client, auth_headers, seeded_db, db_s
     refreshed = db_session.get(OutboxMessage, outbox.id)
     assert refreshed is not None
     assert refreshed.status == 'sent'
+
+
+def test_twilio_account_dispatches_outbox(client, auth_headers, seeded_db, db_session, monkeypatch):
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'twilio'
+    account.phone_number_id = 'whatsapp:+447860088970'
+    account.business_account_id = 'AC' + ('1' * 32)
+    account.access_token_encrypted = 'twilio-token-' + ('x' * 24)
+    db_session.add(account)
+    db_session.commit()
+
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=None,
+        to='5511999990001',
+        body='Teste Twilio',
+        message_type='text',
+    )
+
+    from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
+
+    def _fake_send_text_message(self, *, phone_number_id, access_token, to, body):
+        return {'sid': 'SMtwilio001'}
+
+    monkeypatch.setattr(TwilioWhatsAppProvider, 'send_text_message', _fake_send_text_message)
+
+    result = process_outbox_batch(db_session, batch_size=20)
+    assert result['sent'] >= 1
+
+    refreshed = db_session.get(OutboxMessage, outbox.id)
+    assert refreshed is not None
+    assert refreshed.status == 'sent'
+
+
+def test_twilio_webhook_creates_inbound_message(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'twilio'
+    account.phone_number_id = 'whatsapp:+447860088970'
+    account.business_account_id = 'AC' + ('2' * 32)
+    account.access_token_encrypted = 'twilio-token-' + ('x' * 24)
+    db_session.add(account)
+    db_session.commit()
+
+    payload = {
+        'MessageSid': 'SMtwilio-in-001',
+        'From': 'whatsapp:+5511999991111',
+        'To': 'whatsapp:+447860088970',
+        'Body': 'Oi, quero agendar via Twilio',
+        'MessageStatus': 'received',
+        'SmsStatus': 'received',
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511999991111'))
+    assert patient is not None
+
+    conversation = db_session.scalar(select(Conversation).where(Conversation.patient_id == patient.id))
+    assert conversation is not None
+
+    message = db_session.scalar(select(Message).where(Message.conversation_id == conversation.id))
+    assert message is not None
+    assert 'Twilio' in message.body

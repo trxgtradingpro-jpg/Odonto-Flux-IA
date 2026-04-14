@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +20,25 @@ def verify_webhook(
 
 
 @router.post('')
-def receive_webhook(payload: dict, db: Session = Depends(get_db)):
+async def receive_webhook(request: Request, db: Session = Depends(get_db)):
+    payload: dict = {}
+    content_type = (request.headers.get('content-type') or '').lower()
+
+    if 'application/json' in content_type:
+        raw_json = await request.json()
+        if isinstance(raw_json, dict):
+            payload = raw_json
+    elif 'application/x-www-form-urlencoded' in content_type or 'multipart/form-data' in content_type:
+        form_data = await request.form()
+        payload = {key: value for key, value in form_data.multi_items()}
+
+    if not payload and request.headers.get('content-length'):
+        try:
+            raw_json = await request.json()
+        except Exception:
+            raw_json = {}
+        if isinstance(raw_json, dict):
+            payload = raw_json
+
     result = ingest_webhook_payload(db, payload)
     return {'status': 'ok', 'result': result}

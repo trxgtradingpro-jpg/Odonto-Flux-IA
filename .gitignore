@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+.env.worker.render
 .venv/
 node_modules/
 .next/
