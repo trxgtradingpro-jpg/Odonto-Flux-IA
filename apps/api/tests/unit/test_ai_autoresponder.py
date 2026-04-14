@@ -3,6 +3,7 @@ from sqlalchemy import delete, func, select
 
 from app.models import (
     AIAutoresponderDecision,
+    Appointment,
     Conversation,
     Message,
     OutboxMessage,
@@ -240,6 +241,52 @@ def test_inbound_contact_data_updates_patient_profile(seeded_db, db_session):
     assert refreshed_patient.full_name == "Guilherme Alves"
     assert refreshed_patient.email == "guilherme.alves@example.com"
     assert "dados_cadastrais_capturados" in (refreshed_conversation.tags or [])
+
+
+def test_period_reply_creates_appointment_automatically(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Manhã",
+    )
+
+    prior_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Tenho horários disponíveis. Prefere manhã, tarde ou noite?",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    db_session.add(prior_message)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "appointment_created"
+    assert appointment is not None
+    assert appointment.status == "agendada"
+    assert appointment.confirmation_status == "confirmada"
 
 
 def test_idempotency_prevents_double_auto_reply(seeded_db, db_session):

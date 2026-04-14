@@ -2,8 +2,9 @@
 
 import json
 import re
+import unicodedata
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
 from uuid import UUID
@@ -17,15 +18,19 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.models import (
     AIAutoresponderDecision,
+    Appointment,
+    AppointmentEvent,
     Conversation,
     Lead,
     Message,
     MessageEvent,
     Patient,
     Setting,
+    Unit,
     User,
 )
 from app.models.enums import MessageDirection, MessageStatus
+from app.services.automation_service import emit_event
 from app.services.audit_service import record_audit
 from app.services.llm_service import classify_intent, run_llm_task
 from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
@@ -136,6 +141,25 @@ CONTACT_EMAIL_PATTERN = re.compile(
     r"\b([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b",
     re.IGNORECASE,
 )
+
+SCHEDULING_INTENT_KEYWORDS = (
+    "agendar",
+    "agenda",
+    "marcar",
+    "consulta",
+)
+
+AVAILABILITY_REQUEST_KEYWORDS = (
+    "horario",
+    "horarios",
+    "vaga",
+    "disponivel",
+    "disponiveis",
+)
+
+PERIOD_MORNING_KEYWORDS = ("manha", "manhã")
+PERIOD_AFTERNOON_KEYWORDS = ("tarde",)
+PERIOD_EVENING_KEYWORDS = ("noite",)
 
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
@@ -761,6 +785,374 @@ def _conversation_destination_phone(db: Session, *, conversation: Conversation) 
     return None
 
 
+def _normalize_for_match(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text or "")
+    stripped = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+    return stripped.lower().strip()
+
+
+def _detect_period_preference(text: str) -> str | None:
+    lowered = _normalize_for_match(text)
+    if any(keyword in lowered for keyword in PERIOD_MORNING_KEYWORDS):
+        return "morning"
+    if any(keyword in lowered for keyword in PERIOD_AFTERNOON_KEYWORDS):
+        return "afternoon"
+    if any(keyword in lowered for keyword in PERIOD_EVENING_KEYWORDS):
+        return "evening"
+    return None
+
+
+def _is_scheduling_context(*, inbound_text: str, context: str) -> bool:
+    inbound_normalized = _normalize_for_match(inbound_text)
+    context_normalized = _normalize_for_match(context)
+    if any(keyword in inbound_normalized for keyword in SCHEDULING_INTENT_KEYWORDS):
+        return True
+    if any(keyword in inbound_normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS):
+        return True
+    if any(keyword in context_normalized for keyword in SCHEDULING_INTENT_KEYWORDS):
+        if len(inbound_normalized.split()) <= 4:
+            return True
+    if any(keyword in context_normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS):
+        if len(inbound_normalized.split()) <= 4:
+            return True
+    return False
+
+
+def _is_explicit_availability_request(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    return any(keyword in normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS)
+
+
+def _resolve_conversation_unit(db: Session, *, conversation: Conversation) -> Unit | None:
+    if conversation.unit_id:
+        unit = db.scalar(
+            select(Unit).where(
+                Unit.id == conversation.unit_id,
+                Unit.tenant_id == conversation.tenant_id,
+                Unit.is_active.is_(True),
+            )
+        )
+        if unit:
+            return unit
+
+    return db.scalar(
+        select(Unit)
+        .where(
+            Unit.tenant_id == conversation.tenant_id,
+            Unit.is_active.is_(True),
+        )
+        .order_by(Unit.created_at.asc())
+        .limit(1)
+    )
+
+
+def _resolve_operation_timezone(config: dict[str, Any]) -> ZoneInfo:
+    timezone_name = str((config.get("business_hours") or {}).get("timezone") or settings.app_timezone)
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/Sao_Paulo")
+
+
+def _period_window_minutes(*, base_start: int, base_end: int, period: str | None) -> tuple[int, int]:
+    if period == "morning":
+        return max(base_start, 7 * 60), min(base_end, 12 * 60)
+    if period == "afternoon":
+        return max(base_start, 12 * 60), min(base_end, 18 * 60)
+    if period == "evening":
+        return max(base_start, 18 * 60), min(base_end, 22 * 60)
+    return base_start, base_end
+
+
+def _weekday_label_pt(weekday_index: int) -> str:
+    labels = [
+        "segunda-feira",
+        "terça-feira",
+        "quarta-feira",
+        "quinta-feira",
+        "sexta-feira",
+        "sábado",
+        "domingo",
+    ]
+    if 0 <= weekday_index <= 6:
+        return labels[weekday_index]
+    return "dia"
+
+
+def _format_slot_pt(slot_local: datetime) -> str:
+    return f"{_weekday_label_pt(slot_local.weekday())}, {slot_local.strftime('%d/%m')} às {slot_local.strftime('%H:%M')}"
+
+
+def _list_available_slots(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    unit_id: UUID,
+    config: dict[str, Any],
+    period: str | None,
+    max_slots: int = 3,
+    slot_duration_minutes: int = 60,
+) -> list[dict[str, Any]]:
+    timezone = _resolve_operation_timezone(config)
+    now_utc = datetime.now(UTC)
+    now_local = now_utc.astimezone(timezone)
+
+    business_hours = config.get("business_hours") or {}
+    weekdays = [int(day) for day in (business_hours.get("weekdays") or [0, 1, 2, 3, 4]) if isinstance(day, int)]
+    if not weekdays:
+        weekdays = [0, 1, 2, 3, 4]
+
+    start_h, start_m = _parse_hhmm(str(business_hours.get("start") or "08:00"))
+    end_h, end_m = _parse_hhmm(str(business_hours.get("end") or "18:00"))
+    base_start = start_h * 60 + start_m
+    base_end = end_h * 60 + end_m
+    window_start, window_end = _period_window_minutes(base_start=base_start, base_end=base_end, period=period)
+    if window_end <= window_start:
+        return []
+
+    window_end_utc = now_utc + timedelta(days=21)
+    busy_rows = db.execute(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.unit_id == unit_id,
+            Appointment.starts_at >= now_utc - timedelta(hours=2),
+            Appointment.starts_at <= window_end_utc,
+            Appointment.status.in_(["agendada", "confirmada", "reagendada"]),
+        )
+    ).scalars().all()
+
+    busy_windows: list[tuple[datetime, datetime]] = []
+    for item in busy_rows:
+        start_at = item.starts_at
+        if not start_at:
+            continue
+        end_at = item.ends_at or (start_at + timedelta(minutes=slot_duration_minutes))
+        busy_windows.append((start_at, end_at))
+
+    slots: list[dict[str, Any]] = []
+    for day_offset in range(0, 21):
+        day_local = (now_local + timedelta(days=day_offset)).date()
+        if day_local.weekday() not in weekdays:
+            continue
+
+        minute_pointer = window_start
+        while minute_pointer + slot_duration_minutes <= window_end:
+            slot_local = datetime(
+                year=day_local.year,
+                month=day_local.month,
+                day=day_local.day,
+                hour=minute_pointer // 60,
+                minute=minute_pointer % 60,
+                tzinfo=timezone,
+            )
+            slot_start_utc = slot_local.astimezone(UTC)
+            slot_end_utc = slot_start_utc + timedelta(minutes=slot_duration_minutes)
+
+            if slot_start_utc <= now_utc + timedelta(minutes=20):
+                minute_pointer += 30
+                continue
+
+            has_conflict = any(
+                busy_start < slot_end_utc and busy_end > slot_start_utc
+                for busy_start, busy_end in busy_windows
+            )
+            if not has_conflict:
+                slots.append(
+                    {
+                        "starts_at_utc": slot_start_utc,
+                        "ends_at_utc": slot_end_utc,
+                        "starts_at_local": slot_local,
+                        "label": _format_slot_pt(slot_local),
+                    }
+                )
+                if len(slots) >= max_slots:
+                    return slots
+
+            minute_pointer += 30
+
+    return slots
+
+
+def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
+    normalized = _normalize_for_match(f"{inbound_text}\n{context}")
+    if "lente" in normalized:
+        return "Instalação de lentes"
+    if "ortodont" in normalized:
+        return "Avaliação ortodôntica"
+    if "limpeza" in normalized:
+        return "Limpeza odontológica"
+    return "Avaliação odontológica"
+
+
+def _patient_first_name(db: Session, *, conversation: Conversation) -> str:
+    if not conversation.patient_id:
+        return "Paciente"
+    patient = db.scalar(
+        select(Patient).where(
+            Patient.id == conversation.patient_id,
+            Patient.tenant_id == conversation.tenant_id,
+        )
+    )
+    if not patient or not patient.full_name:
+        return "Paciente"
+    return patient.full_name.strip().split(" ")[0] or "Paciente"
+
+
+def _build_scheduling_operation_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_text: str,
+    context: str,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    period = _detect_period_preference(inbound_text)
+    explicit_availability_request = _is_explicit_availability_request(inbound_text)
+    if not period and not explicit_availability_request:
+        return None
+    if period and not _is_scheduling_context(inbound_text=inbound_text, context=context):
+        return None
+
+    unit = _resolve_conversation_unit(db, conversation=conversation)
+    if not unit:
+        return {
+            "mode": "no_unit_available",
+            "response_text": (
+                "No momento não consegui acessar a agenda da unidade. "
+                "Vou encaminhar para o atendimento humano confirmar seu horário."
+            ),
+            "metadata": {"reason": "no_unit_available"},
+        }
+
+    if period:
+        slots = _list_available_slots(
+            db,
+            tenant_id=conversation.tenant_id,
+            unit_id=unit.id,
+            config=config,
+            period=period,
+            max_slots=1,
+        )
+        if not slots:
+            return {
+                "mode": "no_slots_for_period",
+                "response_text": (
+                    "No momento não tenho vaga nesse período. "
+                    "Posso verificar tarde ou noite para você?"
+                ),
+                "metadata": {"period": period, "reason": "no_slots_for_period"},
+            }
+        if not conversation.patient_id:
+            return {
+                "mode": "missing_patient",
+                "response_text": (
+                    "Consegui localizar horários, mas preciso confirmar seu cadastro. "
+                    "Vou transferir para o atendimento humano finalizar o agendamento."
+                ),
+                "metadata": {"period": period, "reason": "missing_patient"},
+            }
+
+        selected_slot = slots[0]
+        appointment = Appointment(
+            tenant_id=conversation.tenant_id,
+            patient_id=conversation.patient_id,
+            unit_id=unit.id,
+            professional_id=None,
+            procedure_type=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            starts_at=selected_slot["starts_at_utc"],
+            ends_at=selected_slot["ends_at_utc"],
+            origin="ai_autoresponder",
+            notes="Agendamento automático via WhatsApp/IA.",
+            status="agendada",
+            confirmation_status="confirmada",
+            confirmed_at=datetime.now(UTC),
+        )
+        db.add(appointment)
+        db.flush()
+
+        db.add(
+            AppointmentEvent(
+                tenant_id=conversation.tenant_id,
+                appointment_id=appointment.id,
+                event_type="created",
+                to_status=appointment.status,
+                metadata_json={
+                    "origin": "ai_autoresponder",
+                    "channel": "whatsapp",
+                    "period_preference": period,
+                },
+                created_by_user_id=None,
+            )
+        )
+
+        tags = set(conversation.tags or [])
+        tags.add("agendamento_confirmado_ia")
+        conversation.tags = sorted(tags)
+        db.add(conversation)
+
+        db.add(
+            MessageEvent(
+                tenant_id=conversation.tenant_id,
+                event_type="ai_appointment_created",
+                payload={
+                    "conversation_id": str(conversation.id),
+                    "appointment_id": str(appointment.id),
+                    "unit_id": str(unit.id),
+                    "starts_at": appointment.starts_at.isoformat(),
+                    "origin": "ai_autoresponder",
+                },
+            )
+        )
+
+        return {
+            "mode": "appointment_created",
+            "response_text": (
+                f"{_patient_first_name(db, conversation=conversation)}, agendamento confirmado para "
+                f"{selected_slot['label']} na unidade {unit.name}. "
+                "Se precisar, posso reagendar."
+            ),
+            "metadata": {
+                "appointment_id": str(appointment.id),
+                "period": period,
+                "selected_slot": selected_slot["label"],
+                "starts_at_utc": appointment.starts_at.isoformat(),
+                "unit_id": str(unit.id),
+            },
+        }
+
+    slots = _list_available_slots(
+        db,
+        tenant_id=conversation.tenant_id,
+        unit_id=unit.id,
+        config=config,
+        period=None,
+        max_slots=3,
+    )
+    if not slots:
+        return {
+            "mode": "no_slots_general",
+            "response_text": (
+                "No momento não encontrei horários livres na agenda. "
+                "Posso te avisar assim que abrir uma vaga."
+            ),
+            "metadata": {"reason": "no_slots_general"},
+        }
+
+    labels = [slot["label"] for slot in slots]
+    formatted_options = " | ".join(f"{idx + 1}) {label}" for idx, label in enumerate(labels))
+    return {
+        "mode": "slots_suggested",
+        "response_text": (
+            f"Tenho estes horários disponíveis: {formatted_options}. "
+            "Responda com manhã, tarde ou noite e eu já confirmo seu agendamento."
+        ),
+        "metadata": {
+            "slots": labels,
+            "unit_id": str(unit.id),
+        },
+    }
+
+
 def _recent_context(db: Session, *, tenant_id: UUID, conversation_id: UUID, limit: int = 12) -> str:
     messages = db.execute(
         select(Message)
@@ -1194,6 +1586,178 @@ def process_inbound_message(
             handoff=True,
         )
 
+    context = _recent_context(db, tenant_id=tenant_id, conversation_id=conversation.id)
+    destination = _conversation_destination_phone(db, conversation=conversation)
+    if not destination:
+        return finish_without_reply(
+            final_decision=DECISION_HANDOFF,
+            reason="missing_contact_phone",
+            handoff=True,
+        )
+
+    if conversation.channel == "whatsapp":
+        try:
+            assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+        except Exception:
+            return finish_without_reply(
+                final_decision=DECISION_HANDOFF,
+                reason="whatsapp_not_ready",
+                handoff=True,
+            )
+
+    scheduling_response = _build_scheduling_operation_response(
+        db,
+        conversation=conversation,
+        inbound_text=inbound_text,
+        context=context,
+        config=config,
+    )
+    if scheduling_response:
+        generated_response = str(scheduling_response.get("response_text") or "").strip()
+        if not generated_response:
+            return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
+        try:
+            outbound_message = Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                direction=MessageDirection.OUTBOUND.value,
+                channel=conversation.channel,
+                sender_type="ai",
+                body=generated_response,
+                message_type="text",
+                payload={
+                    "source": "ai_autoresponder",
+                    "mode": scheduling_response.get("mode"),
+                    "reply_to_message_id": str(inbound_message.id),
+                },
+                status=MessageStatus.QUEUED.value,
+            )
+            db.add(outbound_message)
+            db.flush()
+
+            outbox = queue_outbound_message(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                to=destination,
+                body=generated_response,
+                message_type="text",
+                metadata={
+                    "source": "ai_autoresponder",
+                    "mode": scheduling_response.get("mode"),
+                    "inbound_message_id": str(inbound_message.id),
+                    "outbound_message_id": str(outbound_message.id),
+                },
+            )
+
+            outbound_payload = outbound_message.payload if isinstance(outbound_message.payload, dict) else {}
+            outbound_payload["queued_outbox_id"] = str(outbox.id)
+            outbound_message.payload = outbound_payload
+            db.add(outbound_message)
+
+            decision = _create_decision(
+                db,
+                tenant_id=tenant_id,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                dedupe_key=dedupe_key,
+                final_decision=DECISION_RESPONDED,
+                decision_reason="response_sent",
+                generated_response=generated_response,
+                confidence=None,
+                llm_payload=None,
+                metadata=_build_metadata(
+                    config=config,
+                    extra={
+                        "outbox_id": str(outbox.id),
+                        "outbound_message_id": str(outbound_message.id),
+                        "knowledge_context_present": False,
+                        "scheduling": scheduling_response.get("metadata") or {},
+                        "scheduling_mode": scheduling_response.get("mode"),
+                    },
+                ),
+                outbound_message_id=outbound_message.id,
+            )
+
+            conversation.ai_autoresponder_last_decision = DECISION_RESPONDED
+            conversation.ai_autoresponder_last_reason = "response_sent"
+            conversation.ai_autoresponder_last_at = datetime.now(UTC)
+            conversation.ai_autoresponder_consecutive_count = consecutive_count + 1
+            conversation.last_message_at = datetime.now(UTC)
+            db.add(conversation)
+            db.commit()
+
+            appointment_id = (scheduling_response.get("metadata") or {}).get("appointment_id")
+            if appointment_id:
+                record_audit(
+                    db,
+                    action="appointment.create.ai",
+                    entity_type="appointment",
+                    entity_id=str(appointment_id),
+                    tenant_id=tenant_id,
+                    user_id=None,
+                    metadata={"conversation_id": str(conversation.id), "source": "ai_autoresponder"},
+                )
+                if conversation.patient_id:
+                    try:
+                        emit_event(
+                            db,
+                            tenant_id=tenant_id,
+                            event_key="consulta_criada",
+                            payload={
+                                "appointment_id": str(appointment_id),
+                                "patient_id": str(conversation.patient_id),
+                                "starts_at": (scheduling_response.get("metadata") or {}).get("starts_at_utc"),
+                                "status": "agendada",
+                            },
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "ai_autoresponder.appointment_event_emit_failed",
+                            tenant_id=str(tenant_id),
+                            conversation_id=str(conversation.id),
+                            appointment_id=str(appointment_id),
+                            error=str(exc),
+                        )
+
+            payload: dict[str, Any] = {
+                "status": DECISION_RESPONDED,
+                "decision_id": str(decision.id),
+                "outbox_id": str(outbox.id),
+                "outbound_message_id": str(outbound_message.id),
+                "reason": "response_sent",
+                "reason_label": _reason_label("response_sent"),
+                "scheduling_mode": scheduling_response.get("mode"),
+                "scheduling": scheduling_response.get("metadata") or {},
+            }
+            if captured_profile:
+                payload["captured_profile"] = captured_profile
+            return payload
+        except IntegrityError:
+            db.rollback()
+            existing_after_error = db.scalar(
+                select(AIAutoresponderDecision).where(
+                    AIAutoresponderDecision.tenant_id == tenant_id,
+                    AIAutoresponderDecision.dedupe_key == dedupe_key,
+                )
+            )
+            if existing_after_error:
+                return {
+                    "status": "duplicate",
+                    "decision_id": str(existing_after_error.id),
+                    "final_decision": existing_after_error.final_decision,
+                    "reason": existing_after_error.decision_reason,
+                }
+            return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
+        except Exception as exc:
+            logger.exception(
+                "ai_autoresponder.scheduling_dispatch_error",
+                tenant_id=str(tenant_id),
+                conversation_id=str(conversation.id),
+                error=str(exc),
+            )
+            return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
+
     confidence = None
     try:
         intent_result = classify_intent(
@@ -1222,25 +1786,6 @@ def process_inbound_message(
             handoff=True,
         )
 
-    destination = _conversation_destination_phone(db, conversation=conversation)
-    if not destination:
-        return finish_without_reply(
-            final_decision=DECISION_HANDOFF,
-            reason="missing_contact_phone",
-            handoff=True,
-        )
-
-    if conversation.channel == "whatsapp":
-        try:
-            assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
-        except Exception:
-            return finish_without_reply(
-                final_decision=DECISION_HANDOFF,
-                reason="whatsapp_not_ready",
-                handoff=True,
-            )
-
-    context = _recent_context(db, tenant_id=tenant_id, conversation_id=conversation.id)
     knowledge_base = get_knowledge_base_global_config(db, tenant_id=tenant_id)
     knowledge_context = _render_knowledge_context(knowledge_base)
     prompt = _prompt_for_autoresponder(
