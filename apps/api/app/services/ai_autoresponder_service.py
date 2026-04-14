@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from datetime import UTC, datetime
 from time import perf_counter
@@ -124,6 +125,17 @@ CLINICAL_PATTERNS = [
     "dose",
     "laudo",
 ]
+
+CONTACT_NAME_PATTERNS = [
+    re.compile(r"\bmeu\s+nome(?:\s+completo)?\s*(?:e|eh|é)\s+(.+)$", re.IGNORECASE),
+    re.compile(r"\bme\s+chamo\s+(.+)$", re.IGNORECASE),
+    re.compile(r"\bsou\s+(?:o|a)\s+(.+)$", re.IGNORECASE),
+]
+
+CONTACT_EMAIL_PATTERN = re.compile(
+    r"\b([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b",
+    re.IGNORECASE,
+)
 
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
@@ -542,6 +554,141 @@ def _lookup_pattern(text: str, patterns: list[str]) -> str | None:
     return None
 
 
+def _is_placeholder_name(value: str | None) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return True
+    return text.startswith("contato whatsapp ")
+
+
+def _normalize_person_name(value: str) -> str:
+    lowered_particles = {"da", "de", "do", "dos", "das", "e"}
+    normalized_parts: list[str] = []
+    for part in value.split():
+        raw = part.strip()
+        if not raw:
+            continue
+        if raw.lower() in lowered_particles:
+            normalized_parts.append(raw.lower())
+            continue
+        normalized_parts.append(raw.capitalize())
+    return " ".join(normalized_parts).strip()
+
+
+def _extract_contact_name(text: str) -> str | None:
+    lowered = text.lower()
+    if "nome" not in lowered and "chamo" not in lowered and not lowered.startswith("sou "):
+        return None
+
+    for pattern in CONTACT_NAME_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+
+        candidate = match.group(1).strip()
+        candidate = re.split(r"[\n\r,.;!?]", candidate, maxsplit=1)[0].strip()
+        candidate = re.split(
+            r"\b(como|quero|gostaria|preciso|posso|pode|qual|quais|agendar|marcar|servi[cç]os?)\b",
+            candidate,
+            flags=re.IGNORECASE,
+            maxsplit=1,
+        )[0].strip()
+        candidate = re.sub(r"\s+", " ", candidate).strip(" -:")
+        if not candidate:
+            continue
+        if not re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿ' -]{2,80}", candidate):
+            continue
+        words = [item for item in candidate.split(" ") if item]
+        if len(words) > 6:
+            continue
+        return _normalize_person_name(candidate)
+
+    return None
+
+
+def _extract_contact_email(text: str) -> str | None:
+    match = CONTACT_EMAIL_PATTERN.search(text)
+    if not match:
+        return None
+    return match.group(1).lower().strip()
+
+
+def _capture_contact_profile_from_inbound(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation: Conversation,
+    inbound_text: str,
+) -> dict[str, str]:
+    extracted_name = _extract_contact_name(inbound_text)
+    extracted_email = _extract_contact_email(inbound_text)
+    if not extracted_name and not extracted_email:
+        return {}
+
+    patient = None
+    if conversation.patient_id:
+        patient = db.scalar(
+            select(Patient).where(
+                Patient.id == conversation.patient_id,
+                Patient.tenant_id == tenant_id,
+            )
+        )
+
+    lead = None
+    if conversation.lead_id:
+        lead = db.scalar(
+            select(Lead).where(
+                Lead.id == conversation.lead_id,
+                Lead.tenant_id == tenant_id,
+            )
+        )
+
+    changes: dict[str, str] = {}
+    previous_patient_name = patient.full_name.strip() if patient and patient.full_name else ""
+
+    if patient:
+        if extracted_name and _is_placeholder_name(patient.full_name):
+            patient.full_name = extracted_name
+            changes["patient_full_name"] = extracted_name
+
+        if extracted_email and not (patient.email or "").strip():
+            patient.email = extracted_email
+            changes["patient_email"] = extracted_email
+
+        if changes:
+            db.add(patient)
+
+    if lead:
+        if extracted_name and (
+            _is_placeholder_name(lead.name)
+            or (lead.name or "").strip().lower() == previous_patient_name.lower()
+        ):
+            lead.name = extracted_name
+            changes["lead_name"] = extracted_name
+
+        if extracted_email and not (lead.email or "").strip():
+            lead.email = extracted_email
+            changes["lead_email"] = extracted_email
+
+        if "lead_name" in changes or "lead_email" in changes:
+            db.add(lead)
+
+    if changes:
+        tags = set(conversation.tags or [])
+        tags.add("dados_cadastrais_capturados")
+        conversation.tags = sorted(tags)
+        db.add(conversation)
+
+        logger.info(
+            "ai_autoresponder.contact_profile_captured",
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation.id),
+            fields=list(changes.keys()),
+        )
+
+    return changes
+
+
 def _parse_hhmm(value: str) -> tuple[int, int]:
     parts = value.split(":")
     if len(parts) != 2:
@@ -888,6 +1035,7 @@ def process_inbound_message(
 
     config = resolve_conversation_config(db, conversation=conversation)
     inbound_text = (inbound_message.body or "").strip()
+    captured_profile: dict[str, str] = {}
 
     def finish_without_reply(*, final_decision: str, reason: str, handoff: bool, guardrail: str | None = None) -> dict[str, Any]:
         if handoff:
@@ -967,12 +1115,15 @@ def process_inbound_message(
                 user_id=None,
                 metadata={"reason": reason, "decision_id": str(decision.id)},
             )
-        return {
+        payload: dict[str, Any] = {
             "status": final_decision,
             "decision_id": str(decision.id),
             "reason": reason,
             "reason_label": _reason_label(reason),
         }
+        if captured_profile:
+            payload["captured_profile"] = captured_profile
+        return payload
 
     if not config.get("enabled"):
         return finish_without_reply(final_decision=DECISION_IGNORED, reason="disabled_global", handoff=False)
@@ -988,6 +1139,13 @@ def process_inbound_message(
 
     if not inbound_text:
         return finish_without_reply(final_decision=DECISION_IGNORED, reason="empty_inbound", handoff=False)
+
+    captured_profile = _capture_contact_profile_from_inbound(
+        db,
+        tenant_id=tenant_id,
+        conversation=conversation,
+        inbound_text=inbound_text,
+    )
 
     human_request = _lookup_pattern(inbound_text, HUMAN_REQUEST_PATTERNS)
     if human_request:
@@ -1214,7 +1372,7 @@ def process_inbound_message(
             },
         )
 
-        return {
+        payload: dict[str, Any] = {
             "status": DECISION_RESPONDED,
             "decision_id": str(decision.id),
             "outbox_id": str(outbox.id),
@@ -1222,6 +1380,9 @@ def process_inbound_message(
             "reason": "response_sent",
             "reason_label": _reason_label("response_sent"),
         }
+        if captured_profile:
+            payload["captured_profile"] = captured_profile
+        return payload
     except IntegrityError:
         db.rollback()
         existing_after_error = db.scalar(

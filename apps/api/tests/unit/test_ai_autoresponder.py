@@ -209,6 +209,39 @@ def test_eligible_inbound_creates_ai_outbox_and_message(seeded_db, db_session):
     assert outbound.status == "queued"
 
 
+def test_inbound_contact_data_updates_patient_profile(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Meu nome e Guilherme Alves, meu email e guilherme.alves@example.com e quero agendar.",
+    )
+
+    patient = db_session.get(Patient, conversation.patient_id)
+    patient.full_name = "Contato WhatsApp 1111"
+    patient.email = None
+    db_session.add(patient)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    refreshed_patient = db_session.get(Patient, patient.id)
+    refreshed_conversation = db_session.get(Conversation, conversation.id)
+
+    assert result["status"] == "responded"
+    assert result.get("captured_profile", {}).get("patient_full_name") == "Guilherme Alves"
+    assert refreshed_patient.full_name == "Guilherme Alves"
+    assert refreshed_patient.email == "guilherme.alves@example.com"
+    assert "dados_cadastrais_capturados" in (refreshed_conversation.tags or [])
+
+
 def test_idempotency_prevents_double_auto_reply(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
