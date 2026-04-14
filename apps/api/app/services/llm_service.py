@@ -21,7 +21,10 @@ def run_llm_task(
     response = provider.complete(task=task, prompt=prompt)
     latency_ms = int((perf_counter() - start) * 1000)
 
-    safe_output = apply_guardrails(response['output'])
+    raw_output = response['output']
+    # O auto-responder ja possui guardrails proprios no fluxo de decisao.
+    # Evitamos sobrescrever a resposta com fallback global aqui.
+    safe_output = raw_output if task == 'auto_responder' else apply_guardrails(raw_output)
 
     interaction = LLMInteraction(
         tenant_id=tenant_id,
