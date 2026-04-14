@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, CircleOff, Paperclip, Send, Sparkles, UserRoundCheck } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -121,6 +121,9 @@ export default function ConversasPage() {
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState("");
   const [aiIntent, setAiIntent] = useState("");
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+  const seenMessageIdsRef = useRef<Map<string, Set<string>>>(new Map());
+  const bootstrappedConversationsRef = useRef<Set<string>>(new Set());
 
   const aiSettingsQuery = useQuery<{ global?: { enabled?: boolean } }>({
     queryKey: ["ai-autoresponder-settings"],
@@ -158,6 +161,8 @@ export default function ConversasPage() {
         documents: documentsResponse.data.data ?? [],
       };
     },
+    refetchInterval: 7000,
+    refetchOnWindowFocus: true,
   });
 
   const messagesQuery = useQuery<MessageResponse>({
@@ -169,6 +174,8 @@ export default function ConversasPage() {
         })
       ).data,
     enabled: Boolean(selectedConversationId),
+    refetchInterval: selectedConversationId ? 2500 : false,
+    refetchOnWindowFocus: true,
   });
 
   const aiDecisionsQuery = useQuery<AIDecisionResponse>({
@@ -181,6 +188,8 @@ export default function ConversasPage() {
         )
       ).data,
     enabled: Boolean(selectedConversationId),
+    refetchInterval: selectedConversationId ? 5000 : false,
+    refetchOnWindowFocus: true,
   });
 
   const sendMessageMutation = useMutation({
@@ -410,6 +419,35 @@ export default function ConversasPage() {
     setFocusHandled(false);
   }, [focusConversationId]);
 
+  useEffect(() => {
+    if (!selectedConversationId) return;
+    const messages = messagesQuery.data?.data ?? [];
+    const currentIds = new Set(messages.map((message) => message.id));
+
+    if (!bootstrappedConversationsRef.current.has(selectedConversationId)) {
+      bootstrappedConversationsRef.current.add(selectedConversationId);
+      seenMessageIdsRef.current.set(selectedConversationId, currentIds);
+    } else {
+      const previousIds = seenMessageIdsRef.current.get(selectedConversationId) ?? new Set<string>();
+      const newInboundCount = messages.filter(
+        (message) => !previousIds.has(message.id) && message.direction === "inbound",
+      ).length;
+      if (newInboundCount > 0) {
+        toast.info(
+          newInboundCount === 1
+            ? "Nova mensagem recebida na conversa."
+            : `${newInboundCount} novas mensagens recebidas na conversa.`,
+        );
+      }
+      seenMessageIdsRef.current.set(selectedConversationId, currentIds);
+    }
+
+    const container = messageListRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [messagesQuery.data?.data, selectedConversationId]);
+
   const selectedConversation = useMemo(
     () => filteredConversations.find((item) => item.id === selectedConversationId) ?? null,
     [filteredConversations, selectedConversationId],
@@ -618,7 +656,10 @@ export default function ConversasPage() {
           <CardContent className="space-y-4 pt-4">
             {selectedConversation ? (
               <>
-                <div className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4">
+                <div
+                  ref={messageListRef}
+                  className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4"
+                >
                   {messagesQuery.isLoading ? (
                     <p className="text-sm text-stone-500">Carregando mensagens...</p>
                   ) : messagesQuery.isError ? (

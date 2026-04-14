@@ -1127,6 +1127,23 @@ def process_inbound_message(
         )
 
     try:
+        outbound_message = Message(
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.OUTBOUND.value,
+            channel=conversation.channel,
+            sender_type="ai",
+            body=generated_response,
+            message_type="text",
+            payload={
+                "source": "ai_autoresponder",
+                "reply_to_message_id": str(inbound_message.id),
+            },
+            status=MessageStatus.QUEUED.value,
+        )
+        db.add(outbound_message)
+        db.flush()
+
         outbox = queue_outbound_message(
             db,
             tenant_id=tenant_id,
@@ -1137,33 +1154,14 @@ def process_inbound_message(
             metadata={
                 "source": "ai_autoresponder",
                 "inbound_message_id": str(inbound_message.id),
+                "outbound_message_id": str(outbound_message.id),
             },
         )
 
-        outbound_message = Message(
-            tenant_id=tenant_id,
-            conversation_id=conversation.id,
-            direction=MessageDirection.OUTBOUND.value,
-            channel=conversation.channel,
-            sender_type="ai",
-            body=generated_response,
-            message_type="text",
-            payload={
-                "queued_outbox_id": str(outbox.id),
-                "source": "ai_autoresponder",
-                "reply_to_message_id": str(inbound_message.id),
-            },
-            status=MessageStatus.QUEUED.value,
-        )
+        outbound_payload = outbound_message.payload if isinstance(outbound_message.payload, dict) else {}
+        outbound_payload["queued_outbox_id"] = str(outbox.id)
+        outbound_message.payload = outbound_payload
         db.add(outbound_message)
-        db.flush()
-
-        outbox_payload = outbox.payload or {}
-        metadata = outbox_payload.get("metadata") if isinstance(outbox_payload.get("metadata"), dict) else {}
-        metadata["outbound_message_id"] = str(outbound_message.id)
-        outbox_payload["metadata"] = metadata
-        outbox.payload = outbox_payload
-        db.add(outbox)
 
         llm_metadata = llm_payload.get("metadata") if llm_payload else {}
         if isinstance(llm_metadata, dict) and "latency_ms" not in llm_metadata:
