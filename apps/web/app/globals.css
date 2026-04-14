@@ -4,13 +4,16 @@
 
 :root {
   color-scheme: light;
+  --tenant-primary: #0f766e;
+  --tenant-secondary: #0ea5a4;
+  --tenant-accent: #f59e0b;
 }
 
 body {
   @apply bg-background text-foreground antialiased;
   min-height: 100vh;
-  background-image: radial-gradient(circle at 0% 0%, rgba(15, 118, 110, 0.08), transparent 45%),
-    radial-gradient(circle at 100% 100%, rgba(245, 158, 11, 0.1), transparent 40%);
+  background-image: radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 15%, transparent), transparent 45%),
+    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-accent) 15%, transparent), transparent 40%);
 }
 
 h1,
@@ -22,4 +25,35 @@ h4 {
 
 * {
   @apply border-border;
+}
+
+.surface-soft {
+  background-color: #f8f6f2;
+}
+
+.surface-flat {
+  background-color: #f5f5f4;
+}
+
+.surface-glass {
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 8%, transparent), transparent 38%),
+    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-secondary) 10%, transparent), transparent 42%),
+    #f3f4f6;
+}
+
+.bg-primary {
+  background-color: var(--tenant-primary) !important;
+}
+
+.text-primary {
+  color: var(--tenant-primary) !important;
+}
+
+.border-primary {
+  border-color: var(--tenant-primary) !important;
+}
+
+.focus\:ring-primary\/20:focus {
+  --tw-ring-color: color-mix(in srgb, var(--tenant-primary) 20%, transparent) !important;
 }

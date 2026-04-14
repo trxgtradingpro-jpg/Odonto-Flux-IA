@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { ChangeEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
@@ -128,6 +128,14 @@ type AIKnowledgeBaseSettings = {
   global: AIKnowledgeBaseConfig;
 };
 
+type BrandingConfig = {
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  surface_style: "soft" | "flat" | "glass";
+  logo_data_url?: string | null;
+};
+
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   if (
     typeof error === "object" &&
@@ -142,6 +150,7 @@ function extractApiErrorMessage(error: unknown, fallback: string): string {
 
 const TABS = [
   "Clínica",
+  "Tema e Marca",
   "Unidades",
   "Horários",
   "WhatsApp",
@@ -167,6 +176,14 @@ const DEFAULT_AI_CONFIG: AIAutoresponderConfig = {
   human_queue_tag: "fila_humana_ia",
   tone: "profissional, cordial e objetivo",
   fallback_user_id: null,
+};
+
+const DEFAULT_BRANDING_CONFIG: BrandingConfig = {
+  primary_color: "#0f766e",
+  secondary_color: "#0ea5a4",
+  accent_color: "#f59e0b",
+  surface_style: "soft",
+  logo_data_url: null,
 };
 
 const DEFAULT_AI_KNOWLEDGE_CONFIG: AIKnowledgeBaseConfig = {
@@ -377,6 +394,8 @@ export default function ConfiguracoesPage() {
   const [aiKnowledgeDraft, setAiKnowledgeDraft] = useState<AIKnowledgeBaseConfig>(
     DEFAULT_AI_KNOWLEDGE_CONFIG,
   );
+  const [brandingDraft, setBrandingDraft] = useState<BrandingConfig>(DEFAULT_BRANDING_CONFIG);
+  const [brandingLogoPreview, setBrandingLogoPreview] = useState<string | null>(null);
 
   const settingsQuery = useQuery<{ data: SettingItem[] }>({
     queryKey: ["settings"],
@@ -480,6 +499,33 @@ export default function ConfiguracoesPage() {
     });
   }, [aiKnowledgeBaseQuery.data]);
 
+  useEffect(() => {
+    const settings = settingsQuery.data?.data ?? [];
+    const map = new Map(settings.map((item) => [item.key, item.value]));
+    const themePayload = map.get("branding.theme");
+    const theme = themePayload && typeof themePayload === "object" ? (themePayload as Record<string, unknown>) : {};
+    const logoValue = map.get("branding.logo_data_url");
+    const logo =
+      typeof logoValue === "string"
+        ? logoValue
+        : typeof theme.logo_data_url === "string"
+          ? theme.logo_data_url
+          : null;
+
+    setBrandingDraft({
+      primary_color:
+        typeof theme.primary_color === "string" ? theme.primary_color : DEFAULT_BRANDING_CONFIG.primary_color,
+      secondary_color:
+        typeof theme.secondary_color === "string" ? theme.secondary_color : DEFAULT_BRANDING_CONFIG.secondary_color,
+      accent_color:
+        typeof theme.accent_color === "string" ? theme.accent_color : DEFAULT_BRANDING_CONFIG.accent_color,
+      surface_style:
+        theme.surface_style === "flat" || theme.surface_style === "glass" ? theme.surface_style : "soft",
+      logo_data_url: logo,
+    });
+    setBrandingLogoPreview(logo);
+  }, [settingsQuery.data]);
+
   const upsertSettingMutation = useMutation({
     mutationFn: async ({ key, value, isSecret = false }: { key: string; value: unknown; isSecret?: boolean }) =>
       api.put(`/settings/${key}`, { value, is_secret: isSecret }),
@@ -506,6 +552,33 @@ export default function ConfiguracoesPage() {
       queryClient.invalidateQueries({ queryKey: ["ai-knowledge-base-settings"] });
     },
     onError: () => toast.error("Não foi possível salvar o conhecimento da IA."),
+  });
+
+  const saveBrandingMutation = useMutation({
+    mutationFn: async () => {
+      await Promise.all([
+        api.put("/settings/branding.theme", {
+          value: {
+            primary_color: brandingDraft.primary_color,
+            secondary_color: brandingDraft.secondary_color,
+            accent_color: brandingDraft.accent_color,
+            surface_style: brandingDraft.surface_style,
+            logo_data_url: brandingDraft.logo_data_url ?? null,
+          },
+          is_secret: false,
+        }),
+        api.put("/settings/branding.logo_data_url", {
+          value: brandingDraft.logo_data_url ?? null,
+          is_secret: false,
+        }),
+      ]);
+    },
+    onSuccess: () => {
+      toast.success("Tema e marca salvos com sucesso.");
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["branding-theme"] });
+    },
+    onError: () => toast.error("Não foi possível salvar o tema da clínica."),
   });
 
   const saveAiUnitOverrideMutation = useMutation({
@@ -755,6 +828,24 @@ export default function ConfiguracoesPage() {
     toast.success("Formulario de conhecimento limpo.");
   };
 
+  const onBrandingLogoUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Selecione um arquivo de imagem para a logo.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : null;
+      if (!dataUrl) return;
+      setBrandingLogoPreview(dataUrl);
+      setBrandingDraft((current) => ({ ...current, logo_data_url: dataUrl }));
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -795,6 +886,144 @@ export default function ConfiguracoesPage() {
             <p className="text-xs text-stone-500">Timezone operacional atual: {clinicTimezone}</p>
           </CardContent>
         </Card>
+      ) : null}
+
+      {activeTab === "Tema e Marca" ? (
+        <div className="space-y-4">
+          <Card className="border-stone-200">
+            <CardHeader>
+              <CardTitle>Tema visual da plataforma</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-stone-600">
+                Personalize as cores principais para combinar com a identidade da clinica.
+              </p>
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    Cor primaria
+                  </label>
+                  <Input
+                    type="color"
+                    value={brandingDraft.primary_color}
+                    onChange={(event) =>
+                      setBrandingDraft((current) => ({ ...current, primary_color: event.target.value }))
+                    }
+                    className="h-11 p-1"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    Cor secundaria
+                  </label>
+                  <Input
+                    type="color"
+                    value={brandingDraft.secondary_color}
+                    onChange={(event) =>
+                      setBrandingDraft((current) => ({ ...current, secondary_color: event.target.value }))
+                    }
+                    className="h-11 p-1"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    Cor de destaque
+                  </label>
+                  <Input
+                    type="color"
+                    value={brandingDraft.accent_color}
+                    onChange={(event) =>
+                      setBrandingDraft((current) => ({ ...current, accent_color: event.target.value }))
+                    }
+                    className="h-11 p-1"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                    Estilo de superficie
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                    value={brandingDraft.surface_style}
+                    onChange={(event) =>
+                      setBrandingDraft((current) => ({
+                        ...current,
+                        surface_style:
+                          event.target.value === "flat" || event.target.value === "glass"
+                            ? event.target.value
+                            : "soft",
+                      }))
+                    }
+                  >
+                    <option value="soft">Suave</option>
+                    <option value="flat">Flat</option>
+                    <option value="glass">Glass</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Preview rapido</p>
+                <div className="mt-2 flex items-center gap-3">
+                  <span
+                    className="inline-flex h-8 min-w-[120px] items-center justify-center rounded-md px-3 text-sm font-semibold text-white"
+                    style={{ backgroundColor: brandingDraft.primary_color }}
+                  >
+                    Botao principal
+                  </span>
+                  <span
+                    className="inline-flex h-8 min-w-[120px] items-center justify-center rounded-md border px-3 text-sm font-semibold"
+                    style={{ borderColor: brandingDraft.secondary_color, color: brandingDraft.secondary_color }}
+                  >
+                    Destaque secundario
+                  </span>
+                  <span
+                    className="inline-flex h-8 min-w-[120px] items-center justify-center rounded-md px-3 text-sm font-semibold text-white"
+                    style={{ backgroundColor: brandingDraft.accent_color }}
+                  >
+                    Alerta/CTA
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-stone-200">
+            <CardHeader>
+              <CardTitle>Logo da clinica</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-stone-600">
+                Envie a logo para aparecer no menu lateral e no topo da plataforma.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <Input type="file" accept="image/*" onChange={onBrandingLogoUpload} className="max-w-sm" />
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setBrandingLogoPreview(null);
+                    setBrandingDraft((current) => ({ ...current, logo_data_url: null }));
+                  }}
+                >
+                  Limpar logo
+                </Button>
+              </div>
+              {brandingLogoPreview ? (
+                <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Preview da logo</p>
+                  <img
+                    src={brandingLogoPreview}
+                    alt="Preview da logo"
+                    className="mt-2 h-16 w-16 rounded-md border border-stone-200 object-cover"
+                  />
+                </div>
+              ) : null}
+              <Button onClick={() => saveBrandingMutation.mutate()} disabled={saveBrandingMutation.isPending}>
+                {saveBrandingMutation.isPending ? "Salvando tema..." : "Salvar tema e marca"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
 
       {activeTab === "Unidades" ? (
