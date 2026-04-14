@@ -4,7 +4,7 @@ import json
 import re
 import unicodedata
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any
 from uuid import UUID
@@ -817,6 +817,55 @@ def _detect_period_preference(text: str) -> str | None:
     return None
 
 
+def _extract_requested_date_from_text(*, text: str, timezone: ZoneInfo) -> date | None:
+    normalized = _normalize_for_match(text)
+    now_local = datetime.now(UTC).astimezone(timezone).date()
+
+    slash_match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", normalized)
+    if slash_match:
+        day = int(slash_match.group(1))
+        month = int(slash_match.group(2))
+        year_raw = slash_match.group(3)
+        year = now_local.year
+        if year_raw:
+            year = int(year_raw)
+            if year < 100:
+                year += 2000
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            candidate = None
+        if candidate:
+            return candidate
+
+    day_match = re.search(r"\bdia\s+(\d{1,2})\b", normalized)
+    if not day_match:
+        return None
+
+    day = int(day_match.group(1))
+    if day < 1 or day > 31:
+        return None
+
+    month = now_local.month
+    year = now_local.year
+    try:
+        candidate = date(year, month, day)
+    except ValueError:
+        return None
+
+    if candidate < now_local:
+        if month == 12:
+            month = 1
+            year += 1
+        else:
+            month += 1
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            return None
+    return candidate
+
+
 def _is_scheduling_context(*, inbound_text: str, context: str) -> bool:
     inbound_normalized = _normalize_for_match(inbound_text)
     context_normalized = _normalize_for_match(context)
@@ -1072,6 +1121,7 @@ def _list_available_slots(
     config: dict[str, Any],
     procedure_type: str,
     period: str | None,
+    requested_date: date | None = None,
     max_slots: int = 3,
     slot_duration_minutes: int = 60,
 ) -> list[dict[str, Any]]:
@@ -1108,14 +1158,17 @@ def _list_available_slots(
         key = str(item.professional_id) if item.professional_id else "__unit__"
         busy_by_professional.setdefault(key, []).append((start_at, end_at))
 
-    professionals = db.execute(
+    all_professionals = db.execute(
         select(Professional).where(
             Professional.tenant_id == tenant_id,
             Professional.unit_id == unit_id,
             Professional.is_active.is_(True),
         )
     ).scalars().all()
-    professionals = [item for item in professionals if _professional_matches_procedure(item, procedure_type)]
+    professionals = [item for item in all_professionals if _professional_matches_procedure(item, procedure_type)]
+    if not professionals and all_professionals:
+        # Se não houver match exato por procedimento, usa equipe da unidade para não bloquear disponibilidade.
+        professionals = all_professionals
 
     if not professionals:
         # Fallback legado: agenda por unidade quando ainda não há profissional configurado.
@@ -1155,6 +1208,8 @@ def _list_available_slots(
 
         for day_offset in range(0, 21):
             day_local = (now_local + timedelta(days=day_offset)).date()
+            if requested_date and day_local != requested_date:
+                continue
             if day_local.weekday() not in professional_days:
                 continue
 
@@ -1238,6 +1293,9 @@ def _build_scheduling_operation_response(
         }
 
     procedure_type = _infer_procedure_type(inbound_text=inbound_text, context=context)
+    operation_timezone = _resolve_operation_timezone(config)
+    requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
+    requested_date_label = requested_date.strftime("%d/%m") if requested_date else None
 
     if period:
         slots = _list_available_slots(
@@ -1247,6 +1305,7 @@ def _build_scheduling_operation_response(
             config=config,
             procedure_type=procedure_type,
             period=period,
+            requested_date=requested_date,
             max_slots=1,
         )
         if not slots:
@@ -1262,28 +1321,36 @@ def _build_scheduling_operation_response(
                 config=config,
                 procedure_type=procedure_type,
                 period=None,
+                requested_date=requested_date,
                 max_slots=3,
             )
             if fallback_slots:
+                date_hint = f" para {requested_date_label}" if requested_date_label else ""
                 return {
                     "mode": "no_slots_for_period_with_alternatives",
                     "response_text": (
-                        f"No momento não encontrei vagas para {period_label}.\n"
-                        f"{_format_slots_options_message(slots=fallback_slots, procedure_type=procedure_type)}"
+                        f"No momento não encontrei vagas para {period_label}{date_hint}.\n"
+                        f"{_format_slots_options_message(slots=fallback_slots, procedure_type=procedure_type, period=None)}"
                     ),
                     "metadata": {
                         "period": period,
                         "reason": "no_slots_for_period",
+                        "requested_date": requested_date.isoformat() if requested_date else None,
                         "alternative_slots": [slot["label"] for slot in fallback_slots],
                     },
                 }
+            date_hint = f" em {requested_date_label}" if requested_date_label else ""
             return {
                 "mode": "no_slots_for_period",
                 "response_text": (
-                    f"No momento não encontrei vaga para {period_label}. "
+                    f"No momento não encontrei vaga para {period_label}{date_hint}. "
                     "Se preferir, posso verificar outro período para você."
                 ),
-                "metadata": {"period": period, "reason": "no_slots_for_period"},
+                "metadata": {
+                    "period": period,
+                    "reason": "no_slots_for_period",
+                    "requested_date": requested_date.isoformat() if requested_date else None,
+                },
             }
         if not conversation.patient_id:
             return {
@@ -1371,6 +1438,7 @@ def _build_scheduling_operation_response(
                 "selected_slot": selected_slot["label"],
                 "starts_at_utc": appointment.starts_at.isoformat(),
                 "unit_id": str(unit.id),
+                "requested_date": requested_date.isoformat() if requested_date else None,
                 "professional_id": (
                     str(selected_slot.get("professional_id"))
                     if selected_slot.get("professional_id")
@@ -1387,16 +1455,21 @@ def _build_scheduling_operation_response(
         config=config,
         procedure_type=procedure_type,
         period=None,
+        requested_date=requested_date,
         max_slots=3,
     )
     if not slots:
+        date_hint = f" para {requested_date_label}" if requested_date_label else ""
         return {
             "mode": "no_slots_general",
             "response_text": (
-                "No momento não encontrei horários livres na agenda para este serviço. "
+                f"No momento não encontrei horários livres na agenda{date_hint} para este serviço. "
                 "Posso te avisar assim que abrir uma vaga ou te direcionar para atendimento humano."
             ),
-            "metadata": {"reason": "no_slots_general"},
+            "metadata": {
+                "reason": "no_slots_general",
+                "requested_date": requested_date.isoformat() if requested_date else None,
+            },
         }
 
     labels = [slot["label"] for slot in slots]
@@ -1406,6 +1479,7 @@ def _build_scheduling_operation_response(
         "metadata": {
             "slots": labels,
             "unit_id": str(unit.id),
+            "requested_date": requested_date.isoformat() if requested_date else None,
         },
     }
 
