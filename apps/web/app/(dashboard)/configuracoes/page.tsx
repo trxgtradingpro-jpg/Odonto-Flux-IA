@@ -215,6 +215,135 @@ const EMPTY_FAQ: AIKnowledgeFaqItem = {
   answer: "",
 };
 
+const SORRISO_SUL_AI_KNOWLEDGE_PRESET: AIKnowledgeBaseConfig = {
+  clinic_profile: {
+    clinic_name: "Clinica Sorriso Sul",
+    about:
+      "A Clinica Sorriso Sul e especializada em odontologia estetica e reabilitacao oral, com atendimento consultivo e foco em previsibilidade de resultado.",
+    differentials: [
+      "avaliacao detalhada com planejamento digital",
+      "atendimento acolhedor e linguagem simples",
+      "parcelamento facilitado",
+      "acompanhamento proximo no pos-procedimento",
+      "instalacao de lentes em fluxo rapido quando indicado",
+    ],
+    target_audience:
+      "adultos que buscam harmonizacao do sorriso, reabilitacao estetica e solucao funcional com orientacao clara",
+    tone_preferences:
+      "profissional, cordial, objetivo, comercial consultivo e sem jargao tecnico",
+  },
+  services: [
+    {
+      name: "Avaliacao detalhada",
+      description:
+        "Consulta inicial para entender objetivo estetico e funcional, levantar historico e montar plano personalizado.",
+      duration_note: "45 a 60 min",
+      price_note: "a partir de R$ 190",
+    },
+    {
+      name: "Lentes de contato dental",
+      description:
+        "Planejamento e instalacao de lentes para melhorar forma, cor e harmonia do sorriso.",
+      duration_note: "fluxo rapido com instalacao em 1 dia em casos elegiveis",
+      price_note: "valor sob avaliacao",
+    },
+    {
+      name: "Clareamento dental",
+      description:
+        "Protocolos de clareamento supervisionado para ganho estetico com orientacoes operacionais de acompanhamento.",
+      duration_note: "sessao de 40 a 60 min",
+      price_note: "a partir de R$ 650",
+    },
+    {
+      name: "Reabilitacao estetica",
+      description:
+        "Combinacao de procedimentos para recuperar estetica e funcao, conforme plano individual.",
+      duration_note: "conforme plano",
+      price_note: "valor sob avaliacao",
+    },
+  ],
+  insurance: {
+    accepted_plans: ["Particular", "Reembolso"],
+    notes:
+      "Atendimento principal em regime particular. Emitimos recibo e documentacao para reembolso quando aplicavel.",
+  },
+  operational_policies: {
+    booking_rules:
+      "Agendamentos por WhatsApp com confirmacao de disponibilidade em agenda. Recomendado solicitar 24h de antecedencia.",
+    cancellation_policy:
+      "Cancelamentos com menos de 4 horas podem gerar taxa operacional conforme tipo de agenda reservada.",
+    reschedule_policy:
+      "Remarcacao sem custo quando solicitada com antecedencia minima de 4 horas e mediante disponibilidade.",
+    payment_policy:
+      "Aceitamos PIX, debito e cartao de credito. Parcelamento disponivel conforme procedimento.",
+    documents_required:
+      "Documento com foto, contatos atualizados e exames recentes (quando houver).",
+  },
+  faq: [
+    {
+      question: "Quais servicos voces oferecem?",
+      answer:
+        "Oferecemos avaliacao detalhada, lentes de contato dental, clareamento e reabilitacao estetica. Posso te orientar no melhor proximo passo operacional para avaliacao.",
+    },
+    {
+      question: "Quanto custa?",
+      answer:
+        "Os valores variam por caso. A avaliacao inicial parte de R$ 190 e nela definimos o plano e os custos com transparencia.",
+    },
+    {
+      question: "Vocês parcelam?",
+      answer:
+        "Sim, trabalhamos com parcelamento no cartao conforme o procedimento e as condicoes vigentes.",
+    },
+    {
+      question: "Em quanto tempo fica pronto?",
+      answer:
+        "Depende do caso. Em fluxos elegiveis de lentes, a instalacao pode ocorrer em 1 dia, apos avaliacao e validacao do plano.",
+    },
+    {
+      question: "Como agendar?",
+      answer:
+        "Posso iniciar seu agendamento agora. Me informe seu nome completo e melhor periodo (manha, tarde ou noite).",
+    },
+  ],
+  commercial_playbook: {
+    value_proposition:
+      "Sorriso bonito, natural e funcional com planejamento individual e acompanhamento de perto.",
+    objection_handling:
+      "Quando houver duvida de valor, reforcar qualidade, previsibilidade, planejamento e possibilidades de pagamento. Conduzir para avaliacao.",
+    default_cta:
+      "Posso confirmar seu melhor horario para avaliacao ainda esta semana?",
+  },
+  escalation: {
+    human_handoff_topics: [
+      "negociacao de desconto fora da politica",
+      "reclamacao formal",
+      "casos sensiveis com historico de conflito",
+      "duvida clinica especifica que exija avaliacao profissional",
+    ],
+    restricted_topics: [
+      "diagnostico",
+      "prescricao",
+      "laudo",
+      "dose de medicamento",
+      "conduta clinica",
+    ],
+    custom_urgent_keywords: [
+      "dor forte",
+      "sangramento",
+      "trauma",
+      "inchaco",
+      "urgente",
+    ],
+    fallback_message:
+      "Vou encaminhar agora para nossa equipe humana te atender com prioridade.",
+  },
+};
+
+function cloneKnowledgeConfig(config: AIKnowledgeBaseConfig): AIKnowledgeBaseConfig {
+  return JSON.parse(JSON.stringify(config)) as AIKnowledgeBaseConfig;
+}
+
 function parseTagInput(value: string): string[] {
   return value
     .split(/[\n,;]+/)
@@ -614,6 +743,16 @@ export default function ConfiguracoesPage() {
       ...current,
       faq: current.faq.filter((_, itemIndex) => itemIndex !== index),
     }));
+  };
+
+  const applySorrisoSulKnowledgePreset = () => {
+    setAiKnowledgeDraft(cloneKnowledgeConfig(SORRISO_SUL_AI_KNOWLEDGE_PRESET));
+    toast.success("Conteudo predefinido da Sorriso Sul aplicado. Revise e salve.");
+  };
+
+  const clearKnowledgeBaseDraft = () => {
+    setAiKnowledgeDraft(cloneKnowledgeConfig(DEFAULT_AI_KNOWLEDGE_CONFIG));
+    toast.success("Formulario de conhecimento limpo.");
   };
 
   return (
@@ -1152,6 +1291,20 @@ export default function ConfiguracoesPage() {
 
       {activeTab === "Conhecimento IA" ? (
         <div className="space-y-4">
+          <Card className="border-stone-200">
+            <CardHeader>
+              <CardTitle>Ações rápidas</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={applySorrisoSulKnowledgePreset}>
+                Preencher Sorriso Sul
+              </Button>
+              <Button type="button" variant="outline" onClick={clearKnowledgeBaseDraft}>
+                Limpar tudo
+              </Button>
+            </CardContent>
+          </Card>
+
           <Card className="border-stone-200">
             <CardHeader>
               <CardTitle>Base de conhecimento da IA (conteúdo da clínica)</CardTitle>
