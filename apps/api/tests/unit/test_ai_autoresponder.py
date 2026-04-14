@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from sqlalchemy import delete, func, select
 
@@ -9,6 +10,7 @@ from app.models import (
     OutboxMessage,
     Patient,
     Setting,
+    Unit,
     WhatsAppAccount,
 )
 from app.services.ai_autoresponder_service import process_inbound_message
@@ -498,6 +500,85 @@ def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_s
     assert outbound is not None
     assert "1)" in (outbound.body or "")
     assert "|" not in (outbound.body or "")
+
+
+def test_scheduling_falls_back_to_30_min_slots_when_no_60_min_window(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    config = _base_ai_config()
+    config["business_hours"] = {
+        "timezone": "America/Sao_Paulo",
+        "weekdays": [0, 1, 2, 3, 4, 5, 6],
+        "start": "09:00",
+        "end": "11:30",
+    }
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=config)
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horarios para clareamento?",
+    )
+
+    unit = db_session.scalar(
+        select(Unit).where(Unit.tenant_id == tenant_id, Unit.is_active.is_(True)).order_by(Unit.created_at.asc())
+    )
+    assert unit is not None
+
+    conversation.unit_id = unit.id
+    db_session.add(conversation)
+
+    db_session.execute(delete(Appointment).where(Appointment.tenant_id == tenant_id))
+
+    # Janela local equivalente (America/Sao_Paulo): 09:00-11:30.
+    # Ocupa 09:00-10:00 e 10:30-11:30, restando apenas 10:00-10:30.
+    local_day_base_utc = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    db_session.add(
+        Appointment(
+            tenant_id=tenant_id,
+            patient_id=conversation.patient_id,
+            unit_id=unit.id,
+            procedure_type="Clareamento",
+            starts_at=local_day_base_utc,
+            ends_at=local_day_base_utc + timedelta(minutes=60),
+            status="agendada",
+            confirmation_status="pendente",
+            origin="manual",
+        )
+    )
+    db_session.add(
+        Appointment(
+            tenant_id=tenant_id,
+            patient_id=conversation.patient_id,
+            unit_id=unit.id,
+            procedure_type="Clareamento",
+            starts_at=local_day_base_utc + timedelta(minutes=90),
+            ends_at=local_day_base_utc + timedelta(minutes=150),
+            status="agendada",
+            confirmation_status="pendente",
+            origin="manual",
+        )
+    )
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "slots_suggested"
+    assert outbound is not None
+    assert "10:00" in (outbound.body or "")
 
 
 def test_llm_response_removes_redundant_name_greeting(monkeypatch, seeded_db, db_session):

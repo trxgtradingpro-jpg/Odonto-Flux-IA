@@ -1217,83 +1217,105 @@ def _list_available_slots(
             )
         ]
 
-    slots: list[dict[str, Any]] = []
-    for professional in professionals:
-        professional_days = _parse_professional_working_days(professional, weekdays)
-        prof_start, prof_end = _parse_professional_window(
-            professional,
-            fallback_start=base_start,
-            fallback_end=base_end,
-        )
-        window_start, window_end = _period_window_minutes(
-            base_start=prof_start,
-            base_end=prof_end,
-            period=period,
-        )
-        if window_end <= window_start:
-            continue
-
-        professional_key = str(professional.id) if getattr(professional, "id", None) else "__unit__"
-        busy_windows = busy_by_professional.get(professional_key, [])
-        if professional_key != "__unit__":
-            busy_windows = busy_windows + busy_by_professional.get("__unit__", [])
-
-        for day_offset in range(0, 21):
-            day_local = (now_local + timedelta(days=day_offset)).date()
-            if requested_date and day_local != requested_date:
-                continue
-            if day_local.weekday() not in professional_days:
+    def _collect_slots_for_duration(*, duration_minutes: int) -> list[dict[str, Any]]:
+        slots: list[dict[str, Any]] = []
+        for professional in professionals:
+            professional_days = _parse_professional_working_days(professional, weekdays)
+            prof_start, prof_end = _parse_professional_window(
+                professional,
+                fallback_start=base_start,
+                fallback_end=base_end,
+            )
+            window_start, window_end = _period_window_minutes(
+                base_start=prof_start,
+                base_end=prof_end,
+                period=period,
+            )
+            if window_end <= window_start:
                 continue
 
-            minute_pointer = window_start
-            while minute_pointer + slot_duration_minutes <= window_end:
-                slot_local = datetime(
-                    year=day_local.year,
-                    month=day_local.month,
-                    day=day_local.day,
-                    hour=minute_pointer // 60,
-                    minute=minute_pointer % 60,
-                    tzinfo=timezone,
-                )
-                slot_start_utc = slot_local.astimezone(UTC)
-                slot_end_utc = slot_start_utc + timedelta(minutes=slot_duration_minutes)
+            professional_key = str(professional.id) if getattr(professional, "id", None) else "__unit__"
+            busy_windows = busy_by_professional.get(professional_key, [])
+            if professional_key != "__unit__":
+                busy_windows = busy_windows + busy_by_professional.get("__unit__", [])
 
-                if slot_start_utc <= now_utc + timedelta(minutes=20):
-                    minute_pointer += 30
+            for day_offset in range(0, 21):
+                day_local = (now_local + timedelta(days=day_offset)).date()
+                if requested_date and day_local != requested_date:
+                    continue
+                if day_local.weekday() not in professional_days:
                     continue
 
-                has_conflict = any(
-                    busy_start < slot_end_utc and busy_end > slot_start_utc
-                    for busy_start, busy_end in busy_windows
-                )
-                if not has_conflict:
-                    slots.append(
-                        {
-                            "starts_at_utc": slot_start_utc,
-                            "ends_at_utc": slot_end_utc,
-                            "starts_at_local": slot_local,
-                            "label": _format_slot_pt(slot_local),
-                            "professional_id": getattr(professional, "id", None),
-                            "professional_name": professional.full_name,
-                        }
+                minute_pointer = window_start
+                while minute_pointer + duration_minutes <= window_end:
+                    slot_local = datetime(
+                        year=day_local.year,
+                        month=day_local.month,
+                        day=day_local.day,
+                        hour=minute_pointer // 60,
+                        minute=minute_pointer % 60,
+                        tzinfo=timezone,
                     )
+                    slot_start_utc = slot_local.astimezone(UTC)
+                    slot_end_utc = slot_start_utc + timedelta(minutes=duration_minutes)
 
-                minute_pointer += 30
+                    if slot_start_utc <= now_utc + timedelta(minutes=20):
+                        minute_pointer += 30
+                        continue
 
-    slots.sort(key=lambda item: item["starts_at_utc"])
-    if not slots:
-        logger.info(
-            "ai_autoresponder.no_slots_found",
-            tenant_id=str(tenant_id),
-            unit_id=str(unit_id),
-            procedure_type=procedure_type,
-            period=period,
-            requested_date=requested_date.isoformat() if requested_date else None,
-            professionals_count=len(professionals),
-            busy_rows_count=len(busy_rows),
-            base_window=f"{base_start:04d}-{base_end:04d}",
-        )
-    return slots[:max_slots]
+                    has_conflict = any(
+                        busy_start < slot_end_utc and busy_end > slot_start_utc
+                        for busy_start, busy_end in busy_windows
+                    )
+                    if not has_conflict:
+                        slots.append(
+                            {
+                                "starts_at_utc": slot_start_utc,
+                                "ends_at_utc": slot_end_utc,
+                                "starts_at_local": slot_local,
+                                "label": _format_slot_pt(slot_local),
+                                "professional_id": getattr(professional, "id", None),
+                                "professional_name": professional.full_name,
+                            }
+                        )
+
+                    minute_pointer += 30
+
+        slots.sort(key=lambda item: item["starts_at_utc"])
+        return slots
+
+    duration_candidates = [slot_duration_minutes]
+    if slot_duration_minutes > 30:
+        duration_candidates.append(30)
+
+    for duration in duration_candidates:
+        slots = _collect_slots_for_duration(duration_minutes=duration)
+        if slots:
+            if duration != slot_duration_minutes:
+                logger.info(
+                    "ai_autoresponder.slots_found_with_shorter_duration",
+                    tenant_id=str(tenant_id),
+                    unit_id=str(unit_id),
+                    procedure_type=procedure_type,
+                    requested_date=requested_date.isoformat() if requested_date else None,
+                    requested_duration_minutes=slot_duration_minutes,
+                    fallback_duration_minutes=duration,
+                )
+            return slots[:max_slots]
+
+    logger.info(
+        "ai_autoresponder.no_slots_found",
+        tenant_id=str(tenant_id),
+        unit_id=str(unit_id),
+        procedure_type=procedure_type,
+        period=period,
+        requested_date=requested_date.isoformat() if requested_date else None,
+        professionals_count=len(professionals),
+        busy_rows_count=len(busy_rows),
+        base_window=f"{base_start:04d}-{base_end:04d}",
+        duration_candidates=duration_candidates,
+    )
+    return []
 
 
 def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
