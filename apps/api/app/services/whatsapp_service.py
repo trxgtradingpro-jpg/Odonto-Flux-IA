@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from hashlib import sha1
 from uuid import UUID
 
 from sqlalchemy import select
@@ -28,6 +29,22 @@ from app.utils.phone import normalize_phone
 
 
 SUPPORTED_WHATSAPP_PROVIDERS = {"meta_cloud", "infobip", "twilio"}
+WEBHOOK_EVENT_ID_MAX_LENGTH = 120
+
+
+def _safe_webhook_event_id(raw_event_id: str | None) -> str:
+    value = str(raw_event_id or '').strip()
+    if not value:
+        return ''
+    if len(value) <= WEBHOOK_EVENT_ID_MAX_LENGTH:
+        return value
+
+    digest = sha1(value.encode('utf-8')).hexdigest()[:12]
+    reserved_suffix = len(digest) + 1  # include separator ':'
+    prefix_size = WEBHOOK_EVENT_ID_MAX_LENGTH - reserved_suffix
+    if prefix_size <= 0:
+        return digest[:WEBHOOK_EVENT_ID_MAX_LENGTH]
+    return f'{value[:prefix_size]}:{digest}'
 
 
 def verify_webhook_challenge(mode: str | None, token: str | None, challenge: str | None) -> str:
@@ -355,7 +372,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 inbox_event = WebhookInbox(
                     tenant_id=tenant_id,
                     provider='whatsapp',
-                    event_id=event_id,
+                    event_id=_safe_webhook_event_id(event_id),
                     payload=message,
                     processed=False,
                 )
@@ -468,7 +485,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     WebhookInbox(
                         tenant_id=tenant_id,
                         provider='whatsapp',
-                        event_id=event_id,
+                        event_id=_safe_webhook_event_id(event_id),
                         payload=status,
                         processed=True,
                         processed_at=datetime.now(UTC),
@@ -575,7 +592,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             inbox_event = WebhookInbox(
                 tenant_id=tenant_id,
                 provider='infobip_whatsapp',
-                event_id=event_id[:255],
+                event_id=_safe_webhook_event_id(event_id),
                 payload=result,
                 processed=False,
             )
@@ -683,7 +700,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 WebhookInbox(
                     tenant_id=tenant_id,
                     provider='infobip_whatsapp',
-                    event_id=event_id[:255],
+                    event_id=_safe_webhook_event_id(event_id),
                     payload=result,
                     processed=True,
                     processed_at=datetime.now(UTC),
@@ -777,7 +794,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
         inbox_event = WebhookInbox(
             tenant_id=tenant_id,
             provider='twilio_whatsapp',
-            event_id=event_id[:255],
+            event_id=_safe_webhook_event_id(event_id),
             payload=payload,
             processed=False,
         )
@@ -893,7 +910,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
             WebhookInbox(
                 tenant_id=tenant_id,
                 provider='twilio_whatsapp',
-                event_id=event_id[:255],
+                event_id=_safe_webhook_event_id(event_id),
                 payload=payload,
                 processed=True,
                 processed_at=datetime.now(UTC),

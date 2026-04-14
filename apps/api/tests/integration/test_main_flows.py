@@ -8,6 +8,7 @@ from app.models import (
     OutboxMessage,
     Patient,
     Setting,
+    WebhookInbox,
     WhatsAppAccount,
 )
 from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
@@ -203,6 +204,61 @@ def test_infobip_account_dispatches_outbox(client, auth_headers, seeded_db, db_s
     refreshed = db_session.get(OutboxMessage, outbox.id)
     assert refreshed is not None
     assert refreshed.status == 'sent'
+
+
+def test_infobip_webhook_with_long_event_id_is_stored_safely(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'infobip'
+    account.phone_number_id = '447860042894'
+    account.business_account_id = '3dd13w.api.infobip.com'
+    account.access_token_encrypted = 'infobip-app-key-' + ('x' * 40)
+    db_session.add(account)
+    db_session.commit()
+
+    payload = {
+        'results': [
+            {
+                'from': '5511940431906',
+                'to': '447860042894',
+                'integrationType': 'WHATSAPP',
+                'receivedAt': '2026-04-14T23:20:08.000+0000',
+                'messageId': 'E_BLzsUdUY8I3ZuTBMC3lYflob3uPB3DE8_e04FfUur-7KhboQqzWKosGt4y2lT5-dmB9JwzhlB2SUlG1ldODoCrFJXRE_LOM0_34hlSq6NQA',
+                'message': {'text': 'Oi', 'type': 'TEXT'},
+                'contact': {'name': 'Guilherme Gomes'},
+            }
+        ]
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+    assert response.json()['result']['processed'] == 1
+
+    inbox_event = db_session.scalar(
+        select(WebhookInbox)
+        .where(
+            WebhookInbox.tenant_id == tenant_id,
+            WebhookInbox.provider == 'infobip_whatsapp',
+        )
+        .order_by(WebhookInbox.created_at.desc())
+    )
+    assert inbox_event is not None
+    assert len(inbox_event.event_id) <= 120
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511940431906'))
+    assert patient is not None
+
+    message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.direction == 'inbound',
+            Message.channel == 'whatsapp',
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert message is not None
+    assert message.body == 'Oi'
 
 
 def test_twilio_account_dispatches_outbox(client, auth_headers, seeded_db, db_session, monkeypatch):
