@@ -152,6 +152,10 @@ class Professional(UUIDTimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(180))
     cro_number: Mapped[str | None] = mapped_column(String(80))
     specialty: Mapped[str | None] = mapped_column(String(120))
+    working_days: Mapped[list[int]] = mapped_column(JSONB, default=lambda: [0, 1, 2, 3, 4])
+    shift_start: Mapped[str] = mapped_column(String(5), default="08:00")
+    shift_end: Mapped[str] = mapped_column(String(5), default="18:00")
+    procedures: Mapped[list[str]] = mapped_column(JSONB, default=list)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

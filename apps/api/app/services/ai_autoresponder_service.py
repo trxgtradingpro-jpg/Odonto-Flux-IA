@@ -25,6 +25,7 @@ from app.models import (
     Message,
     MessageEvent,
     Patient,
+    Professional,
     Setting,
     Unit,
     User,
@@ -883,12 +884,47 @@ def _format_slot_pt(slot_local: datetime) -> str:
     return f"{_weekday_label_pt(slot_local.weekday())}, {slot_local.strftime('%d/%m')} às {slot_local.strftime('%H:%M')}"
 
 
+def _normalize_procedure_label(value: str) -> str:
+    normalized = _normalize_for_match(value or "")
+    return normalized.replace("  ", " ").strip()
+
+
+def _professional_matches_procedure(professional: Professional, procedure_type: str) -> bool:
+    procedures = [item for item in (professional.procedures or []) if isinstance(item, str) and item.strip()]
+    if not procedures:
+        return True
+    target = _normalize_procedure_label(procedure_type)
+    return any(
+        _normalize_procedure_label(option) in target or target in _normalize_procedure_label(option)
+        for option in procedures
+    )
+
+
+def _parse_professional_working_days(professional: Professional, fallback_days: list[int]) -> list[int]:
+    if isinstance(professional.working_days, list):
+        days = sorted({int(day) for day in professional.working_days if isinstance(day, int) and 0 <= int(day) <= 6})
+        if days:
+            return days
+    return fallback_days
+
+
+def _parse_professional_window(professional: Professional, *, fallback_start: int, fallback_end: int) -> tuple[int, int]:
+    start_h, start_m = _parse_hhmm(professional.shift_start or "08:00")
+    end_h, end_m = _parse_hhmm(professional.shift_end or "18:00")
+    start_total = start_h * 60 + start_m
+    end_total = end_h * 60 + end_m
+    if end_total <= start_total:
+        return fallback_start, fallback_end
+    return start_total, end_total
+
+
 def _list_available_slots(
     db: Session,
     *,
     tenant_id: UUID,
     unit_id: UUID,
     config: dict[str, Any],
+    procedure_type: str,
     period: str | None,
     max_slots: int = 3,
     slot_duration_minutes: int = 60,
@@ -906,10 +942,6 @@ def _list_available_slots(
     end_h, end_m = _parse_hhmm(str(business_hours.get("end") or "18:00"))
     base_start = start_h * 60 + start_m
     base_end = end_h * 60 + end_m
-    window_start, window_end = _period_window_minutes(base_start=base_start, base_end=base_end, period=period)
-    if window_end <= window_start:
-        return []
-
     window_end_utc = now_utc + timedelta(days=21)
     busy_rows = db.execute(
         select(Appointment).where(
@@ -921,56 +953,102 @@ def _list_available_slots(
         )
     ).scalars().all()
 
-    busy_windows: list[tuple[datetime, datetime]] = []
+    busy_by_professional: dict[str, list[tuple[datetime, datetime]]] = {}
     for item in busy_rows:
         start_at = item.starts_at
         if not start_at:
             continue
         end_at = item.ends_at or (start_at + timedelta(minutes=slot_duration_minutes))
-        busy_windows.append((start_at, end_at))
+        key = str(item.professional_id) if item.professional_id else "__unit__"
+        busy_by_professional.setdefault(key, []).append((start_at, end_at))
+
+    professionals = db.execute(
+        select(Professional).where(
+            Professional.tenant_id == tenant_id,
+            Professional.unit_id == unit_id,
+            Professional.is_active.is_(True),
+        )
+    ).scalars().all()
+    professionals = [item for item in professionals if _professional_matches_procedure(item, procedure_type)]
+
+    if not professionals:
+        # Fallback legado: agenda por unidade quando ainda não há profissional configurado.
+        professionals = [
+            Professional(
+                tenant_id=tenant_id,
+                unit_id=unit_id,
+                full_name="Equipe clínica",
+                working_days=weekdays,
+                shift_start=f"{start_h:02d}:{start_m:02d}",
+                shift_end=f"{end_h:02d}:{end_m:02d}",
+                procedures=[],
+                is_active=True,
+            )
+        ]
 
     slots: list[dict[str, Any]] = []
-    for day_offset in range(0, 21):
-        day_local = (now_local + timedelta(days=day_offset)).date()
-        if day_local.weekday() not in weekdays:
+    for professional in professionals:
+        professional_days = _parse_professional_working_days(professional, weekdays)
+        prof_start, prof_end = _parse_professional_window(
+            professional,
+            fallback_start=base_start,
+            fallback_end=base_end,
+        )
+        window_start, window_end = _period_window_minutes(
+            base_start=prof_start,
+            base_end=prof_end,
+            period=period,
+        )
+        if window_end <= window_start:
             continue
 
-        minute_pointer = window_start
-        while minute_pointer + slot_duration_minutes <= window_end:
-            slot_local = datetime(
-                year=day_local.year,
-                month=day_local.month,
-                day=day_local.day,
-                hour=minute_pointer // 60,
-                minute=minute_pointer % 60,
-                tzinfo=timezone,
-            )
-            slot_start_utc = slot_local.astimezone(UTC)
-            slot_end_utc = slot_start_utc + timedelta(minutes=slot_duration_minutes)
+        professional_key = str(professional.id) if getattr(professional, "id", None) else "__unit__"
+        busy_windows = busy_by_professional.get(professional_key, [])
+        if professional_key != "__unit__":
+            busy_windows = busy_windows + busy_by_professional.get("__unit__", [])
 
-            if slot_start_utc <= now_utc + timedelta(minutes=20):
-                minute_pointer += 30
+        for day_offset in range(0, 21):
+            day_local = (now_local + timedelta(days=day_offset)).date()
+            if day_local.weekday() not in professional_days:
                 continue
 
-            has_conflict = any(
-                busy_start < slot_end_utc and busy_end > slot_start_utc
-                for busy_start, busy_end in busy_windows
-            )
-            if not has_conflict:
-                slots.append(
-                    {
-                        "starts_at_utc": slot_start_utc,
-                        "ends_at_utc": slot_end_utc,
-                        "starts_at_local": slot_local,
-                        "label": _format_slot_pt(slot_local),
-                    }
+            minute_pointer = window_start
+            while minute_pointer + slot_duration_minutes <= window_end:
+                slot_local = datetime(
+                    year=day_local.year,
+                    month=day_local.month,
+                    day=day_local.day,
+                    hour=minute_pointer // 60,
+                    minute=minute_pointer % 60,
+                    tzinfo=timezone,
                 )
-                if len(slots) >= max_slots:
-                    return slots
+                slot_start_utc = slot_local.astimezone(UTC)
+                slot_end_utc = slot_start_utc + timedelta(minutes=slot_duration_minutes)
 
-            minute_pointer += 30
+                if slot_start_utc <= now_utc + timedelta(minutes=20):
+                    minute_pointer += 30
+                    continue
 
-    return slots
+                has_conflict = any(
+                    busy_start < slot_end_utc and busy_end > slot_start_utc
+                    for busy_start, busy_end in busy_windows
+                )
+                if not has_conflict:
+                    slots.append(
+                        {
+                            "starts_at_utc": slot_start_utc,
+                            "ends_at_utc": slot_end_utc,
+                            "starts_at_local": slot_local,
+                            "label": _format_slot_pt(slot_local),
+                            "professional_id": getattr(professional, "id", None),
+                            "professional_name": professional.full_name,
+                        }
+                    )
+
+                minute_pointer += 30
+
+    slots.sort(key=lambda item: item["starts_at_utc"])
+    return slots[:max_slots]
 
 
 def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
@@ -1024,12 +1102,15 @@ def _build_scheduling_operation_response(
             "metadata": {"reason": "no_unit_available"},
         }
 
+    procedure_type = _infer_procedure_type(inbound_text=inbound_text, context=context)
+
     if period:
         slots = _list_available_slots(
             db,
             tenant_id=conversation.tenant_id,
             unit_id=unit.id,
             config=config,
+            procedure_type=procedure_type,
             period=period,
             max_slots=1,
         )
@@ -1057,8 +1138,8 @@ def _build_scheduling_operation_response(
             tenant_id=conversation.tenant_id,
             patient_id=conversation.patient_id,
             unit_id=unit.id,
-            professional_id=None,
-            procedure_type=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            professional_id=selected_slot.get("professional_id"),
+            procedure_type=procedure_type,
             starts_at=selected_slot["starts_at_utc"],
             ends_at=selected_slot["ends_at_utc"],
             origin="ai_autoresponder",
@@ -1098,6 +1179,11 @@ def _build_scheduling_operation_response(
                     "conversation_id": str(conversation.id),
                     "appointment_id": str(appointment.id),
                     "unit_id": str(unit.id),
+                    "professional_id": (
+                        str(selected_slot.get("professional_id"))
+                        if selected_slot.get("professional_id")
+                        else None
+                    ),
                     "starts_at": appointment.starts_at.isoformat(),
                     "origin": "ai_autoresponder",
                 },
@@ -1108,7 +1194,13 @@ def _build_scheduling_operation_response(
             "mode": "appointment_created",
             "response_text": (
                 f"{_patient_first_name(db, conversation=conversation)}, agendamento confirmado para "
-                f"{selected_slot['label']} na unidade {unit.name}. "
+                f"{selected_slot['label']} na unidade {unit.name}"
+                + (
+                    f" com {selected_slot['professional_name']}"
+                    if selected_slot.get("professional_name")
+                    else ""
+                )
+                + ". "
                 "Se precisar, posso reagendar."
             ),
             "metadata": {
@@ -1117,6 +1209,12 @@ def _build_scheduling_operation_response(
                 "selected_slot": selected_slot["label"],
                 "starts_at_utc": appointment.starts_at.isoformat(),
                 "unit_id": str(unit.id),
+                "professional_id": (
+                    str(selected_slot.get("professional_id"))
+                    if selected_slot.get("professional_id")
+                    else None
+                ),
+                "professional_name": selected_slot.get("professional_name"),
             },
         }
 
@@ -1125,6 +1223,7 @@ def _build_scheduling_operation_response(
         tenant_id=conversation.tenant_id,
         unit_id=unit.id,
         config=config,
+        procedure_type=procedure_type,
         period=None,
         max_slots=3,
     )

@@ -26,6 +26,19 @@ export type UnitItem = {
   email?: string | null;
 };
 
+export type ProfessionalItem = {
+  id: string;
+  unit_id?: string | null;
+  full_name: string;
+  cro_number?: string | null;
+  specialty?: string | null;
+  working_days: number[];
+  shift_start: string;
+  shift_end: string;
+  procedures: string[];
+  is_active: boolean;
+};
+
 export type PatientItem = {
   id: string;
   full_name: string;

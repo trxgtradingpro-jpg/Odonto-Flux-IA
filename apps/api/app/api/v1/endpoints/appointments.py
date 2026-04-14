@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import Principal, get_current_principal, get_tenant_id
 from app.core.exceptions import ApiError
 from app.db.session import get_db
-from app.models import Appointment, AppointmentEvent
+from app.models import Appointment, AppointmentEvent, Professional
 from app.schemas.appointment import AppointmentCreate, AppointmentOutput, AppointmentUpdate
 from app.services.audit_service import record_audit
 from app.services.automation_service import emit_event
@@ -39,6 +39,23 @@ def create_appointment(
     tenant_id=Depends(get_tenant_id),
     principal: Principal = Depends(get_current_principal),
 ):
+    if payload.professional_id:
+        professional = db.scalar(
+            select(Professional).where(
+                Professional.id == payload.professional_id,
+                Professional.tenant_id == tenant_id,
+                Professional.is_active.is_(True),
+            )
+        )
+        if not professional:
+            raise ApiError(status_code=404, code="PROFESSIONAL_NOT_FOUND", message="Profissional nao encontrado")
+        if professional.unit_id and professional.unit_id != payload.unit_id:
+            raise ApiError(
+                status_code=409,
+                code="PROFESSIONAL_UNIT_MISMATCH",
+                message="Profissional nao atende na unidade selecionada",
+            )
+
     appointment = Appointment(
         tenant_id=tenant_id,
         patient_id=payload.patient_id,
@@ -108,6 +125,26 @@ def update_appointment(
 
     previous_status = appointment.status
     updates = payload.model_dump(exclude_unset=True)
+    professional_id = updates.get("professional_id")
+    if professional_id:
+        professional = db.scalar(
+            select(Professional).where(
+                Professional.id == professional_id,
+                Professional.tenant_id == tenant_id,
+                Professional.is_active.is_(True),
+            )
+        )
+        if not professional:
+            raise ApiError(status_code=404, code="PROFESSIONAL_NOT_FOUND", message="Profissional nao encontrado")
+
+        target_unit_id = updates.get("unit_id") or appointment.unit_id
+        if professional.unit_id and professional.unit_id != target_unit_id:
+            raise ApiError(
+                status_code=409,
+                code="PROFESSIONAL_UNIT_MISMATCH",
+                message="Profissional nao atende na unidade selecionada",
+            )
+
     for key, value in updates.items():
         setattr(appointment, key, value)
 
