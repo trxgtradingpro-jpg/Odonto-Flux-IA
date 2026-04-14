@@ -498,7 +498,7 @@ export default function AgendaPage() {
               </div>
 
               <div className="grid grid-cols-7 gap-1 rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                {weekDayOptions.map((item) => (
+                {WEEK_DAY_OPTIONS.map((item) => (
                   <p key={`month-head-${item.value}`} className="text-center font-semibold text-stone-500">
                     {item.label}
                   </p>
@@ -867,7 +867,7 @@ export default function AgendaPage() {
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
-            {weekDayOptions.map((day) => {
+            {WEEK_DAY_OPTIONS.map((day) => {
               const checked = newProfessionalDays.includes(day.value);
               return (
                 <label
@@ -924,7 +924,7 @@ export default function AgendaPage() {
                   const days = professional.working_days
                     .slice()
                     .sort()
-                    .map((day) => weekDayOptions.find((item) => item.value === day)?.label ?? String(day))
+                    .map((day) => WEEK_DAY_OPTIONS.find((item) => item.value === day)?.label ?? String(day))
                     .join(", ");
                   return (
                     <div
