@@ -389,15 +389,16 @@ export default function AgendaPage() {
   const pxPerMinute = 1.35;
   const boardHeight = totalMinutes * pxPerMinute;
   const slotMarks = Array.from({ length: Math.floor(totalMinutes / 30) + 1 }, (_, index) => boardStartMinutes + index * 30);
+  const boardColumnMin = viewMode === "day" ? 220 : 180;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <PageHeader
         eyebrow="Agenda inteligente"
         title="Agenda operacional"
         description="Visual semanal, filtros por equipe, cores por profissional e atualizacao automatica."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant={viewMode === "day" ? "default" : "outline"} className="h-9" onClick={() => setViewMode("day")}>
               Dia
             </Button>
@@ -441,7 +442,7 @@ export default function AgendaPage() {
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
         <div className="space-y-4">
           <Card className="border-stone-200">
             <CardHeader>
@@ -461,7 +462,7 @@ export default function AgendaPage() {
                 >
                   <ChevronLeft size={14} />
                 </Button>
-                <p className="text-sm font-semibold text-stone-700">
+                <p className="min-w-0 flex-1 text-center text-xs font-semibold text-stone-700 sm:text-sm">
                   {formatDateBR(weekAnchor)} - {formatDateBR(addDays(weekAnchor, 6))}
                 </p>
                 <Button
@@ -626,10 +627,10 @@ export default function AgendaPage() {
           </CardHeader>
           <CardContent>
             <div ref={boardRef} className="overflow-auto rounded-lg border border-stone-200 bg-white">
-              <div className="min-w-[860px]">
+              <div className="min-w-[720px] sm:min-w-[820px]">
                 <div
                   className="grid border-b border-stone-200"
-                  style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(220px, 1fr))` }}
+                  style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(${boardColumnMin}px, 1fr))` }}
                 >
                   <div className="border-r border-stone-200 bg-stone-50 p-2 text-xs font-semibold text-stone-500">Hora</div>
                   {displayDays.length ? (
@@ -645,7 +646,7 @@ export default function AgendaPage() {
 
                 <div
                   className="grid"
-                  style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(220px, 1fr))` }}
+                  style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(${boardColumnMin}px, 1fr))` }}
                 >
                   <div className="relative border-r border-stone-200 bg-stone-50" style={{ height: boardHeight }}>
                     {slotMarks.map((slot) => (

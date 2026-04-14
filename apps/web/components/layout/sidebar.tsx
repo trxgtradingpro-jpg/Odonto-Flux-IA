@@ -23,6 +23,7 @@ import {
   UploadCloud,
   UserCog,
   Users,
+  X,
   Building2,
 } from "lucide-react";
 
@@ -80,6 +81,8 @@ function NavGroupSection({
   title,
   items,
   collapsed,
+  mobileOpen,
+  onCloseMobile,
   pathname,
   badges,
   roles,
@@ -87,6 +90,8 @@ function NavGroupSection({
   title: string;
   items: NavItem[];
   collapsed: boolean;
+  mobileOpen: boolean;
+  onCloseMobile?: () => void;
   pathname: string;
   badges: Record<string, number>;
   roles: string[];
@@ -107,6 +112,9 @@ function NavGroupSection({
               key={item.href}
               href={item.href}
               title={collapsed ? item.label : undefined}
+              onClick={() => {
+                if (mobileOpen) onCloseMobile?.();
+              }}
               className={cn(
                 "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
                 collapsed && "justify-center px-2",
@@ -150,15 +158,20 @@ function NavGroupSection({
 
 export function Sidebar({
   collapsed,
+  mobileOpen,
+  onCloseMobile,
   session,
   branding,
 }: {
   collapsed: boolean;
+  mobileOpen: boolean;
+  onCloseMobile?: () => void;
   session?: SessionContext;
   branding?: BrandingTheme;
 }) {
   const pathname = usePathname();
   const currentRole = session?.roles?.[0] ?? "";
+  const useCollapsed = collapsed && !mobileOpen;
   const notificationsQuery = useLiveNotifications();
   const badges = notificationsQuery.data?.badges ?? {
     conversations: 0,
@@ -169,40 +182,63 @@ export function Sidebar({
   const roles = session?.roles ?? [];
 
   return (
-    <aside
-      className={cn(
-        "flex h-screen flex-col border-r border-border bg-white/95 transition-all duration-300",
-        collapsed ? "w-[88px]" : "w-[286px]",
-      )}
-    >
-      <div className={cn("border-b border-border", collapsed ? "px-3 py-4 text-center" : "px-5 py-5")}>
-        <div className={cn("flex items-center gap-2", collapsed ? "justify-center" : "justify-start")}>
-          {branding?.logoDataUrl ? (
-            <Image
-              src={branding.logoDataUrl}
-              alt="Logo"
-              width={36}
-              height={36}
-              unoptimized
-              className="h-9 w-9 rounded-md object-cover"
-            />
-          ) : (
-            <div
-              className="flex h-9 w-9 items-center justify-center rounded-md text-xs font-bold text-white"
-              style={{ backgroundColor: "var(--tenant-primary)" }}
-            >
-              OF
-            </div>
-          )}
-          {!collapsed ? (
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">OdontoFlux</p>
-              <h1 className="text-lg font-bold text-stone-900">{branding?.clinicName ?? "Clinica"}</h1>
-            </div>
-          ) : null}
+    <>
+      {mobileOpen ? (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          onClick={onCloseMobile}
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+        />
+      ) : null}
+
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex h-screen max-w-[84vw] flex-col border-r border-border bg-white/95 transition-all duration-300",
+          "w-[286px] -translate-x-full shadow-none",
+          mobileOpen && "translate-x-0 shadow-2xl",
+          "lg:static lg:z-auto lg:max-w-none lg:translate-x-0 lg:shadow-none",
+          useCollapsed ? "lg:w-[88px]" : "lg:w-[286px]",
+        )}
+      >
+      <div className={cn("border-b border-border", useCollapsed ? "px-3 py-4 text-center" : "px-5 py-5")}>
+        <div className={cn("flex items-center gap-2", useCollapsed ? "justify-center" : "justify-between")}>
+          <div className={cn("flex items-center gap-2", useCollapsed ? "justify-center" : "justify-start")}>
+            {branding?.logoDataUrl ? (
+              <Image
+                src={branding.logoDataUrl}
+                alt="Logo"
+                width={36}
+                height={36}
+                unoptimized
+                className="h-9 w-9 rounded-md object-cover"
+              />
+            ) : (
+              <div
+                className="flex h-9 w-9 items-center justify-center rounded-md text-xs font-bold text-white"
+                style={{ backgroundColor: "var(--tenant-primary)" }}
+              >
+                OF
+              </div>
+            )}
+            {!useCollapsed ? (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">OdontoFlux</p>
+                <h1 className="text-lg font-bold text-stone-900">{branding?.clinicName ?? "Clinica"}</h1>
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 text-stone-600 lg:hidden"
+            onClick={onCloseMobile}
+            aria-label="Fechar barra lateral"
+          >
+            <X size={14} />
+          </button>
         </div>
 
-        {!collapsed ? (
+        {!useCollapsed ? (
           <div className="mt-3 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3">
             <div className="flex items-center gap-2 text-xs text-stone-600">
               <Building2 size={14} />
@@ -219,7 +255,9 @@ export function Sidebar({
             key={group.title}
             title={group.title}
             items={group.items}
-            collapsed={collapsed}
+            collapsed={useCollapsed}
+            mobileOpen={mobileOpen}
+            onCloseMobile={onCloseMobile}
             pathname={pathname}
             badges={badges}
             roles={roles}
@@ -228,7 +266,7 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-border p-3">
-        {collapsed ? (
+        {useCollapsed ? (
           <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-stone-200 text-xs font-semibold text-stone-700">
             {initials(session?.full_name)}
           </div>
@@ -250,6 +288,7 @@ export function Sidebar({
           </div>
         )}
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

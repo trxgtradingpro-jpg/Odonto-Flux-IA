@@ -34,10 +34,10 @@ export function DataTableCard({
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3">
+      <CardHeader className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
         <CardTitle>{title}</CardTitle>
         <Input
-          className="max-w-xs"
+          className="w-full sm:max-w-xs"
           placeholder={searchPlaceholder}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -49,24 +49,26 @@ export function DataTableCard({
             Nenhum resultado encontrado.
           </div>
         ) : (
-          <Table>
-            <THead>
-              <TR>
-                {columns.map((column) => (
-                  <TH key={column.key}>{column.label}</TH>
-                ))}
-              </TR>
-            </THead>
-            <TBody>
-              {filtered.map((row, index) => (
-                <TR key={`${row.id ?? index}`}>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead>
+                <TR>
                   {columns.map((column) => (
-                    <TD key={column.key}>{String(row[column.key] ?? '-')}</TD>
+                    <TH key={column.key}>{column.label}</TH>
                   ))}
                 </TR>
-              ))}
-            </TBody>
-          </Table>
+              </THead>
+              <TBody>
+                {filtered.map((row, index) => (
+                  <TR key={`${row.id ?? index}`}>
+                    {columns.map((column) => (
+                      <TD key={column.key}>{String(row[column.key] ?? '-')}</TD>
+                    ))}
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

@@ -9,6 +9,12 @@
   --tenant-accent: #f59e0b;
 }
 
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   @apply bg-background text-foreground antialiased;
   min-height: 100vh;

@@ -59,9 +59,9 @@ export function DataTable<T>({
     <Card className="border-stone-200">
       <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <CardTitle>{title}</CardTitle>
-        <div className="flex w-full items-center gap-2 lg:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:flex-nowrap lg:w-auto">
           <Input
-            className="lg:w-72"
+            className="w-full sm:flex-1 lg:w-72"
             placeholder={searchPlaceholder}
             value={search}
             onChange={(event) => setSearch(event.target.value)}

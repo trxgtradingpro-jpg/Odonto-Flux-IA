@@ -34,12 +34,12 @@ export function Topbar({
 
   return (
     <header
-      className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-white/90 px-4 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 flex h-16 min-w-0 items-center justify-between border-b border-border bg-white/90 px-3 backdrop-blur sm:px-4 md:px-6"
       style={{
         boxShadow: "0 8px 24px rgba(0,0,0,0.04)",
       }}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <Button variant="outline" className="h-9 w-9 px-0" onClick={onToggleSidebar} title="Alternar menu">
           <Menu size={16} />
         </Button>
@@ -72,7 +72,7 @@ export function Topbar({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 sm:gap-2">
         <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 lg:flex">
           <CalendarDays size={14} className="text-stone-500" />
           <span className="text-xs text-stone-600">{today}</span>
@@ -95,7 +95,7 @@ export function Topbar({
             ) : null}
           </button>
           {openNotifications ? (
-            <div className="absolute right-0 top-11 z-30 w-[320px] rounded-xl border border-stone-200 bg-white p-2 shadow-2xl">
+            <div className="absolute right-0 top-11 z-30 w-[min(92vw,320px)] rounded-xl border border-stone-200 bg-white p-2 shadow-2xl">
               <div className="flex items-center justify-between px-2 py-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Notificacoes</p>
                 <span className="text-[11px] text-stone-500">
@@ -137,9 +137,9 @@ export function Topbar({
           </div>
         </div>
 
-        <Button variant="outline" onClick={onLogout} className="gap-1.5">
+        <Button variant="outline" onClick={onLogout} className="gap-1.5 px-2 sm:px-3">
           <LogOut size={14} />
-          Sair
+          <span className="hidden sm:inline">Sair</span>
         </Button>
       </div>
     </header>
