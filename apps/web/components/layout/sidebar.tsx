@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { ComponentType } from "react";
 import {
@@ -177,7 +178,14 @@ export function Sidebar({
       <div className={cn("border-b border-border", collapsed ? "px-3 py-4 text-center" : "px-5 py-5")}>
         <div className={cn("flex items-center gap-2", collapsed ? "justify-center" : "justify-start")}>
           {branding?.logoDataUrl ? (
-            <img src={branding.logoDataUrl} alt="Logo" className="h-9 w-9 rounded-md object-cover" />
+            <Image
+              src={branding.logoDataUrl}
+              alt="Logo"
+              width={36}
+              height={36}
+              unoptimized
+              className="h-9 w-9 rounded-md object-cover"
+            />
           ) : (
             <div
               className="flex h-9 w-9 items-center justify-center rounded-md text-xs font-bold text-white"

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { Bell, CalendarDays, LogOut, Menu } from "lucide-react";
 
@@ -44,7 +45,14 @@ export function Topbar({
         </Button>
         <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 md:flex">
           {branding?.logoDataUrl ? (
-            <img src={branding.logoDataUrl} alt="Logo da clinica" className="h-8 w-8 rounded-md object-cover" />
+            <Image
+              src={branding.logoDataUrl}
+              alt="Logo da clinica"
+              width={32}
+              height={32}
+              unoptimized
+              className="h-8 w-8 rounded-md object-cover"
+            />
           ) : (
             <div
               className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold text-white"

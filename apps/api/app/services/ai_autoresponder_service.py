@@ -36,7 +36,7 @@ from app.services.audit_service import record_audit
 from app.services.llm_service import classify_intent, run_llm_task
 from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
 
-AI_AUTORESPONDER_PROMPT_VERSION = "v1.0"
+AI_AUTORESPONDER_PROMPT_VERSION = "v1.1"
 
 AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -161,6 +161,20 @@ AVAILABILITY_REQUEST_KEYWORDS = (
 PERIOD_MORNING_KEYWORDS = ("manha", "manhã")
 PERIOD_AFTERNOON_KEYWORDS = ("tarde",)
 PERIOD_EVENING_KEYWORDS = ("noite",)
+FOLLOWUP_AVAILABILITY_KEYWORDS = (
+    "opcao",
+    "opcoes",
+    "opção",
+    "opções",
+    "vagas",
+    "tem mais",
+    "quais",
+    "que horas",
+    "horarios",
+    "horários",
+    "disponiveis",
+    "disponíveis",
+)
 
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
@@ -824,6 +838,138 @@ def _is_explicit_availability_request(text: str) -> bool:
     return any(keyword in normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS)
 
 
+def _is_followup_availability_request(*, inbound_text: str, context: str) -> bool:
+    normalized_inbound = _normalize_for_match(inbound_text)
+    if any(keyword in normalized_inbound for keyword in FOLLOWUP_AVAILABILITY_KEYWORDS):
+        return True
+    if not _is_scheduling_context(inbound_text=inbound_text, context=context):
+        return False
+    # Respostas curtas de confirmação após oferta de agenda.
+    return normalized_inbound in {"sim", "pode", "ok", "certo", "isso", "pode sim"}
+
+
+def _format_slots_options_message(
+    *,
+    slots: list[dict[str, Any]],
+    period: str | None = None,
+    procedure_type: str | None = None,
+) -> str:
+    period_label_map = {
+        "morning": "manhã",
+        "afternoon": "tarde",
+        "evening": "noite",
+    }
+    period_label = period_label_map.get(period or "", "")
+    if period_label and procedure_type:
+        header = f"Encontrei estes horários para {period_label} ({procedure_type}):"
+    elif period_label:
+        header = f"Encontrei estes horários para {period_label}:"
+    elif procedure_type:
+        header = f"Encontrei estes horários disponíveis para {procedure_type}:"
+    else:
+        header = "Encontrei estes horários disponíveis:"
+
+    lines = [header]
+    for idx, slot in enumerate(slots, start=1):
+        option = f"{idx}) {slot['label']}"
+        professional_name = str(slot.get("professional_name") or "").strip()
+        if professional_name and _normalize_for_match(professional_name) != "equipe clinica":
+            option = f"{option} — {professional_name}"
+        lines.append(option)
+    lines.append("Se preferir, me diga o número da opção para eu seguir com a confirmação.")
+    return "\n".join(lines)
+
+
+def _known_contact_names(db: Session, *, conversation: Conversation) -> list[str]:
+    raw_candidates: list[str] = []
+    if conversation.patient_id:
+        patient = db.scalar(
+            select(Patient).where(
+                Patient.id == conversation.patient_id,
+                Patient.tenant_id == conversation.tenant_id,
+            )
+        )
+        if patient and patient.full_name:
+            raw_candidates.append(patient.full_name)
+
+    if conversation.lead_id:
+        lead = db.scalar(
+            select(Lead).where(
+                Lead.id == conversation.lead_id,
+                Lead.tenant_id == conversation.tenant_id,
+            )
+        )
+        if lead and lead.name:
+            raw_candidates.append(lead.name)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        cleaned = re.sub(r"\s+", " ", str(raw or "").strip())
+        if len(cleaned) < 2:
+            continue
+        for alias in (cleaned, cleaned.split(" ")[0]):
+            normalized = _normalize_for_match(alias)
+            if len(normalized) < 2 or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(alias)
+    return deduped
+
+
+def _remove_excessive_name_mentions(text: str, *, known_names: list[str]) -> str:
+    if not known_names:
+        return text
+
+    output = text
+    for name in known_names:
+        escaped = re.escape(name)
+        output = re.sub(
+            rf"^\s*(ol[aá]|oi)\s*,?\s*{escaped}\s*!?\s*",
+            "Olá! ",
+            output,
+            flags=re.IGNORECASE,
+        )
+        output = re.sub(
+            rf"(^|\n)\s*{escaped}\s*,\s*",
+            r"\1",
+            output,
+            flags=re.IGNORECASE,
+        )
+    return output
+
+
+def _normalize_response_text(db: Session, *, conversation: Conversation, text: str) -> str:
+    output = str(text or "").strip()
+    if not output:
+        return ""
+
+    # Normaliza listas numeradas e separadores visuais para leitura no WhatsApp.
+    output = output.replace(" | ", "\n")
+    output = re.sub(r"\s+(?=\d+\)\s)", "\n", output)
+    output = re.sub(r"\n{3,}", "\n\n", output)
+
+    output = _remove_excessive_name_mentions(
+        output,
+        known_names=_known_contact_names(db, conversation=conversation),
+    )
+
+    # Remove duplicidade de linhas idênticas consecutivas.
+    lines: list[str] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if lines and _normalize_for_match(lines[-1]) == _normalize_for_match(line):
+            continue
+        lines.append(line)
+    output = "\n".join(lines).strip()
+
+    if len(output) > 1500:
+        output = f"{output[:1500].rstrip()}..."
+    return output
+
+
 def _resolve_conversation_unit(db: Session, *, conversation: Conversation) -> Unit | None:
     if conversation.unit_id:
         unit = db.scalar(
@@ -1062,20 +1208,6 @@ def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     return "Avaliação odontológica"
 
 
-def _patient_first_name(db: Session, *, conversation: Conversation) -> str:
-    if not conversation.patient_id:
-        return "Paciente"
-    patient = db.scalar(
-        select(Patient).where(
-            Patient.id == conversation.patient_id,
-            Patient.tenant_id == conversation.tenant_id,
-        )
-    )
-    if not patient or not patient.full_name:
-        return "Paciente"
-    return patient.full_name.strip().split(" ")[0] or "Paciente"
-
-
 def _build_scheduling_operation_response(
     db: Session,
     *,
@@ -1085,10 +1217,13 @@ def _build_scheduling_operation_response(
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
     period = _detect_period_preference(inbound_text)
-    explicit_availability_request = _is_explicit_availability_request(inbound_text)
+    explicit_availability_request = _is_explicit_availability_request(inbound_text) or _is_followup_availability_request(
+        inbound_text=inbound_text,
+        context=context,
+    )
     if not period and not explicit_availability_request:
         return None
-    if period and not _is_scheduling_context(inbound_text=inbound_text, context=context):
+    if period and not _is_scheduling_context(inbound_text=inbound_text, context=context) and not explicit_availability_request:
         return None
 
     unit = _resolve_conversation_unit(db, conversation=conversation)
@@ -1115,11 +1250,38 @@ def _build_scheduling_operation_response(
             max_slots=1,
         )
         if not slots:
+            period_label = {
+                "morning": "manhã",
+                "afternoon": "tarde",
+                "evening": "noite",
+            }.get(period, "este período")
+            fallback_slots = _list_available_slots(
+                db,
+                tenant_id=conversation.tenant_id,
+                unit_id=unit.id,
+                config=config,
+                procedure_type=procedure_type,
+                period=None,
+                max_slots=3,
+            )
+            if fallback_slots:
+                return {
+                    "mode": "no_slots_for_period_with_alternatives",
+                    "response_text": (
+                        f"No momento não encontrei vagas para {period_label}.\n"
+                        f"{_format_slots_options_message(slots=fallback_slots, procedure_type=procedure_type)}"
+                    ),
+                    "metadata": {
+                        "period": period,
+                        "reason": "no_slots_for_period",
+                        "alternative_slots": [slot["label"] for slot in fallback_slots],
+                    },
+                }
             return {
                 "mode": "no_slots_for_period",
                 "response_text": (
-                    "No momento não tenho vaga nesse período. "
-                    "Posso verificar tarde ou noite para você?"
+                    f"No momento não encontrei vaga para {period_label}. "
+                    "Se preferir, posso verificar outro período para você."
                 ),
                 "metadata": {"period": period, "reason": "no_slots_for_period"},
             }
@@ -1193,15 +1355,15 @@ def _build_scheduling_operation_response(
         return {
             "mode": "appointment_created",
             "response_text": (
-                f"{_patient_first_name(db, conversation=conversation)}, agendamento confirmado para "
-                f"{selected_slot['label']} na unidade {unit.name}"
+                "Agendamento confirmado com sucesso.\n"
+                f"• Horário: {selected_slot['label']}\n"
+                f"• Unidade: {unit.name}"
                 + (
-                    f" com {selected_slot['professional_name']}"
+                    f"\n• Profissional: {selected_slot['professional_name']}"
                     if selected_slot.get("professional_name")
                     else ""
                 )
-                + ". "
-                "Se precisar, posso reagendar."
+                + "\nSe precisar, posso reagendar."
             ),
             "metadata": {
                 "appointment_id": str(appointment.id),
@@ -1231,20 +1393,16 @@ def _build_scheduling_operation_response(
         return {
             "mode": "no_slots_general",
             "response_text": (
-                "No momento não encontrei horários livres na agenda. "
-                "Posso te avisar assim que abrir uma vaga."
+                "No momento não encontrei horários livres na agenda para este serviço. "
+                "Posso te avisar assim que abrir uma vaga ou te direcionar para atendimento humano."
             ),
             "metadata": {"reason": "no_slots_general"},
         }
 
     labels = [slot["label"] for slot in slots]
-    formatted_options = " | ".join(f"{idx + 1}) {label}" for idx, label in enumerate(labels))
     return {
         "mode": "slots_suggested",
-        "response_text": (
-            f"Tenho estes horários disponíveis: {formatted_options}. "
-            "Responda com manhã, tarde ou noite e eu já confirmo seu agendamento."
-        ),
+        "response_text": _format_slots_options_message(slots=slots, period=period, procedure_type=procedure_type),
         "metadata": {
             "slots": labels,
             "unit_id": str(unit.id),
@@ -1290,6 +1448,9 @@ def _prompt_for_autoresponder(
         "4) Mantenha respostas curtas (máximo 4 frases), claras e acionáveis.\n"
         "5) Use estritamente a base da clínica quando houver informação cadastrada.\n"
         "6) Se faltar informação na base, não invente; peça dados mínimos ou informe que vai confirmar com a equipe.\n\n"
+        "7) Não repita apresentação completa em toda mensagem e evite citar o nome do paciente em todas as respostas.\n"
+        "8) Ao informar datas/horários, use lista numerada (uma opção por linha).\n"
+        "9) Não diga 'vou verificar e retorno'; responda com opção concreta agora ou faça handoff humano.\n\n"
         f"{knowledge_section}"
         f"Histórico recente:\n{context}\n\n"
         f"Mensagem do paciente:\n{inbound_text}\n\n"
@@ -1712,7 +1873,11 @@ def process_inbound_message(
         config=config,
     )
     if scheduling_response:
-        generated_response = str(scheduling_response.get("response_text") or "").strip()
+        generated_response = _normalize_response_text(
+            db,
+            conversation=conversation,
+            text=str(scheduling_response.get("response_text") or ""),
+        )
         if not generated_response:
             return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
         try:
@@ -1906,7 +2071,11 @@ def process_inbound_message(
             prompt=prompt,
         )
         llm_payload = {"prompt": prompt, **llm_result}
-        generated_response = (llm_result.get("output") or "").strip()
+        generated_response = _normalize_response_text(
+            db,
+            conversation=conversation,
+            text=str(llm_result.get("output") or ""),
+        )
     except Exception as exc:
         logger.exception(
             "ai_autoresponder.llm_error",

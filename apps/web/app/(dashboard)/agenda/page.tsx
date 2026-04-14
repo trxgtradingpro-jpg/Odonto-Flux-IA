@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, ChevronLeft, ChevronRight, Expand, Minimize, Palette } from "lucide-react";
 import { toast } from "sonner";
@@ -44,6 +44,16 @@ const COLOR_PALETTE = [
   "#ffd8b1",
   "#f3c4fb",
 ];
+
+const WEEK_DAY_OPTIONS = [
+  { value: 0, label: "Dom" },
+  { value: 1, label: "Seg" },
+  { value: 2, label: "Ter" },
+  { value: 3, label: "Qua" },
+  { value: 4, label: "Qui" },
+  { value: 5, label: "Sex" },
+  { value: 6, label: "Sab" },
+] as const;
 
 function startOfWeekMonday(date: Date): Date {
   const output = new Date(date);
@@ -284,25 +294,12 @@ export default function AgendaPage() {
   const professionalsById = new Map(dataset.professionals.map((item) => [item.id, item]));
   const professionalsForSelectedUnit = dataset.professionals.filter((item) => !unitId || item.unit_id === unitId);
 
-  const weekDayOptions = useMemo(
-    () => [
-      { value: 0, label: "Dom" },
-      { value: 1, label: "Seg" },
-      { value: 2, label: "Ter" },
-      { value: 3, label: "Qua" },
-      { value: 4, label: "Qui" },
-      { value: 5, label: "Sex" },
-      { value: 6, label: "Sab" },
-    ],
-    [],
-  );
-
   const weekDays = Array.from({ length: 7 }, (_, index) => {
     const date = addDays(weekAnchor, index);
     return {
       date,
       key: toDayKey(date),
-      label: weekDayOptions[date.getDay()]?.label ?? "",
+      label: WEEK_DAY_OPTIONS[date.getDay()]?.label ?? "",
       dayOfMonth: `${date.getDate()}`.padStart(2, "0"),
     };
   });
@@ -313,7 +310,7 @@ export default function AgendaPage() {
           {
             date: focusedDate,
             key: toDayKey(focusedDate),
-            label: weekDayOptions[focusedDate.getDay()]?.label ?? "",
+            label: WEEK_DAY_OPTIONS[focusedDate.getDay()]?.label ?? "",
             dayOfMonth: `${focusedDate.getDate()}`.padStart(2, "0"),
           },
         ]

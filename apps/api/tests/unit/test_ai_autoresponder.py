@@ -467,3 +467,87 @@ def test_prompt_includes_knowledge_base_when_configured(monkeypatch, seeded_db, 
     assert "Base de conhecimento operacional da clínica" in prompt
     assert "Clínica Sorriso Sul Premium" in prompt
     assert "Avaliação ortodôntica" in prompt
+
+def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quais horarios voces tem para avaliacao?",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "slots_suggested"
+    assert outbound is not None
+    assert "1)" in (outbound.body or "")
+    assert "|" not in (outbound.body or "")
+
+
+def test_llm_response_removes_redundant_name_greeting(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quais servicos vcs oferecem?",
+    )
+
+    patient = db_session.get(Patient, conversation.patient_id)
+    patient.full_name = "Guilherme Gomes"
+    db_session.add(patient)
+    db_session.commit()
+
+    from app.services import ai_autoresponder_service
+
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "classify_intent",
+        lambda *args, **kwargs: {"output": '{"intent":"informacao","confidence":0.95}'},
+    )
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "run_llm_task",
+        lambda *args, **kwargs: {
+            "output": "Ola, Guilherme! Oferecemos avaliacao, lentes e clareamento. Posso te ajudar com um agendamento?",
+            "metadata": {"provider": "mock", "model": "mock"},
+        },
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert outbound is not None
+    normalized_body = (outbound.body or "").lower().replace("á", "a")
+    assert "ola, guilherme" not in normalized_body
+    assert normalized_body.startswith("ola!")

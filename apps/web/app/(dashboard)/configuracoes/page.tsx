@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
+import Image from "next/image";
 import { toast } from "sonner";
 
 import { DataTable, FilterBar, PageHeader, StatusBadge } from "@/components/premium";
@@ -1011,9 +1012,12 @@ export default function ConfiguracoesPage() {
               {brandingLogoPreview ? (
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Preview da logo</p>
-                  <img
+                  <Image
                     src={brandingLogoPreview}
                     alt="Preview da logo"
+                    width={64}
+                    height={64}
+                    unoptimized
                     className="mt-2 h-16 w-16 rounded-md border border-stone-200 object-cover"
                   />
                 </div>
