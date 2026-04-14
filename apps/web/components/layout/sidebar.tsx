@@ -36,7 +36,7 @@ import { initials, ROLE_LABELS } from "@/lib/formatters";
 type NavItem = {
   href: string;
   label: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
+  icon: ComponentType<{ size?: string | number; className?: string }>;
   role?: string;
   badgeKey?: "conversations" | "leads" | "appointmentsToday" | "pendingConfirmations";
 };
