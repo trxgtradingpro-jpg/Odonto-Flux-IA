@@ -2,12 +2,16 @@
 from app.core.config import settings
 from app.integrations.llm.base import LLMProvider
 from app.integrations.llm.mock_provider import MockLLMProvider
+from app.integrations.llm.openai_provider import OpenAILLMProvider
 
 
 class LLMProviderFactory:
     @staticmethod
     def create() -> LLMProvider:
-        if settings.llm_provider == 'mock':
+        provider = (settings.llm_provider or 'mock').strip().lower()
+        if provider in {'openai', 'openai_chat', 'openai_api'}:
+            return OpenAILLMProvider()
+        if provider == 'mock':
             return MockLLMProvider()
         return MockLLMProvider()
 

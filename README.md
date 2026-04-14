@@ -62,13 +62,22 @@ make seed
 - salve para a IA usar essas informacoes nas respostas automaticas
 
 ## WhatsApp Providers
-- O sistema suporta dois provedores em **Configuracoes > WhatsApp**:
+- O sistema suporta tres provedores em **Configuracoes > WhatsApp**:
   - `Meta Cloud API`
   - `Infobip`
+  - `Twilio`
 - Para `Infobip`, use:
   - `Sender WhatsApp` no campo de telefone
   - `Base URL` no campo conta/URL
   - `App key` no campo token
+
+## LLM Provider
+- Para usar IA real com OpenAI:
+  - `LLM_PROVIDER=openai`
+  - `LLM_API_KEY=<sua-chave>`
+  - `LLM_MODEL=gpt-4.1-mini`
+  - `LLM_TIMEOUT_SECONDS=20`
+- Com `LLM_PROVIDER=mock`, a IA usa simulacao local.
 
 ## Comandos uteis
 - `make up`: sobe servicos
