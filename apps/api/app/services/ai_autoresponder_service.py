@@ -1031,6 +1031,27 @@ def _resolve_conversation_unit(db: Session, *, conversation: Conversation) -> Un
         if unit:
             return unit
 
+    if conversation.patient_id:
+        patient = db.scalar(
+            select(Patient).where(
+                Patient.id == conversation.patient_id,
+                Patient.tenant_id == conversation.tenant_id,
+            )
+        )
+        if patient and patient.unit_id:
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == patient.unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            )
+            if unit:
+                if conversation.unit_id != unit.id:
+                    conversation.unit_id = unit.id
+                    db.add(conversation)
+                return unit
+
     return db.scalar(
         select(Unit)
         .where(
@@ -1138,6 +1159,17 @@ def _list_available_slots(
     end_h, end_m = _parse_hhmm(str(business_hours.get("end") or "18:00"))
     base_start = start_h * 60 + start_m
     base_end = end_h * 60 + end_m
+    if base_end <= base_start or (base_end - base_start) < slot_duration_minutes:
+        logger.warning(
+            "ai_autoresponder.invalid_business_hours_window",
+            tenant_id=str(tenant_id),
+            unit_id=str(unit_id),
+            configured_start=str(business_hours.get("start") or ""),
+            configured_end=str(business_hours.get("end") or ""),
+            slot_duration_minutes=slot_duration_minutes,
+        )
+        base_start = 8 * 60
+        base_end = 18 * 60
     window_end_utc = now_utc + timedelta(days=21)
     busy_rows = db.execute(
         select(Appointment).where(
@@ -1249,6 +1281,18 @@ def _list_available_slots(
                 minute_pointer += 30
 
     slots.sort(key=lambda item: item["starts_at_utc"])
+    if not slots:
+        logger.info(
+            "ai_autoresponder.no_slots_found",
+            tenant_id=str(tenant_id),
+            unit_id=str(unit_id),
+            procedure_type=procedure_type,
+            period=period,
+            requested_date=requested_date.isoformat() if requested_date else None,
+            professionals_count=len(professionals),
+            busy_rows_count=len(busy_rows),
+            base_window=f"{base_start:04d}-{base_end:04d}",
+        )
     return slots[:max_slots]
 
 

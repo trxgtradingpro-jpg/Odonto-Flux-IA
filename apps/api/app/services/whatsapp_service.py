@@ -222,7 +222,13 @@ def _get_twilio_account_by_destination(db: Session, destination: str | None) -> 
 
 
 
-def _create_patient_and_lead_from_phone(db: Session, tenant_id: UUID, raw_phone: str) -> tuple[Patient, Lead]:
+def _create_patient_and_lead_from_phone(
+    db: Session,
+    tenant_id: UUID,
+    raw_phone: str,
+    *,
+    preferred_unit_id: UUID | None = None,
+) -> tuple[Patient, Lead]:
     normalized = normalize_phone(raw_phone)
     patient = db.scalar(
         select(Patient).where(Patient.tenant_id == tenant_id, Patient.normalized_phone == normalized)
@@ -233,6 +239,7 @@ def _create_patient_and_lead_from_phone(db: Session, tenant_id: UUID, raw_phone:
             full_name=f'Contato WhatsApp {normalized[-4:]}',
             phone=raw_phone,
             normalized_phone=normalized,
+            unit_id=preferred_unit_id,
             status='lead',
             origin='whatsapp',
             lgpd_consent=False,
@@ -250,6 +257,9 @@ def _create_patient_and_lead_from_phone(db: Session, tenant_id: UUID, raw_phone:
                 is_primary=True,
             )
         )
+    elif preferred_unit_id and not patient.unit_id:
+        patient.unit_id = preferred_unit_id
+        db.add(patient)
 
     lead = Lead(
         tenant_id=tenant_id,
@@ -271,9 +281,14 @@ def _create_patient_and_lead_from_phone(db: Session, tenant_id: UUID, raw_phone:
 
 
 
-def _get_or_create_conversation(db: Session, tenant_id: UUID, patient_id: UUID) -> UUID:
-
-    conversation = db.scalar(
+def _get_or_create_conversation(
+    db: Session,
+    tenant_id: UUID,
+    patient_id: UUID,
+    *,
+    preferred_unit_id: UUID | None = None,
+) -> UUID:
+    base_stmt = (
         select(Conversation)
         .where(
             Conversation.tenant_id == tenant_id,
@@ -282,13 +297,27 @@ def _get_or_create_conversation(db: Session, tenant_id: UUID, patient_id: UUID) 
             Conversation.status.in_(['aberta', 'aguardando']),
         )
         .order_by(Conversation.last_message_at.desc())
-        .limit(1)
     )
+
+    conversation = None
+    if preferred_unit_id:
+        conversation = db.scalar(
+            base_stmt.where(Conversation.unit_id == preferred_unit_id).limit(1)
+        )
+
+    if not conversation:
+        conversation = db.scalar(base_stmt.limit(1))
+
     if conversation:
+        if preferred_unit_id and not conversation.unit_id:
+            conversation.unit_id = preferred_unit_id
+            db.add(conversation)
+            db.flush()
         return conversation.id
 
     conversation = Conversation(
         tenant_id=tenant_id,
+        unit_id=preferred_unit_id,
         patient_id=patient_id,
         channel='whatsapp',
         status='aberta',
@@ -349,9 +378,23 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
 
                 lead = None
                 if not patient:
-                    patient, lead = _create_patient_and_lead_from_phone(db, tenant_id, sender_phone)
+                    patient, lead = _create_patient_and_lead_from_phone(
+                        db,
+                        tenant_id,
+                        sender_phone,
+                        preferred_unit_id=account.unit_id,
+                    )
+                elif account.unit_id and not patient.unit_id:
+                    patient.unit_id = account.unit_id
+                    db.add(patient)
 
-                conversation_id = _get_or_create_conversation(db, tenant_id, patient.id)
+                preferred_unit_id = account.unit_id or patient.unit_id
+                conversation_id = _get_or_create_conversation(
+                    db,
+                    tenant_id,
+                    patient.id,
+                    preferred_unit_id=preferred_unit_id,
+                )
                 body = message.get('text', {}).get('body', '')
                 inbound_message = Message(
                     tenant_id=tenant_id,
@@ -553,9 +596,23 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             )
             lead = None
             if not patient:
-                patient, lead = _create_patient_and_lead_from_phone(db, tenant_id, sender_phone)
+                patient, lead = _create_patient_and_lead_from_phone(
+                    db,
+                    tenant_id,
+                    sender_phone,
+                    preferred_unit_id=account.unit_id,
+                )
+            elif account.unit_id and not patient.unit_id:
+                patient.unit_id = account.unit_id
+                db.add(patient)
 
-            conversation_id = _get_or_create_conversation(db, tenant_id, patient.id)
+            preferred_unit_id = account.unit_id or patient.unit_id
+            conversation_id = _get_or_create_conversation(
+                db,
+                tenant_id,
+                patient.id,
+                preferred_unit_id=preferred_unit_id,
+            )
             inbound_message = Message(
                 tenant_id=tenant_id,
                 conversation_id=conversation_id,
@@ -742,9 +799,23 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
         )
         lead = None
         if not patient:
-            patient, lead = _create_patient_and_lead_from_phone(db, tenant_id, sender_phone)
+            patient, lead = _create_patient_and_lead_from_phone(
+                db,
+                tenant_id,
+                sender_phone,
+                preferred_unit_id=account.unit_id,
+            )
+        elif account.unit_id and not patient.unit_id:
+            patient.unit_id = account.unit_id
+            db.add(patient)
 
-        conversation_id = _get_or_create_conversation(db, tenant_id, patient.id)
+        preferred_unit_id = account.unit_id or patient.unit_id
+        conversation_id = _get_or_create_conversation(
+            db,
+            tenant_id,
+            patient.id,
+            preferred_unit_id=preferred_unit_id,
+        )
         inbound_body = body
         if not inbound_body and num_media != '0':
             inbound_body = '[Mensagem com midia]'
