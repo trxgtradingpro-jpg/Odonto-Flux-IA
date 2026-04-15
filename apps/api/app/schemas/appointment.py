@@ -16,6 +16,7 @@ class AppointmentCreate(BaseModel):
 
 
 class AppointmentUpdate(BaseModel):
+    unit_id: UUID | None = None
     professional_id: UUID | None = None
     procedure_type: str | None = None
     starts_at: datetime | None = None

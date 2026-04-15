@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, ChevronLeft, ChevronRight, Expand, Minimize, Palette } from "lucide-react";
 import { toast } from "sonner";
 
-import { DataTable, FilterBar, PageHeader, StatCard, StatusBadge } from "@/components/premium";
+import { DataTable, FilterBar, PageHeader, RightDrawer, StatCard, StatusBadge } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
 import { api } from "@/lib/api";
 import {
@@ -34,6 +34,14 @@ type AgendaSettingItem = {
   is_secret: boolean;
 };
 
+type EnrichedAppointment = AppointmentItem & {
+  patient_name: string;
+  patient_phone: string;
+  unit_name: string;
+  professional_name: string;
+  last_conversation: string | null;
+};
+
 const COLOR_PALETTE = [
   "#9ad0ec",
   "#bfe3af",
@@ -53,6 +61,20 @@ const WEEK_DAY_OPTIONS = [
   { value: 4, label: "Qui" },
   { value: 5, label: "Sex" },
   { value: 6, label: "Sab" },
+] as const;
+
+const APPOINTMENT_STATUS_OPTIONS = [
+  { value: "agendada", label: "Agendado" },
+  { value: "confirmada", label: "Confirmado" },
+  { value: "cancelada", label: "Cancelado" },
+  { value: "falta", label: "No-show" },
+  { value: "concluida", label: "Concluido" },
+] as const;
+
+const CONFIRMATION_STATUS_OPTIONS = [
+  { value: "pendente", label: "Pendente" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "nao_confirmada", label: "Nao confirmada" },
 ] as const;
 
 function startOfWeekMonday(date: Date): Date {
@@ -92,6 +114,18 @@ function formatTimeFromMinutes(value: number): string {
   return `${`${hour}`.padStart(2, "0")}:${`${minute}`.padStart(2, "0")}`;
 }
 
+function toDateTimeLocalInput(value?: string | null): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const day = `${parsed.getDate()}`.padStart(2, "0");
+  const hour = `${parsed.getHours()}`.padStart(2, "0");
+  const minute = `${parsed.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -127,6 +161,16 @@ export default function AgendaPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [professionalColors, setProfessionalColors] = useState<Record<string, string>>({});
   const [monthCursor, setMonthCursor] = useState(() => new Date());
+  const [appointmentEditorOpen, setAppointmentEditorOpen] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<EnrichedAppointment | null>(null);
+  const [editUnitId, setEditUnitId] = useState("");
+  const [editProfessionalId, setEditProfessionalId] = useState("");
+  const [editProcedure, setEditProcedure] = useState("");
+  const [editStartsAt, setEditStartsAt] = useState("");
+  const [editEndsAt, setEditEndsAt] = useState("");
+  const [editStatus, setEditStatus] = useState("agendada");
+  const [editConfirmationStatus, setEditConfirmationStatus] = useState("pendente");
+  const [editNotes, setEditNotes] = useState("");
 
   const [patientId, setPatientId] = useState("");
   const [unitId, setUnitId] = useState("");
@@ -198,6 +242,17 @@ export default function AgendaPage() {
       api.patch(`/appointments/${appointmentId}`, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] }),
     onError: () => toast.error("Nao foi possivel atualizar a consulta."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (appointmentId: string) => api.delete(`/appointments/${appointmentId}`),
+    onSuccess: () => {
+      toast.success("Consulta excluida com sucesso.");
+      setAppointmentEditorOpen(false);
+      setSelectedAppointment(null);
+      queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
+    },
+    onError: () => toast.error("Nao foi possivel excluir a consulta."),
   });
 
   const createProfessionalMutation = useMutation({
@@ -285,6 +340,29 @@ export default function AgendaPage() {
     return () => document.removeEventListener("fullscreenchange", onFullscreen);
   }, []);
 
+  useEffect(() => {
+    if (!selectedAppointment) {
+      setEditUnitId("");
+      setEditProfessionalId("");
+      setEditProcedure("");
+      setEditStartsAt("");
+      setEditEndsAt("");
+      setEditStatus("agendada");
+      setEditConfirmationStatus("pendente");
+      setEditNotes("");
+      return;
+    }
+
+    setEditUnitId(selectedAppointment.unit_id);
+    setEditProfessionalId(selectedAppointment.professional_id ?? "");
+    setEditProcedure(selectedAppointment.procedure_type ?? "");
+    setEditStartsAt(toDateTimeLocalInput(selectedAppointment.starts_at));
+    setEditEndsAt(toDateTimeLocalInput(selectedAppointment.ends_at));
+    setEditStatus(selectedAppointment.status || "agendada");
+    setEditConfirmationStatus(selectedAppointment.confirmation_status || "pendente");
+    setEditNotes(selectedAppointment.notes ?? "");
+  }, [selectedAppointment]);
+
   if (agendaQuery.isLoading) return <LoadingState message="Carregando agenda operacional..." />;
   if (agendaQuery.isError || !agendaQuery.data) return <ErrorState message="Nao foi possivel carregar a agenda." />;
 
@@ -316,7 +394,7 @@ export default function AgendaPage() {
         ]
       : weekDays.filter((item) => selectedDayKeys.includes(item.key));
 
-  const appointments = dataset.appointments
+  const appointments: EnrichedAppointment[] = dataset.appointments
     .map((appointment) => {
       const patient = patientsById.get(appointment.patient_id);
       const unit = unitsById.get(appointment.unit_id) ?? "Unidade nao identificada";
@@ -390,6 +468,57 @@ export default function AgendaPage() {
   const boardHeight = totalMinutes * pxPerMinute;
   const slotMarks = Array.from({ length: Math.floor(totalMinutes / 30) + 1 }, (_, index) => boardStartMinutes + index * 30);
   const boardColumnMin = viewMode === "day" ? 220 : 180;
+  const professionalsForEditedUnit = dataset.professionals.filter((item) => !editUnitId || item.unit_id === editUnitId);
+
+  const handleSaveAppointmentEdits = () => {
+    if (!selectedAppointment) return;
+    if (!editUnitId || !editProcedure.trim() || !editStartsAt) {
+      toast.error("Preencha unidade, procedimento e data/hora.");
+      return;
+    }
+
+    const parsedStartsAt = new Date(editStartsAt);
+    if (Number.isNaN(parsedStartsAt.getTime())) {
+      toast.error("Data/hora de inicio invalida.");
+      return;
+    }
+
+    let parsedEndsAt: Date | null = null;
+    if (editEndsAt) {
+      parsedEndsAt = new Date(editEndsAt);
+      if (Number.isNaN(parsedEndsAt.getTime())) {
+        toast.error("Data/hora de termino invalida.");
+        return;
+      }
+      if (parsedEndsAt <= parsedStartsAt) {
+        toast.error("O termino deve ser maior que o inicio.");
+        return;
+      }
+    }
+
+    updateMutation.mutate(
+      {
+        appointmentId: selectedAppointment.id,
+        payload: {
+          unit_id: editUnitId,
+          professional_id: editProfessionalId || null,
+          procedure_type: editProcedure.trim(),
+          starts_at: parsedStartsAt.toISOString(),
+          ends_at: parsedEndsAt ? parsedEndsAt.toISOString() : null,
+          status: editStatus,
+          confirmation_status: editConfirmationStatus,
+          notes: editNotes,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Consulta atualizada com sucesso.");
+          setAppointmentEditorOpen(false);
+          setSelectedAppointment(null);
+        },
+      },
+    );
+  };
 
   return (
     <div className="min-w-0 space-y-4">
@@ -716,13 +845,10 @@ export default function AgendaPage() {
                                 backgroundColor: hexToRgba(color, 0.92),
                                 borderColor: hexToRgba(color, 1),
                               }}
-                              onClick={() =>
-                                toast.info(
-                                  `${appointment.patient_name} | ${appointment.procedure_type} | ${formatDateTimeBR(
-                                    appointment.starts_at,
-                                  )}`,
-                                )
-                              }
+                              onClick={() => {
+                                setSelectedAppointment(appointment);
+                                setAppointmentEditorOpen(true);
+                              }}
                             >
                               <p className="text-xs font-semibold text-stone-800">{appointment.patient_name}</p>
                               <p className="text-[11px] text-stone-700">{appointment.procedure_type}</p>
@@ -742,6 +868,146 @@ export default function AgendaPage() {
           </CardContent>
         </Card>
       </div>
+
+      <RightDrawer
+        open={appointmentEditorOpen}
+        onOpenChange={(open) => {
+          setAppointmentEditorOpen(open);
+          if (!open) setSelectedAppointment(null);
+        }}
+        title={selectedAppointment ? `Consulta de ${selectedAppointment.patient_name}` : "Editar consulta"}
+        description="Ao clicar no bloco da grade voce pode visualizar e ajustar os dados manualmente."
+      >
+        {selectedAppointment ? (
+          <div className="space-y-3">
+            <Card className="border-stone-200">
+              <CardContent className="space-y-3 p-4">
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
+                  <p className="font-semibold text-stone-800">{selectedAppointment.patient_name}</p>
+                  <p className="text-xs text-stone-500">{formatPhoneBR(selectedAppointment.patient_phone)}</p>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  <select
+                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
+                    value={editUnitId}
+                    onChange={(event) => {
+                      const nextUnitId = event.target.value;
+                      setEditUnitId(nextUnitId);
+                      setEditProfessionalId((current) => {
+                        if (!current) return "";
+                        const allowed = dataset.professionals.some(
+                          (professional) => professional.id === current && professional.unit_id === nextUnitId,
+                        );
+                        return allowed ? current : "";
+                      });
+                    }}
+                  >
+                    <option value="">Unidade</option>
+                    {dataset.units.map((unit) => (
+                      <option key={unit.id} value={unit.id}>
+                        {unit.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
+                    value={editProfessionalId}
+                    onChange={(event) => setEditProfessionalId(event.target.value)}
+                  >
+                    <option value="">Profissional (opcional)</option>
+                    {professionalsForEditedUnit.map((professional) => (
+                      <option key={professional.id} value={professional.id}>
+                        {professional.full_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <Input
+                  placeholder="Procedimento"
+                  value={editProcedure}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setEditProcedure(event.target.value)}
+                />
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  <Input
+                    type="datetime-local"
+                    value={editStartsAt}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditStartsAt(event.target.value)}
+                  />
+                  <Input
+                    type="datetime-local"
+                    value={editEndsAt}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditEndsAt(event.target.value)}
+                  />
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  <select
+                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
+                    value={editStatus}
+                    onChange={(event) => setEditStatus(event.target.value)}
+                  >
+                    {APPOINTMENT_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
+                    value={editConfirmationStatus}
+                    onChange={(event) => setEditConfirmationStatus(event.target.value)}
+                  >
+                    {CONFIRMATION_STATUS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <textarea
+                  className="min-h-[84px] w-full rounded-md border border-stone-300 bg-white p-2 text-sm"
+                  placeholder="Observacoes da consulta"
+                  value={editNotes}
+                  onChange={(event) => setEditNotes(event.target.value)}
+                />
+
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      if (!selectedAppointment) return;
+                      if (!window.confirm("Deseja excluir esta consulta? Esta acao nao pode ser desfeita.")) return;
+                      deleteMutation.mutate(selectedAppointment.id);
+                    }}
+                    disabled={deleteMutation.isPending || updateMutation.isPending}
+                  >
+                    {deleteMutation.isPending ? "Excluindo..." : "Excluir consulta"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setAppointmentEditorOpen(false);
+                      setSelectedAppointment(null);
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button onClick={handleSaveAppointmentEdits} disabled={updateMutation.isPending || deleteMutation.isPending}>
+                    {updateMutation.isPending ? "Salvando..." : "Salvar alteracoes"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <p className="text-sm text-stone-500">Clique em um bloco da grade para editar os dados manualmente.</p>
+        )}
+      </RightDrawer>
 
       <Card className="border-stone-200">
         <CardHeader>

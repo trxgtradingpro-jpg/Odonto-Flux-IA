@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -123,13 +123,25 @@ def update_appointment(
     if not appointment:
         raise ApiError(status_code=404, code='APPOINTMENT_NOT_FOUND', message='Consulta nao encontrada')
 
-    previous_status = appointment.status
+    previous_status = str(appointment.status)
     updates = payload.model_dump(exclude_unset=True)
-    professional_id = updates.get("professional_id")
-    if professional_id:
+
+    if "unit_id" in updates and updates["unit_id"] is None:
+        raise ApiError(
+            status_code=422,
+            code="UNIT_ID_REQUIRED",
+            message="Unidade nao pode ser vazia",
+        )
+
+    target_unit_id = updates.get("unit_id", appointment.unit_id)
+    target_professional_id = (
+        updates["professional_id"] if "professional_id" in updates else appointment.professional_id
+    )
+
+    if target_professional_id:
         professional = db.scalar(
             select(Professional).where(
-                Professional.id == professional_id,
+                Professional.id == target_professional_id,
                 Professional.tenant_id == tenant_id,
                 Professional.is_active.is_(True),
             )
@@ -137,7 +149,6 @@ def update_appointment(
         if not professional:
             raise ApiError(status_code=404, code="PROFESSIONAL_NOT_FOUND", message="Profissional nao encontrado")
 
-        target_unit_id = updates.get("unit_id") or appointment.unit_id
         if professional.unit_id and professional.unit_id != target_unit_id:
             raise ApiError(
                 status_code=409,
@@ -193,3 +204,46 @@ def update_appointment(
     )
 
     return AppointmentOutput.model_validate(appointment, from_attributes=True)
+
+
+@router.delete('/{appointment_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_appointment(
+    appointment_id: str,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    appointment = db.scalar(
+        select(Appointment).where(Appointment.id == appointment_id, Appointment.tenant_id == tenant_id)
+    )
+    if not appointment:
+        raise ApiError(status_code=404, code='APPOINTMENT_NOT_FOUND', message='Consulta nao encontrada')
+
+    patient_id = appointment.patient_id
+    previous_status = appointment.status
+
+    db.delete(appointment)
+    db.commit()
+
+    emit_event(
+        db,
+        tenant_id=tenant_id,
+        event_key='consulta_excluida',
+        payload={
+            'appointment_id': appointment_id,
+            'patient_id': str(patient_id),
+            'previous_status': previous_status,
+        },
+    )
+
+    record_audit(
+        db,
+        action='appointment.delete',
+        entity_type='appointment',
+        entity_id=appointment_id,
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={'previous_status': previous_status},
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

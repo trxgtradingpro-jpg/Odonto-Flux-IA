@@ -246,6 +246,39 @@ BOOKING_WIZARD_DEFAULT_SERVICES = (
     "Reabilitação estética",
 )
 
+WELCOME_MENU_OPTIONS: tuple[dict[str, str], ...] = (
+    {
+        "id": "menu_schedule",
+        "title": "Agendamentos",
+        "description": "Marcar, reagendar ou horários",
+    },
+    {
+        "id": "menu_services",
+        "title": "Serviços",
+        "description": "Ver procedimentos e valores",
+    },
+    {
+        "id": "menu_support",
+        "title": "Suporte",
+        "description": "Ajuda com atendimento",
+    },
+    {
+        "id": "menu_suggestion",
+        "title": "Sugestões",
+        "description": "Enviar melhoria para a clínica",
+    },
+    {
+        "id": "menu_complaint",
+        "title": "Reclamações",
+        "description": "Registrar insatisfação",
+    },
+    {
+        "id": "menu_human",
+        "title": "Falar com atendente",
+        "description": "Encaminhar para humano",
+    },
+)
+
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
     "disabled_conversation": "Modo IA desativado para a conversa.",
@@ -255,6 +288,7 @@ REASON_LABELS = {
     "conversation_closed": "Conversa finalizada.",
     "empty_inbound": "Mensagem de entrada sem conteúdo processável.",
     "patient_requested_human": "Paciente solicitou atendimento humano.",
+    "response_sent_handoff": "Resposta enviada e conversa encaminhada para humano.",
     "urgency_detected": "Risco/urgência detectado, encaminhamento humano obrigatório.",
     "clinical_request_blocked": "Solicitação clínica bloqueada por segurança.",
     "low_confidence": "Baixa confiança da IA para responder com segurança.",
@@ -1083,18 +1117,62 @@ def _is_greeting_only_message(text: str) -> bool:
     return len(cleaned.split()) <= 6
 
 
-def _build_conversation_start_welcome_response() -> dict[str, Any]:
+def _should_send_conversation_start_menu(text: str) -> bool:
+    normalized = _normalize_for_match(text or "")
+    if not normalized:
+        return False
+
+    has_direct_scheduling = any(
+        keyword in normalized
+        for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS)
+    )
+    if has_direct_scheduling:
+        return False
+
+    if _wizard_has_explicit_service_inbound(text):
+        return False
+    return True
+
+
+def _build_conversation_start_welcome_response(*, intro_text: str | None = None) -> dict[str, Any]:
+    rows: list[dict[str, str]] = []
+    for option in WELCOME_MENU_OPTIONS:
+        row = {
+            "id": option["id"],
+            "title": str(option["title"])[:24],
+        }
+        description = str(option.get("description") or "").strip()
+        if description:
+            row["description"] = description[:72]
+        rows.append(row)
+
     return {
         "mode": "welcome_message_start",
         "response_text": (
-            "Oi! Que bom te ver por aqui.\n"
-            "Sou a assistente virtual da Clínica Sorriso Sul e posso te ajudar com serviços, valores e agendamentos.\n"
-            "Para começar, você prefere:\n"
-            "1) Ver serviços\n"
-            "2) Ver horários\n"
-            "3) Falar com atendente"
+            intro_text
+            or (
+                "Oi! Que bom te ver por aqui.\n"
+                "Sou a assistente virtual da Clínica Sorriso Sul.\n"
+                "Para começar, escolha uma opção no menu abaixo:"
+            )
         ),
-        "metadata": {"reason": "welcome_message_start"},
+        "metadata": {
+            "reason": "welcome_message_start",
+            "wizard_step": "start_menu",
+            "rows": rows,
+            "button_title": "Opções",
+            "section_title": "Menu inicial",
+            "header_text": "Atendimento",
+            "body_text": (
+                intro_text
+                or (
+                    "Oi! Que bom te ver por aqui.\n"
+                    "Sou a assistente virtual da Clínica Sorriso Sul.\n"
+                    "Para começar, escolha uma opção:"
+                )
+            ),
+            "footer_text": "Toque em uma opção para continuar.",
+        },
     }
 
 
@@ -1198,7 +1276,7 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
     mode = str(scheduling_response.get("mode") or "").strip()
     metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
 
-    if mode.startswith("booking_wizard_"):
+    if mode.startswith("booking_wizard_") or mode == "welcome_message_start":
         buttons_raw = metadata.get("buttons")
         if isinstance(buttons_raw, list):
             buttons: list[dict[str, str]] = []
@@ -1329,7 +1407,7 @@ def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Mes
     message = latest_messages[0]
     payload = message.payload if isinstance(message.payload, dict) else {}
     mode = str(payload.get("mode") or "").strip()
-    if mode.startswith("booking_wizard_"):
+    if mode.startswith("booking_wizard_") or mode == "welcome_message_start":
         return message
     return None
 
@@ -1915,6 +1993,60 @@ def _wizard_select_time_choice(token: str, slot_choices: list[dict[str, Any]]) -
     return None
 
 
+def _wizard_select_welcome_menu_option(token: str) -> str | None:
+    raw = str(token or "").strip()
+    if not raw:
+        return None
+
+    normalized = _normalize_for_match(raw)
+    direct_ids = {option["id"] for option in WELCOME_MENU_OPTIONS}
+    if normalized in direct_ids:
+        return normalized
+
+    index = _extract_option_index_choice(raw)
+    if index is not None and 1 <= index <= len(WELCOME_MENU_OPTIONS):
+        return WELCOME_MENU_OPTIONS[index - 1]["id"]
+
+    keyword_map: dict[str, tuple[str, ...]] = {
+        "menu_schedule": ("agendamento", "agendamentos", "agenda", "horario", "horarios"),
+        "menu_services": ("servico", "servicos", "procedimento", "procedimentos", "valores", "valor"),
+        "menu_support": ("suporte", "ajuda"),
+        "menu_suggestion": ("sugestao", "sugestoes", "melhoria"),
+        "menu_complaint": ("reclamacao", "reclamacoes", "insatisfacao"),
+        "menu_human": ("falar com atendente", "atendente", "humano", "pessoa"),
+    }
+    for option_id, keywords in keyword_map.items():
+        if any(keyword in normalized for keyword in keywords):
+            return option_id
+    return None
+
+
+def _build_welcome_menu_followup_buttons_response(
+    *,
+    mode: str,
+    header_text: str,
+    body_text: str,
+    reason: str,
+) -> dict[str, Any]:
+    buttons = [
+        {"id": "menu_schedule", "title": "Agendamentos"},
+        {"id": "menu_services", "title": "Serviços"},
+        {"id": "menu_human", "title": "Falar com atendente"},
+    ]
+    return {
+        "mode": mode,
+        "response_text": body_text,
+        "metadata": {
+            "reason": reason,
+            "wizard_step": "start_menu_followup",
+            "header_text": header_text,
+            "body_text": body_text,
+            "footer_text": "Você pode tocar em um botão ou escrever sua mensagem.",
+            "buttons": buttons,
+        },
+    }
+
+
 def _try_booking_wizard_response(
     db: Session,
     *,
@@ -1937,6 +2069,7 @@ def _try_booking_wizard_response(
     has_scheduling_keywords = any(keyword in normalized_inbound for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS))
     force_wizard = any(keyword in normalized_inbound for keyword in BOOKING_WIZARD_FORCE_KEYWORDS)
     has_confirmation_choice = _wizard_parse_confirmation_choice(selection_token) is not None
+    welcome_menu_choice = _wizard_select_welcome_menu_option(selection_token)
     selection_like = (
         _extract_option_index_choice(inbound_text) is not None
         or _extract_time_choice(inbound_text) is not None
@@ -1952,6 +2085,7 @@ def _try_booking_wizard_response(
             or _is_booking_confirmation_message(inbound_text)
             or has_confirmation_choice
             or force_wizard
+            or welcome_menu_choice is not None
         ):
             return None
 
@@ -1976,6 +2110,92 @@ def _try_booking_wizard_response(
         carried_period_raw = str(latest_scheduling.get("period") or "").strip().lower()
         carried_period = period or (carried_period_raw if carried_period_raw in {"morning", "afternoon", "evening"} else None)
         carried_requested_date = requested_date or _parse_iso_date(latest_scheduling.get("requested_date"))
+
+        if latest_mode in {
+            "welcome_message_start",
+            "booking_wizard_support_followup",
+            "booking_wizard_suggestion_followup",
+            "booking_wizard_complaint_followup",
+        }:
+            selected_option = welcome_menu_choice
+            if not selected_option:
+                if has_scheduling_keywords or force_wizard:
+                    return _wizard_build_service_step_response(
+                        db,
+                        conversation=conversation,
+                        intro_text="Perfeito. Escolha o serviço para continuar:",
+                        period=carried_period,
+                        requested_date=carried_requested_date,
+                    )
+                return _build_conversation_start_welcome_response(
+                    intro_text="Escolha uma opção no menu para continuar."
+                )
+
+            if selected_option == "menu_schedule":
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos agendar com botões. Escolha o serviço:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+
+            if selected_option == "menu_services":
+                preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context)
+                if preferred_service == "Avaliação odontológica":
+                    preferred_service = None
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Claro. Escolha o serviço para ver detalhes e horários:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                    preferred_service=preferred_service,
+                )
+
+            if selected_option == "menu_support":
+                return _build_welcome_menu_followup_buttons_response(
+                    mode="booking_wizard_support_followup",
+                    header_text="Suporte",
+                    body_text=(
+                        "Perfeito, vou te ajudar com suporte.\n"
+                        "Descreva seu problema em uma mensagem e já encaminho para o time certo."
+                    ),
+                    reason="support_selected",
+                )
+
+            if selected_option == "menu_suggestion":
+                return _build_welcome_menu_followup_buttons_response(
+                    mode="booking_wizard_suggestion_followup",
+                    header_text="Sugestões",
+                    body_text=(
+                        "Ótimo! Quero ouvir sua sugestão.\n"
+                        "Pode enviar os detalhes agora e nossa equipe vai analisar."
+                    ),
+                    reason="suggestion_selected",
+                )
+
+            if selected_option == "menu_complaint":
+                return _build_welcome_menu_followup_buttons_response(
+                    mode="booking_wizard_complaint_followup",
+                    header_text="Reclamações",
+                    body_text=(
+                        "Sinto muito por isso. Pode me contar o que aconteceu?\n"
+                        "Vou registrar e priorizar seu atendimento."
+                    ),
+                    reason="complaint_selected",
+                )
+
+            if selected_option == "menu_human":
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
 
         if latest_mode == "booking_wizard_service_select":
             services = latest_scheduling.get("services") if isinstance(latest_scheduling.get("services"), list) else []
@@ -3713,6 +3933,9 @@ def process_inbound_message(
         conversation=conversation,
         inbound_text=inbound_text,
     )
+    inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
+    interactive_reply = inbound_payload.get("interactive_reply") if isinstance(inbound_payload.get("interactive_reply"), dict) else {}
+    interactive_reply_id = str(interactive_reply.get("id") or "").strip().lower()
 
     close_request = _lookup_pattern(inbound_text, CLOSE_CONVERSATION_PATTERNS)
     if close_request:
@@ -3726,7 +3949,7 @@ def process_inbound_message(
         )
 
     human_request = _lookup_pattern(inbound_text, HUMAN_REQUEST_PATTERNS)
-    if human_request:
+    if human_request and interactive_reply_id != "menu_human":
         return finish_without_reply(
             final_decision=DECISION_HANDOFF,
             reason="patient_requested_human",
@@ -3792,7 +4015,7 @@ def process_inbound_message(
             )
 
     scheduling_response = None
-    if _is_conversation_start_for_welcome(db, conversation=conversation) and _is_greeting_only_message(inbound_text):
+    if _is_conversation_start_for_welcome(db, conversation=conversation) and _should_send_conversation_start_menu(inbound_text):
         scheduling_response = _build_conversation_start_welcome_response()
     if not scheduling_response:
         scheduling_response = _build_scheduling_operation_response(
@@ -3867,7 +4090,18 @@ def process_inbound_message(
             outbound_message.payload = outbound_payload
             db.add(outbound_message)
 
+            scheduling_metadata = (
+                scheduling_response.get("metadata")
+                if isinstance(scheduling_response.get("metadata"), dict)
+                else {}
+            )
             scheduling_mode = str(scheduling_response.get("mode") or "").strip()
+            handoff_required = bool(scheduling_metadata.get("handoff_required"))
+            handoff_reason = str(
+                scheduling_metadata.get("handoff_reason")
+                or scheduling_metadata.get("reason")
+                or "patient_requested_human"
+            )
             post_menu_outbox = None
             post_menu_message = None
             if scheduling_mode in {"appointment_created", "appointment_already_created"} and conversation.channel == "whatsapp":
@@ -3915,25 +4149,40 @@ def process_inbound_message(
                 # Após concluir agendamento, encerra automaticamente a conversa atual.
                 conversation.status = "finalizada"
 
+            if handoff_required:
+                _notify_handoff(
+                    db,
+                    conversation=conversation,
+                    inbound_message=inbound_message,
+                    reason=handoff_reason,
+                    config=config,
+                )
+
+            final_decision = DECISION_HANDOFF if handoff_required else DECISION_RESPONDED
+            decision_reason = "response_sent_handoff" if handoff_required else "response_sent"
+
             decision = _create_decision(
                 db,
                 tenant_id=tenant_id,
                 conversation=conversation,
                 inbound_message=inbound_message,
                 dedupe_key=dedupe_key,
-                final_decision=DECISION_RESPONDED,
-                decision_reason="response_sent",
+                final_decision=final_decision,
+                decision_reason=decision_reason,
                 generated_response=generated_response,
                 confidence=None,
                 llm_payload=None,
+                handoff_required=handoff_required,
                 metadata=_build_metadata(
                     config=config,
                     extra={
                         "outbox_id": str(outbox.id),
                         "outbound_message_id": str(outbound_message.id),
                         "knowledge_context_present": False,
-                        "scheduling": scheduling_response.get("metadata") or {},
+                        "scheduling": scheduling_metadata,
                         "scheduling_mode": scheduling_response.get("mode"),
+                        "handoff_required": handoff_required,
+                        "handoff_reason": handoff_reason if handoff_required else None,
                         "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
                         "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
                     },
@@ -3941,10 +4190,10 @@ def process_inbound_message(
                 outbound_message_id=outbound_message.id,
             )
 
-            conversation.ai_autoresponder_last_decision = DECISION_RESPONDED
-            conversation.ai_autoresponder_last_reason = "response_sent"
+            conversation.ai_autoresponder_last_decision = final_decision
+            conversation.ai_autoresponder_last_reason = decision_reason
             conversation.ai_autoresponder_last_at = datetime.now(UTC)
-            conversation.ai_autoresponder_consecutive_count = consecutive_count + 1
+            conversation.ai_autoresponder_consecutive_count = 0 if handoff_required else consecutive_count + 1
             conversation.last_message_at = datetime.now(UTC)
             db.add(conversation)
             db.commit()
@@ -3983,14 +4232,16 @@ def process_inbound_message(
                         )
 
             payload: dict[str, Any] = {
-                "status": DECISION_RESPONDED,
+                "status": final_decision,
                 "decision_id": str(decision.id),
                 "outbox_id": str(outbox.id),
                 "outbound_message_id": str(outbound_message.id),
-                "reason": "response_sent",
-                "reason_label": _reason_label("response_sent"),
+                "reason": decision_reason,
+                "reason_label": _reason_label(decision_reason),
                 "scheduling_mode": scheduling_response.get("mode"),
-                "scheduling": scheduling_response.get("metadata") or {},
+                "scheduling": scheduling_metadata,
+                "handoff_required": handoff_required,
+                "handoff_reason": handoff_reason if handoff_required else None,
                 "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
                 "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
             }

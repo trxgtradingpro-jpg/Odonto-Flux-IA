@@ -1243,10 +1243,19 @@ def test_greeting_boa_noite_does_not_trigger_period_scheduling(seeded_db, db_ses
     assert result["status"] == "responded"
     assert result.get("scheduling_mode") == "welcome_message_start"
     assert outbound is not None
+    assert outbound.message_type == "interactive_list"
     normalized = (outbound.body or "").lower()
     assert "que bom te ver por aqui" in normalized
     assert "encontrei estes horários" not in normalized
     assert "encontrei estes horarios" not in normalized
+    rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    row_ids = {str(item.get("id") or "") for item in rows}
+    assert "menu_schedule" in row_ids
+    assert "menu_services" in row_ids
+    assert "menu_support" in row_ids
+    assert "menu_suggestion" in row_ids
+    assert "menu_complaint" in row_ids
+    assert "menu_human" in row_ids
 
 
 def test_greeting_with_intent_does_not_use_welcome_start_message(seeded_db, db_session):
@@ -1300,12 +1309,45 @@ def test_service_catalog_request_opens_service_selection_wizard(seeded_db, db_se
         .order_by(Message.created_at.desc())
     )
     assert result["status"] == "responded"
-    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+    assert result.get("scheduling_mode") == "welcome_message_start"
     assert outbound is not None
     assert outbound.message_type == "interactive_list"
     rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
     assert rows
-    assert str(rows[0].get("id") or "").startswith("svc_")
+    assert any(str(item.get("id") or "") == "menu_services" for item in rows)
+
+    second_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Serviços",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": "menu_services", "title": "Serviços"}},
+    )
+    second_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=second_inbound.id,
+    )
+    assert second_result["status"] == "responded"
+    assert second_result.get("scheduling_mode") == "booking_wizard_service_select"
+
+    wizard_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert wizard_outbound is not None
+    assert wizard_outbound.message_type == "interactive_list"
+    wizard_rows = (((wizard_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert wizard_rows
+    assert str(wizard_rows[0].get("id") or "").startswith("svc_")
 
 
 def test_close_conversation_request_sets_conversation_closed(seeded_db, db_session):
