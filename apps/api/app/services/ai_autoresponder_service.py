@@ -898,8 +898,17 @@ def _is_explicit_availability_request(text: str) -> bool:
 
 def _is_followup_availability_request(*, inbound_text: str, context: str) -> bool:
     normalized_inbound = _normalize_for_match(inbound_text)
-    if any(keyword in normalized_inbound for keyword in FOLLOWUP_AVAILABILITY_KEYWORDS):
-        return True
+    has_followup_keyword = any(keyword in normalized_inbound for keyword in FOLLOWUP_AVAILABILITY_KEYWORDS)
+    if has_followup_keyword:
+        normalized_context = _normalize_for_match(context)
+        context_has_recent_slots = (
+            "encontrei estes horarios" in normalized_context
+            or "numero da opcao" in normalized_context
+            or "número da opção" in context.lower()
+            or ("1)" in context and "horario" in normalized_context)
+        )
+        if context_has_recent_slots:
+            return True
     if not _is_scheduling_context(inbound_text=inbound_text, context=context):
         return False
     # Respostas curtas de confirmação após oferta de agenda.
@@ -922,11 +931,16 @@ def _extract_option_index_choice(text: str) -> int | None:
 
 def _extract_time_choice(text: str) -> str | None:
     match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text or "")
-    if not match:
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        return f"{hour:02d}:{minute:02d}"
+
+    loose_hour_match = re.search(r"\b(?:as|às)\s*([01]?\d|2[0-3])\b", _normalize_for_match(text or ""))
+    if not loose_hour_match:
         return None
-    hour = int(match.group(1))
-    minute = int(match.group(2))
-    return f"{hour:02d}:{minute:02d}"
+    hour = int(loose_hour_match.group(1))
+    return f"{hour:02d}:00"
 
 
 def _extract_time_mentions(text: str) -> list[str]:
@@ -1396,8 +1410,13 @@ def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     return "Avaliação odontológica"
 
 
-def _latest_ai_outbound_message(db: Session, *, conversation: Conversation) -> Message | None:
-    return db.scalar(
+def _recent_ai_outbound_messages(
+    db: Session,
+    *,
+    conversation: Conversation,
+    limit: int = 20,
+) -> list[Message]:
+    return db.execute(
         select(Message)
         .where(
             Message.tenant_id == conversation.tenant_id,
@@ -1406,8 +1425,23 @@ def _latest_ai_outbound_message(db: Session, *, conversation: Conversation) -> M
             Message.sender_type == "ai",
         )
         .order_by(Message.created_at.desc())
-        .limit(1)
-    )
+        .limit(limit)
+    ).scalars().all()
+
+
+def _latest_ai_outbound_message(db: Session, *, conversation: Conversation) -> Message | None:
+    rows = _recent_ai_outbound_messages(db, conversation=conversation, limit=1)
+    return rows[0] if rows else None
+
+
+def _latest_ai_slots_message(db: Session, *, conversation: Conversation) -> Message | None:
+    offer_modes = {"slots_suggested", "no_slots_for_period_with_alternatives"}
+    for message in _recent_ai_outbound_messages(db, conversation=conversation, limit=30):
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        mode = str(payload.get("mode") or "").strip()
+        if mode in offer_modes:
+            return message
+    return None
 
 
 def _appointment_response_from_selected_slot(
@@ -1570,21 +1604,41 @@ def _try_followup_slot_confirmation(
 
     latest_ai_message = _latest_ai_outbound_message(db, conversation=conversation)
     latest_text = str(latest_ai_message.body or "") if latest_ai_message else ""
-    normalized_latest = _normalize_for_match(latest_text)
-    if not latest_text:
-        return None
-    if "horario" not in normalized_latest and "hora" not in normalized_latest and "1)" not in latest_text:
+
+    slots_anchor_message = _latest_ai_slots_message(db, conversation=conversation)
+    anchor_text = str(slots_anchor_message.body or "") if slots_anchor_message else ""
+    if not anchor_text:
         return None
 
-    selected_date = requested_date or _extract_requested_date_from_text(text=latest_text, timezone=operation_timezone)
-    selected_period = period or _detect_period_preference(latest_text)
+    anchor_payload = slots_anchor_message.payload if slots_anchor_message and isinstance(slots_anchor_message.payload, dict) else {}
+    anchor_scheduling = anchor_payload.get("scheduling") if isinstance(anchor_payload.get("scheduling"), dict) else {}
+    anchor_procedure_type = str(anchor_scheduling.get("procedure_type") or "").strip() or procedure_type
+
+    anchor_requested_date: date | None = None
+    anchor_requested_date_raw = anchor_scheduling.get("requested_date")
+    if isinstance(anchor_requested_date_raw, str) and anchor_requested_date_raw.strip():
+        try:
+            anchor_requested_date = date.fromisoformat(anchor_requested_date_raw.strip()[:10])
+        except ValueError:
+            anchor_requested_date = None
+
+    anchor_period_raw = str(anchor_scheduling.get("period") or "").strip().lower()
+    anchor_period = anchor_period_raw if anchor_period_raw in {"morning", "afternoon", "evening"} else None
+
+    selected_date = (
+        requested_date
+        or anchor_requested_date
+        or _extract_requested_date_from_text(text=anchor_text, timezone=operation_timezone)
+        or _extract_requested_date_from_text(text=latest_text, timezone=operation_timezone)
+    )
+    selected_period = period or anchor_period or _detect_period_preference(anchor_text) or _detect_period_preference(latest_text)
     slot_limit = 12 if selected_date else 6
     slots = _list_available_slots(
         db,
         tenant_id=conversation.tenant_id,
         unit_id=unit.id,
         config=config,
-        procedure_type=procedure_type,
+        procedure_type=anchor_procedure_type,
         period=selected_period,
         requested_date=selected_date,
         max_slots=slot_limit,
@@ -1597,12 +1651,12 @@ def _try_followup_slot_confirmation(
                 f"No momento não encontrei horários livres na agenda{date_hint} para este serviço. "
                 "Posso te avisar assim que abrir uma vaga ou te direcionar para atendimento humano."
             ),
-            "metadata": {
-                "reason": "no_slots_general",
-                "requested_date": selected_date.isoformat() if selected_date else None,
-                "procedure_type": procedure_type,
-            },
-        }
+                "metadata": {
+                    "reason": "no_slots_general",
+                    "requested_date": selected_date.isoformat() if selected_date else None,
+                    "procedure_type": anchor_procedure_type,
+                },
+            }
 
     chosen_slot: dict[str, Any] | None = None
     if option_index is not None:
@@ -1613,7 +1667,7 @@ def _try_followup_slot_confirmation(
                 "mode": "invalid_slot_option",
                 "response_text": (
                     f"Não encontrei a opção {option_index} nesta agenda.\n"
-                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=procedure_type)}"
+                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=anchor_procedure_type)}"
                 ),
                 "metadata": {
                     "reason": "invalid_slot_option",
@@ -1636,7 +1690,7 @@ def _try_followup_slot_confirmation(
                 "mode": "requested_time_not_available",
                 "response_text": (
                     f"No momento não encontrei vaga às {explicit_time}.\n"
-                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=procedure_type)}"
+                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=anchor_procedure_type)}"
                 ),
                 "metadata": {
                     "reason": "requested_time_not_available",
@@ -1646,7 +1700,7 @@ def _try_followup_slot_confirmation(
             }
 
     if not chosen_slot and confirmation_only:
-        recent_times = _extract_time_mentions(latest_text)
+        recent_times = _extract_time_mentions(anchor_text) or _extract_time_mentions(latest_text)
         if len(recent_times) == 1:
             chosen_slot = next(
                 (
@@ -1679,7 +1733,7 @@ def _try_followup_slot_confirmation(
         conversation=conversation,
         unit=unit,
         selected_slot=chosen_slot,
-        procedure_type=procedure_type,
+        procedure_type=anchor_procedure_type,
         period=selected_period,
         requested_date=selected_date,
     )
@@ -1778,6 +1832,7 @@ def _build_scheduling_operation_response(
                         "period": period,
                         "reason": "no_slots_for_period",
                         "requested_date": requested_date.isoformat() if requested_date else None,
+                        "procedure_type": procedure_type,
                         "alternative_slots": [slot["label"] for slot in fallback_slots],
                     },
                 }
@@ -2338,6 +2393,7 @@ def process_inbound_message(
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
                     "reply_to_message_id": str(inbound_message.id),
+                    "scheduling": scheduling_response.get("metadata") or {},
                 },
                 status=MessageStatus.QUEUED.value,
             )
