@@ -502,6 +502,90 @@ def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_s
     assert "|" not in (outbound.body or "")
 
 
+def test_scheduling_uses_inbound_procedure_over_context(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    future_date = (datetime.now(UTC) + timedelta(days=2)).strftime("%d/%m")
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text=f"Quais horarios voce tem para limpeza no dia {future_date}?",
+    )
+
+    prior_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Temos vagas para instalacao de lentes ao longo da semana.",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    db_session.add(prior_message)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "slots_suggested"
+    assert outbound is not None
+    normalized_outbound = (outbound.body or "").lower()
+    assert "limpeza" in normalized_outbound
+    assert "lente" not in normalized_outbound
+
+
+def test_scheduling_with_requested_date_lists_more_than_three_slots(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    future_date = (datetime.now(UTC) + timedelta(days=2)).strftime("%d/%m")
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text=f"Quais horarios voces tem para limpeza no dia {future_date}?",
+    )
+
+    db_session.execute(delete(Appointment).where(Appointment.tenant_id == tenant_id))
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "slots_suggested"
+    assert outbound is not None
+    assert "4)" in (outbound.body or "")
+
+
 def test_scheduling_falls_back_to_30_min_slots_when_no_60_min_window(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     config = _base_ai_config()

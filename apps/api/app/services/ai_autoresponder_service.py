@@ -1319,13 +1319,32 @@ def _list_available_slots(
 
 
 def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
-    normalized = _normalize_for_match(f"{inbound_text}\n{context}")
-    if "lente" in normalized:
-        return "Instalação de lentes"
-    if "ortodont" in normalized:
-        return "Avaliação ortodôntica"
-    if "limpeza" in normalized:
+    normalized_inbound = _normalize_for_match(inbound_text)
+    normalized_context = _normalize_for_match(context)
+
+    # Prioriza sempre o que o paciente pediu na mensagem atual.
+    if "limpeza" in normalized_inbound or "profilax" in normalized_inbound:
         return "Limpeza odontológica"
+    if "clareamento" in normalized_inbound:
+        return "Clareamento dental"
+    if "lente" in normalized_inbound:
+        return "Instalação de lentes"
+    if "implante" in normalized_inbound:
+        return "Implante dentário"
+    if "ortodont" in normalized_inbound:
+        return "Avaliação ortodôntica"
+
+    # Se não houver menção explícita na mensagem atual, usa o contexto.
+    if "limpeza" in normalized_context or "profilax" in normalized_context:
+        return "Limpeza odontológica"
+    if "clareamento" in normalized_context:
+        return "Clareamento dental"
+    if "lente" in normalized_context:
+        return "Instalação de lentes"
+    if "implante" in normalized_context:
+        return "Implante dentário"
+    if "ortodont" in normalized_context:
+        return "Avaliação ortodôntica"
     return "Avaliação odontológica"
 
 
@@ -1362,6 +1381,7 @@ def _build_scheduling_operation_response(
     operation_timezone = _resolve_operation_timezone(config)
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
     requested_date_label = requested_date.strftime("%d/%m") if requested_date else None
+    slot_limit = 12 if requested_date else 3
 
     if period:
         slots = _list_available_slots(
@@ -1388,7 +1408,7 @@ def _build_scheduling_operation_response(
                 procedure_type=procedure_type,
                 period=None,
                 requested_date=requested_date,
-                max_slots=3,
+                max_slots=slot_limit,
             )
             if fallback_slots:
                 date_hint = f" para {requested_date_label}" if requested_date_label else ""
@@ -1522,7 +1542,7 @@ def _build_scheduling_operation_response(
         procedure_type=procedure_type,
         period=None,
         requested_date=requested_date,
-        max_slots=3,
+        max_slots=slot_limit,
     )
     if not slots:
         date_hint = f" para {requested_date_label}" if requested_date_label else ""
