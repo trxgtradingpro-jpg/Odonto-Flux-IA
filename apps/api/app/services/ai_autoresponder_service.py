@@ -175,6 +175,16 @@ FOLLOWUP_AVAILABILITY_KEYWORDS = (
     "disponiveis",
     "disponíveis",
 )
+DAY_AVAILABILITY_KEYWORDS = (
+    "quais dias",
+    "que dias",
+    "dias disponiveis",
+    "dias disponíveis",
+    "datas disponiveis",
+    "datas disponíveis",
+    "quais datas",
+    "que datas",
+)
 BOOKING_CONFIRMATION_KEYWORDS = (
     "pode agendar",
     "pode marcar",
@@ -925,6 +935,21 @@ def _is_scheduling_context(*, inbound_text: str, context: str) -> bool:
 def _is_explicit_availability_request(text: str) -> bool:
     normalized = _normalize_for_match(text)
     return any(keyword in normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS)
+
+
+def _is_day_availability_request(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if any(keyword in normalized for keyword in DAY_AVAILABILITY_KEYWORDS):
+        return True
+
+    # Ex.: "quero saber os dias disponiveis", "tem dias para lentes?"
+    if "dia" in normalized or "dias" in normalized:
+        if any(keyword in normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS):
+            return True
+    if "data" in normalized or "datas" in normalized:
+        if any(keyword in normalized for keyword in AVAILABILITY_REQUEST_KEYWORDS):
+            return True
+    return False
 
 
 def _is_followup_availability_request(*, inbound_text: str, context: str) -> bool:
@@ -2987,8 +3012,21 @@ def _build_scheduling_operation_response(
     procedure_type = _infer_procedure_type(inbound_text=inbound_text, context=context)
     operation_timezone = _resolve_operation_timezone(config)
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
+    day_availability_request = _is_day_availability_request(inbound_text)
     requested_date_label = requested_date.strftime("%d/%m") if requested_date else None
     slot_limit = 12 if requested_date else 3
+
+    if day_availability_request and requested_date is None and not has_followup_confirmation:
+        return _wizard_build_day_step_response(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=procedure_type,
+            period=period,
+            requested_date=None,
+            operation_timezone=operation_timezone,
+            config=config,
+        )
 
     followup_response = _try_followup_slot_confirmation(
         db,
