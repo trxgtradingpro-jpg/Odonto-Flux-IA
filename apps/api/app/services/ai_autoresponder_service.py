@@ -2423,33 +2423,51 @@ def _list_available_slots(
     return []
 
 
+def _infer_procedure_from_normalized_text(normalized_text: str) -> str | None:
+    normalized = _normalize_for_match(normalized_text or "")
+    if not normalized:
+        return None
+
+    if "limpeza" in normalized or "profilax" in normalized:
+        return "Limpeza odontológica"
+
+    # Aceita variações comuns e erros de digitação de "clareamento".
+    if (
+        "clareamento" in normalized
+        or "claramento" in normalized
+        or "claremento" in normalized
+        or "clarear" in normalized
+        or "branqueamento" in normalized
+    ):
+        return "Clareamento dental"
+    if "claramente" in normalized and any(token in normalized for token in ("dental", "dentario", "dentária", "dente")):
+        return "Clareamento dental"
+
+    if "lente" in normalized:
+        return "Instalação de lentes"
+    if "implante" in normalized:
+        return "Implante dentário"
+    if "ortodont" in normalized:
+        return "Avaliação ortodôntica"
+    return None
+
+
 def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     normalized_inbound = _normalize_for_match(inbound_text)
     normalized_context = _normalize_for_match(context)
 
     # Prioriza sempre o que o paciente pediu na mensagem atual.
-    if "limpeza" in normalized_inbound or "profilax" in normalized_inbound:
-        return "Limpeza odontológica"
-    if "clareamento" in normalized_inbound:
-        return "Clareamento dental"
-    if "lente" in normalized_inbound:
-        return "Instalação de lentes"
-    if "implante" in normalized_inbound:
-        return "Implante dentário"
-    if "ortodont" in normalized_inbound:
-        return "Avaliação ortodôntica"
+    inbound_inference = _infer_procedure_from_normalized_text(normalized_inbound)
+    if inbound_inference:
+        return inbound_inference
 
-    # Se não houver menção explícita na mensagem atual, usa o contexto.
-    if "limpeza" in normalized_context or "profilax" in normalized_context:
-        return "Limpeza odontológica"
-    if "clareamento" in normalized_context:
-        return "Clareamento dental"
-    if "lente" in normalized_context:
-        return "Instalação de lentes"
-    if "implante" in normalized_context:
-        return "Implante dentário"
-    if "ortodont" in normalized_context:
-        return "Avaliação ortodôntica"
+    # Só usa contexto quando a mensagem atual é curta/ambígua.
+    inbound_word_count = len([chunk for chunk in normalized_inbound.split() if chunk])
+    if inbound_word_count <= 6:
+        context_inference = _infer_procedure_from_normalized_text(normalized_context)
+        if context_inference:
+            return context_inference
+
     return "Avaliação odontológica"
 
 
