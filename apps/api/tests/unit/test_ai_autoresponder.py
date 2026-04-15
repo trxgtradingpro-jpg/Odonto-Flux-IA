@@ -1271,6 +1271,43 @@ def test_greeting_with_intent_does_not_use_welcome_start_message(seeded_db, db_s
     assert result.get("scheduling_mode") != "welcome_message_start"
 
 
+def test_service_catalog_request_opens_service_selection_wizard(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Boa noite, quais serviços vocês oferecem?",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+    assert outbound is not None
+    assert outbound.message_type == "interactive_list"
+    rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert rows
+    assert str(rows[0].get("id") or "").startswith("svc_")
+
+
 def test_close_conversation_request_sets_conversation_closed(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

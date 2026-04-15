@@ -985,6 +985,22 @@ def _is_day_availability_request(text: str) -> bool:
     return False
 
 
+def _is_service_catalog_request(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    has_service_term = any(
+        term in normalized
+        for term in ("servic", "procediment", "tratamento")
+    )
+    if not has_service_term:
+        return False
+
+    has_catalog_intent = any(
+        term in normalized
+        for term in ("quais", "qual", "oferec", "tem", "mostrar", "saber")
+    )
+    return has_catalog_intent
+
+
 def _is_followup_availability_request(*, inbound_text: str, context: str) -> bool:
     normalized_inbound = _normalize_for_match(inbound_text)
     has_followup_keyword = any(keyword in normalized_inbound for keyword in FOLLOWUP_AVAILABILITY_KEYWORDS)
@@ -3114,6 +3130,19 @@ def _build_scheduling_operation_response(
     )
     if wizard_response:
         return wizard_response
+
+    if _is_service_catalog_request(inbound_text):
+        preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context)
+        if preferred_service == "Avaliação odontológica":
+            preferred_service = None
+        return _wizard_build_service_step_response(
+            db,
+            conversation=conversation,
+            intro_text="Perfeito. Escolha o serviço para continuar:",
+            period=None,
+            requested_date=None,
+            preferred_service=preferred_service,
+        )
 
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     period = _detect_period_preference(inbound_text)
