@@ -1241,11 +1241,34 @@ def test_greeting_boa_noite_does_not_trigger_period_scheduling(seeded_db, db_ses
         .order_by(Message.created_at.desc())
     )
     assert result["status"] == "responded"
-    assert "scheduling_mode" not in result
+    assert result.get("scheduling_mode") == "welcome_message_start"
     assert outbound is not None
     normalized = (outbound.body or "").lower()
+    assert "que bom te ver por aqui" in normalized
     assert "encontrei estes horários" not in normalized
     assert "encontrei estes horarios" not in normalized
+
+
+def test_greeting_with_intent_does_not_use_welcome_start_message(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi, quero agendar limpeza",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") != "welcome_message_start"
 
 
 def test_close_conversation_request_sets_conversation_closed(seeded_db, db_session):

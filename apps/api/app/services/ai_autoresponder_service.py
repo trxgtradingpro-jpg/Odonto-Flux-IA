@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -108,6 +108,17 @@ CLOSE_CONVERSATION_PATTERNS = [
     "encerrar chat",
     "finalizar chat",
 ]
+
+GREETING_ONLY_PATTERNS = (
+    "oi",
+    "ola",
+    "olá",
+    "bom dia",
+    "boa tarde",
+    "boa noite",
+    "e ai",
+    "e aí",
+)
 
 URGENCY_PATTERNS = [
     "urgente",
@@ -991,6 +1002,84 @@ def _is_followup_availability_request(*, inbound_text: str, context: str) -> boo
         return False
     # Respostas curtas de confirmação após oferta de agenda.
     return normalized_inbound in {"sim", "pode", "ok", "certo", "isso", "pode sim"}
+
+
+def _is_conversation_start_for_welcome(db: Session, *, conversation: Conversation) -> bool:
+    inbound_count = db.scalar(
+        select(func.count())
+        .select_from(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.INBOUND.value,
+        )
+    ) or 0
+    outbound_count = db.scalar(
+        select(func.count())
+        .select_from(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.OUTBOUND.value,
+        )
+    ) or 0
+    return inbound_count == 1 and outbound_count == 0
+
+
+def _is_greeting_only_message(text: str) -> bool:
+    normalized = _normalize_for_match(text or "")
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return False
+
+    greeting_detected = any(
+        cleaned == greeting or cleaned.startswith(f"{greeting} ")
+        for greeting in GREETING_ONLY_PATTERNS
+    )
+    if not greeting_detected:
+        return False
+
+    non_greeting_intent_terms = (
+        *SCHEDULING_INTENT_KEYWORDS,
+        *AVAILABILITY_REQUEST_KEYWORDS,
+        "servico",
+        "servicos",
+        "procedimento",
+        "procedimentos",
+        "valor",
+        "valores",
+        "preco",
+        "precos",
+        "preço",
+        "preços",
+        "duvida",
+        "dúvida",
+        "atendente",
+        "humano",
+    )
+    if any(term in cleaned for term in non_greeting_intent_terms):
+        return False
+    if any(term in cleaned for term in URGENCY_PATTERNS):
+        return False
+    if any(term in cleaned for term in CLINICAL_PATTERNS):
+        return False
+    return len(cleaned.split()) <= 6
+
+
+def _build_conversation_start_welcome_response() -> dict[str, Any]:
+    return {
+        "mode": "welcome_message_start",
+        "response_text": (
+            "Oi! Que bom te ver por aqui.\n"
+            "Sou a assistente virtual da Clínica Sorriso Sul e posso te ajudar com serviços, valores e agendamentos.\n"
+            "Para começar, você prefere:\n"
+            "1) Ver serviços\n"
+            "2) Ver horários\n"
+            "3) Falar com atendente"
+        ),
+        "metadata": {"reason": "welcome_message_start"},
+    }
 
 
 def _extract_option_index_choice(text: str) -> int | None:
@@ -3673,14 +3762,18 @@ def process_inbound_message(
                 handoff=True,
             )
 
-    scheduling_response = _build_scheduling_operation_response(
-        db,
-        conversation=conversation,
-        inbound_message=inbound_message,
-        inbound_text=inbound_text,
-        context=context,
-        config=config,
-    )
+    scheduling_response = None
+    if _is_conversation_start_for_welcome(db, conversation=conversation) and _is_greeting_only_message(inbound_text):
+        scheduling_response = _build_conversation_start_welcome_response()
+    if not scheduling_response:
+        scheduling_response = _build_scheduling_operation_response(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+            inbound_text=inbound_text,
+            context=context,
+            config=config,
+        )
     if scheduling_response:
         generated_response = _normalize_response_text(
             db,
