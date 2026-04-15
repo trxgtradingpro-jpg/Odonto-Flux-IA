@@ -680,17 +680,18 @@ def test_booking_wizard_button_flow_creates_appointment(seeded_db, db_session):
         )
         .order_by(Message.created_at.desc())
     )
-    confirm_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
-    assert confirm_rows
-    confirm_option_id = confirm_rows[0]["id"]
+    assert latest_outbound.message_type == "interactive_buttons"
+    confirm_buttons = (((latest_outbound.payload or {}).get("interactive") or {}).get("buttons") or [])
+    assert confirm_buttons
+    confirm_option_id = confirm_buttons[0]["id"]
 
     confirm_inbound = _append_inbound_message(
         db_session,
         tenant_id=tenant_id,
         conversation_id=conversation.id,
-        inbound_text="Confirmar",
+        inbound_text="Sim",
         message_type="interactive_button_reply",
-        payload={"interactive_reply": {"id": confirm_option_id, "title": "Confirmar"}},
+        payload={"interactive_reply": {"id": confirm_option_id, "title": "Sim"}},
     )
     confirm_result = process_inbound_message(
         db_session,
@@ -732,11 +733,44 @@ def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_se
     assert first_result["status"] == "responded"
     assert first_result.get("scheduling_mode") == "slots_suggested"
 
-    confirm_inbound = _append_inbound_message(
+    select_inbound = _append_inbound_message(
         db_session,
         tenant_id=tenant_id,
         conversation_id=conversation.id,
         inbound_text="1",
+    )
+    select_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=select_inbound.id,
+    )
+    assert select_result["status"] == "responded"
+    assert select_result.get("scheduling_mode") == "booking_wizard_confirm"
+
+    confirm_prompt = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert confirm_prompt is not None
+    assert confirm_prompt.message_type == "interactive_buttons"
+    confirm_buttons = (((confirm_prompt.payload or {}).get("interactive") or {}).get("buttons") or [])
+    assert confirm_buttons
+    confirm_yes_id = confirm_buttons[0]["id"]
+
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Sim",
+        message_type="interactive_button_reply",
+        payload={"interactive_reply": {"id": confirm_yes_id, "title": "Sim"}},
     )
     confirm_result = process_inbound_message(
         db_session,
@@ -779,13 +813,46 @@ def test_followup_interactive_reply_option_confirms_and_persists_appointment(see
     assert first_result["status"] == "responded"
     assert first_result.get("scheduling_mode") == "slots_suggested"
 
-    confirm_inbound = _append_inbound_message(
+    select_inbound = _append_inbound_message(
         db_session,
         tenant_id=tenant_id,
         conversation_id=conversation.id,
         inbound_text="Opção 1",
         message_type="interactive_list_reply",
         payload={"interactive_reply": {"id": "slot_1", "title": "Opção 1"}},
+    )
+    select_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=select_inbound.id,
+    )
+    assert select_result["status"] == "responded"
+    assert select_result.get("scheduling_mode") == "booking_wizard_confirm"
+
+    confirm_prompt = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert confirm_prompt is not None
+    assert confirm_prompt.message_type == "interactive_buttons"
+    confirm_buttons = (((confirm_prompt.payload or {}).get("interactive") or {}).get("buttons") or [])
+    assert confirm_buttons
+    confirm_yes_id = confirm_buttons[0]["id"]
+
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Sim",
+        message_type="interactive_button_reply",
+        payload={"interactive_reply": {"id": confirm_yes_id, "title": "Sim"}},
     )
     confirm_result = process_inbound_message(
         db_session,

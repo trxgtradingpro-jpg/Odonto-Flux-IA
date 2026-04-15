@@ -1043,11 +1043,11 @@ def queue_outbound_message(
             code='WHATSAPP_BODY_REQUIRED',
             message='Mensagem vazia nao pode ser enviada.',
         )
-    if message_type == 'interactive_list' and not isinstance(interactive, dict):
+    if message_type in {'interactive_list', 'interactive_buttons'} and not isinstance(interactive, dict):
         raise ApiError(
             status_code=400,
             code='WHATSAPP_INTERACTIVE_REQUIRED',
-            message='Mensagem interativa requer payload de interactive list.',
+            message='Mensagem interativa requer payload de interactive.',
         )
 
     outbox = OutboxMessage(
@@ -1187,6 +1187,17 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
                 template_name=template['name'],
                 language=template.get('language', 'pt_BR'),
                 components=template.get('components', []),
+            )
+        elif payload.get('message_type') == 'interactive_buttons' and isinstance(payload.get('interactive'), dict):
+            interactive = payload.get('interactive') or {}
+            response = provider.send_interactive_buttons_message(
+                phone_number_id=account.phone_number_id,
+                access_token=account.access_token_encrypted,
+                to=payload['to'],
+                body=payload.get('body', ''),
+                buttons=interactive.get('buttons') if isinstance(interactive.get('buttons'), list) else [],
+                header_text=str(interactive.get('header_text') or '').strip() or None,
+                footer_text=str(interactive.get('footer_text') or '').strip() or None,
             )
         elif payload.get('message_type') == 'interactive_list' and isinstance(payload.get('interactive'), dict):
             interactive = payload.get('interactive') or {}

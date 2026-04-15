@@ -158,6 +158,62 @@ class WhatsAppCloudProvider(WhatsAppProvider):
         url = f'{self.base_url}/{phone_number_id}/messages'
         return self._post(url=url, access_token=access_token, payload=payload)
 
+    def send_interactive_buttons_message(
+        self,
+        *,
+        phone_number_id: str,
+        access_token: str,
+        to: str,
+        body: str,
+        buttons: list[dict],
+        header_text: str | None = None,
+        footer_text: str | None = None,
+    ) -> dict:
+        normalized_buttons: list[dict] = []
+        for index, button in enumerate(buttons or [], start=1):
+            button_id = str((button or {}).get('id') or f'btn_{index}')[:200]
+            button_title = str((button or {}).get('title') or f'Opção {index}')[:20]
+            if not button_id or not button_title:
+                continue
+            normalized_buttons.append(
+                {
+                    'type': 'reply',
+                    'reply': {
+                        'id': button_id,
+                        'title': button_title,
+                    },
+                }
+            )
+            if len(normalized_buttons) >= 3:
+                break
+
+        if not normalized_buttons:
+            return self.send_text_message(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                to=to,
+                body=body,
+            )
+
+        interactive_payload: dict = {
+            'type': 'button',
+            'body': {'text': body[:1024]},
+            'action': {'buttons': normalized_buttons},
+        }
+        if header_text:
+            interactive_payload['header'] = {'type': 'text', 'text': str(header_text)[:60]}
+        if footer_text:
+            interactive_payload['footer'] = {'text': str(footer_text)[:60]}
+
+        payload = {
+            'messaging_product': 'whatsapp',
+            'to': to,
+            'type': 'interactive',
+            'interactive': interactive_payload,
+        }
+        url = f'{self.base_url}/{phone_number_id}/messages'
+        return self._post(url=url, access_token=access_token, payload=payload)
+
     def test_connection(
         self,
         *,

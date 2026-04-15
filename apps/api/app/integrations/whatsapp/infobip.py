@@ -179,6 +179,75 @@ class InfobipWhatsAppProvider(WhatsAppProvider):
         }
         return self._post(path='/whatsapp/1/message/interactive/list', api_key=access_token, payload=payload)
 
+    def send_interactive_buttons_message(
+        self,
+        *,
+        phone_number_id: str,
+        access_token: str,
+        to: str,
+        body: str,
+        buttons: list[dict],
+        header_text: str | None = None,
+        footer_text: str | None = None,
+    ) -> dict:
+        normalized_buttons: list[dict] = []
+        for index, button in enumerate(buttons or [], start=1):
+            button_id = str((button or {}).get('id') or f'btn_{index}')[:200]
+            button_title = str((button or {}).get('title') or f'Opção {index}')[:20]
+            if not button_id or not button_title:
+                continue
+            normalized_buttons.append({'id': button_id, 'title': button_title})
+            if len(normalized_buttons) >= 3:
+                break
+
+        if not normalized_buttons:
+            return self.send_text_message(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                to=to,
+                body=body,
+            )
+
+        content: dict = {
+            'body': {'text': body[:1024]},
+            'action': {'buttons': normalized_buttons},
+        }
+        if header_text:
+            content['header'] = {'type': 'TEXT', 'text': str(header_text)[:60]}
+        if footer_text:
+            content['footer'] = {'text': str(footer_text)[:60]}
+
+        payload = {
+            'from': phone_number_id,
+            'to': to,
+            'content': content,
+        }
+        try:
+            return self._post(path='/whatsapp/1/message/interactive/buttons', api_key=access_token, payload=payload)
+        except httpx.HTTPStatusError as exc:
+            # Fallback defensivo: alguns tenants podem não ter endpoint de buttons habilitado.
+            if exc.response is not None and exc.response.status_code in {400, 404, 405}:
+                rows = [
+                    {
+                        'id': item['id'],
+                        'title': item['title'],
+                        'description': '',
+                    }
+                    for item in normalized_buttons
+                ]
+                return self.send_interactive_list_message(
+                    phone_number_id=phone_number_id,
+                    access_token=access_token,
+                    to=to,
+                    body=body,
+                    button_title='Confirmar',
+                    rows=rows,
+                    section_title='Confirmação',
+                    header_text=header_text,
+                    footer_text=footer_text,
+                )
+            raise
+
     def test_connection(
         self,
         *,

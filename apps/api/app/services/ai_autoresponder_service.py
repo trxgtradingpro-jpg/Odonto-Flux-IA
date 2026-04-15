@@ -1047,6 +1047,30 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
     metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
 
     if mode.startswith("booking_wizard_"):
+        buttons_raw = metadata.get("buttons")
+        if isinstance(buttons_raw, list):
+            buttons: list[dict[str, str]] = []
+            for button in buttons_raw[:3]:
+                if not isinstance(button, dict):
+                    continue
+                button_id = str(button.get("id") or "").strip()[:200]
+                button_title = str(button.get("title") or "").strip()[:20]
+                if not button_id or not button_title:
+                    continue
+                buttons.append({"id": button_id, "title": button_title})
+            if buttons:
+                return {
+                    "interactive_type": "buttons",
+                    "header_text": str(metadata.get("header_text") or "Agendamento"),
+                    "body_text": str(
+                        metadata.get("body_text")
+                        or scheduling_response.get("response_text")
+                        or "Confirme para continuar."
+                    ),
+                    "footer_text": str(metadata.get("footer_text") or "Use os botões para confirmar."),
+                    "buttons": buttons,
+                }
+
         rows_raw = metadata.get("rows")
         if not isinstance(rows_raw, list):
             return None
@@ -1066,6 +1090,7 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
         if not rows:
             return None
         return {
+            "interactive_type": "list",
             "button_title": str(metadata.get("button_title") or "Opções"),
             "section_title": str(metadata.get("section_title") or "Escolha uma opção"),
             "header_text": str(metadata.get("header_text") or "Agendamento"),
@@ -1104,6 +1129,7 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
         return None
 
     return {
+        "interactive_type": "list",
         "button_title": "Opções",
         "section_title": "Horários disponíveis",
         "header_text": "Escolha um horário",
@@ -1592,9 +1618,9 @@ def _wizard_build_confirm_step_response(
     selected_slot_choice: dict[str, Any],
 ) -> dict[str, Any]:
     slot_label = str(selected_slot_choice.get("label") or "")
-    rows = [
-        {"id": "confirm_yes", "title": "Confirmar agora", "description": "Agendar este horário"},
-        {"id": "confirm_no", "title": "Trocar horário", "description": "Voltar para horários"},
+    buttons = [
+        {"id": "confirm_yes", "title": "Sim"},
+        {"id": "confirm_no", "title": "Não"},
     ]
     return {
         "mode": "booking_wizard_confirm",
@@ -1612,9 +1638,7 @@ def _wizard_build_confirm_step_response(
             "period": period,
             "requested_date": selected_date.isoformat(),
             "selected_slot": selected_slot_choice,
-            "rows": rows,
-            "button_title": "Confirmar",
-            "section_title": "Confirmar agendamento",
+            "buttons": buttons,
             "header_text": "Confirmação",
             "body_text": "Confirme ou troque o horário.",
             "footer_text": "Escolha uma opção.",
@@ -1738,6 +1762,7 @@ def _try_booking_wizard_response(
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
     has_scheduling_keywords = any(keyword in normalized_inbound for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS))
     force_wizard = any(keyword in normalized_inbound for keyword in BOOKING_WIZARD_FORCE_KEYWORDS)
+    has_confirmation_choice = _wizard_parse_confirmation_choice(selection_token) is not None
     selection_like = (
         _extract_option_index_choice(inbound_text) is not None
         or _extract_time_choice(inbound_text) is not None
@@ -1751,6 +1776,7 @@ def _try_booking_wizard_response(
             or selection_like
             or has_scheduling_keywords
             or _is_booking_confirmation_message(inbound_text)
+            or has_confirmation_choice
             or force_wizard
         ):
             return None
@@ -2860,14 +2886,27 @@ def _try_followup_slot_confirmation(
     if not chosen_slot:
         return None
 
-    return _appointment_response_from_selected_slot(
-        db,
-        conversation=conversation,
-        unit=unit,
-        selected_slot=chosen_slot,
+    slot_choice = {
+        "id": f"time_{chosen_slot['starts_at_local'].strftime('%H%M')}",
+        "label": chosen_slot["label"],
+        "starts_at_utc": chosen_slot["starts_at_utc"].isoformat(),
+        "ends_at_utc": chosen_slot["ends_at_utc"].isoformat(),
+        "starts_at_local": chosen_slot["starts_at_local"].isoformat(),
+        "professional_id": (
+            str(chosen_slot.get("professional_id"))
+            if chosen_slot.get("professional_id")
+            else None
+        ),
+        "professional_name": chosen_slot.get("professional_name"),
+        "time": chosen_slot["starts_at_local"].strftime("%H:%M"),
+    }
+    confirm_date = selected_date or chosen_slot["starts_at_local"].date()
+    return _wizard_build_confirm_step_response(
         procedure_type=anchor_procedure_type,
+        unit=unit,
+        selected_date=confirm_date,
         period=selected_period,
-        requested_date=selected_date,
+        selected_slot_choice=slot_choice,
     )
 
 
@@ -3535,7 +3574,10 @@ def process_inbound_message(
             if conversation.channel == "whatsapp"
             else None
         )
-        outbound_message_type = "interactive_list" if interactive_payload else "text"
+        outbound_message_type = "text"
+        if interactive_payload:
+            interactive_type = str(interactive_payload.get("interactive_type") or "list").strip().lower()
+            outbound_message_type = "interactive_buttons" if interactive_type == "buttons" else "interactive_list"
         dispatch_body = (
             str(interactive_payload.get("body_text") or generated_response)
             if interactive_payload
