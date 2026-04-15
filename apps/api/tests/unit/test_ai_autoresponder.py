@@ -1193,6 +1193,42 @@ def test_new_request_ignores_stale_wizard_confirmation_state(seeded_db, db_sessi
     assert str(rows[0].get("id") or "").startswith("day_")
 
 
+def test_greeting_boa_noite_does_not_trigger_period_scheduling(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Boa noite",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert "scheduling_mode" not in result
+    assert outbound is not None
+    normalized = (outbound.body or "").lower()
+    assert "encontrei estes horários" not in normalized
+    assert "encontrei estes horarios" not in normalized
+
+
 def test_scheduling_typo_claramente_dentario_maps_to_clareamento(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

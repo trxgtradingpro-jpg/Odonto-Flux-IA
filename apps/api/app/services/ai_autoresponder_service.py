@@ -858,6 +858,18 @@ def _normalize_for_match(text: str) -> str:
 
 def _detect_period_preference(text: str) -> str | None:
     lowered = _normalize_for_match(text)
+    # Não interpreta saudações ("boa noite", "bom dia") como pedido de período.
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    greeting_bases = ("bom dia", "boa tarde", "boa noite")
+    if any(cleaned.startswith(base) for base in greeting_bases):
+        has_scheduling_signal = any(
+            keyword in cleaned
+            for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS)
+        )
+        if not has_scheduling_signal and len(cleaned.split()) <= 5:
+            return None
+
     if any(keyword in lowered for keyword in PERIOD_MORNING_KEYWORDS):
         return "morning"
     if any(keyword in lowered for keyword in PERIOD_AFTERNOON_KEYWORDS):
