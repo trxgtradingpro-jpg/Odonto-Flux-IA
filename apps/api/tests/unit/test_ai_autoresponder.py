@@ -1092,6 +1092,107 @@ def test_scheduling_days_request_returns_day_options_instead_of_time_slots(seede
     assert scheduling.get("procedure_type") == "Instalação de lentes"
 
 
+def test_new_request_ignores_stale_wizard_confirmation_state(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+    )
+
+    unit = db_session.scalar(
+        select(Unit).where(
+            Unit.tenant_id == tenant_id,
+            Unit.is_active.is_(True),
+        )
+    )
+    assert unit is not None
+
+    selected_day = (datetime.now(UTC) + timedelta(days=2)).date()
+    starts_at_utc = datetime.now(UTC) + timedelta(days=2, hours=3)
+    ends_at_utc = starts_at_utc + timedelta(minutes=60)
+    selected_slot = {
+        "id": "time_1100",
+        "label": "sexta-feira, 17/04 às 11:00",
+        "starts_at_utc": starts_at_utc.isoformat(),
+        "ends_at_utc": ends_at_utc.isoformat(),
+        "starts_at_local": starts_at_utc.isoformat(),
+        "professional_id": None,
+        "professional_name": "Equipe clínica",
+        "time": "11:00",
+    }
+
+    stale_wizard_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Confirma este agendamento?",
+        message_type="interactive_buttons",
+        payload={
+            "mode": "booking_wizard_confirm",
+            "scheduling": {
+                "procedure_type": "Instalação de lentes",
+                "unit_id": str(unit.id),
+                "requested_date": selected_day.isoformat(),
+                "selected_slot": selected_slot,
+            },
+        },
+        status="sent",
+    )
+    latest_non_wizard_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="O clareamento dental é supervisionado e parte de R$ 650.",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    db_session.add(stale_wizard_message)
+    db_session.add(latest_non_wizard_message)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="quais dias disponíveis para clareamento?",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_day_select"
+    assert outbound is not None
+    scheduling = (outbound.payload or {}).get("scheduling") or {}
+    assert scheduling.get("procedure_type") == "Clareamento dental"
+    assert outbound.message_type == "interactive_list"
+    rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert rows
+    assert str(rows[0].get("id") or "").startswith("day_")
+
+
 def test_scheduling_typo_claramente_dentario_maps_to_clareamento(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

@@ -1177,11 +1177,14 @@ def _parse_iso_date(value: Any) -> date | None:
 
 
 def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Message | None:
-    for message in _recent_ai_outbound_messages(db, conversation=conversation, limit=30):
-        payload = message.payload if isinstance(message.payload, dict) else {}
-        mode = str(payload.get("mode") or "").strip()
-        if mode.startswith("booking_wizard_"):
-            return message
+    latest_messages = _recent_ai_outbound_messages(db, conversation=conversation, limit=1)
+    if not latest_messages:
+        return None
+    message = latest_messages[0]
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    mode = str(payload.get("mode") or "").strip()
+    if mode.startswith("booking_wizard_"):
+        return message
     return None
 
 
@@ -2574,7 +2577,8 @@ def _latest_ai_outbound_message(db: Session, *, conversation: Conversation) -> M
 
 def _latest_ai_slots_message(db: Session, *, conversation: Conversation) -> Message | None:
     offer_modes = {"slots_suggested", "no_slots_for_period_with_alternatives"}
-    for message in _recent_ai_outbound_messages(db, conversation=conversation, limit=30):
+    latest_messages = _recent_ai_outbound_messages(db, conversation=conversation, limit=1)
+    for message in latest_messages:
         payload = message.payload if isinstance(message.payload, dict) else {}
         mode = str(payload.get("mode") or "").strip()
         if mode in offer_modes:
