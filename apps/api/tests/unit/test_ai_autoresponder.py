@@ -566,6 +566,73 @@ def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_se
     assert appointment.confirmation_status == "confirmada"
 
 
+def test_followup_option_does_not_use_stale_slots_anchor(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    first_date = (datetime.now(UTC) + timedelta(days=1)).strftime("%d/%m")
+    second_date = (datetime.now(UTC) + timedelta(days=2)).strftime("%d/%m")
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text=f"Tem horario para clareamento no dia {first_date}?",
+    )
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text=f"Quero agendar para raspagem no dia {second_date}",
+    )
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="1",
+    )
+    confirm_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=confirm_inbound.id,
+    )
+
+    assert confirm_result["status"] == "responded"
+    assert confirm_result.get("scheduling_mode") == "followup_anchor_stale"
+
+    last_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert last_outbound is not None
+    assert "me confirme novamente a data e hora desejadas" in (last_outbound.body or "").lower()
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+    assert appointment is None
+
+
 def test_scheduling_uses_inbound_procedure_over_context(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

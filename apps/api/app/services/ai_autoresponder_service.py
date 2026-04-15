@@ -1444,6 +1444,59 @@ def _latest_ai_slots_message(db: Session, *, conversation: Conversation) -> Mess
     return None
 
 
+def _has_intervening_new_scheduling_request(
+    db: Session,
+    *,
+    conversation: Conversation,
+    anchor_message: Message,
+    current_inbound_message: Message,
+    operation_timezone: ZoneInfo,
+) -> bool:
+    if not anchor_message.created_at or not current_inbound_message.created_at:
+        return False
+
+    intervening_inbounds = db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.INBOUND.value,
+            Message.created_at > anchor_message.created_at,
+            Message.created_at <= current_inbound_message.created_at,
+            Message.id != current_inbound_message.id,
+        )
+        .order_by(Message.created_at.asc())
+        .limit(12)
+    ).scalars().all()
+
+    for inbound in intervening_inbounds:
+        text = str(inbound.body or "").strip()
+        if not text:
+            continue
+        if _extract_requested_date_from_text(text=text, timezone=operation_timezone):
+            return True
+        if _detect_period_preference(text):
+            return True
+        if _is_explicit_availability_request(text):
+            return True
+
+        normalized = _normalize_for_match(text)
+        has_explicit_scheduling_intent = any(
+            keyword in normalized
+            for keyword in SCHEDULING_INTENT_KEYWORDS
+        )
+        if has_explicit_scheduling_intent:
+            is_simple_confirmation = (
+                _extract_option_index_choice(text) is not None
+                or _extract_time_choice(text) is not None
+                or _is_booking_confirmation_message(text)
+            )
+            if not is_simple_confirmation:
+                return True
+
+    return False
+
+
 def _appointment_response_from_selected_slot(
     db: Session,
     *,
@@ -1587,6 +1640,7 @@ def _try_followup_slot_confirmation(
     db: Session,
     *,
     conversation: Conversation,
+    inbound_message: Message,
     inbound_text: str,
     unit: Unit,
     procedure_type: str,
@@ -1609,6 +1663,22 @@ def _try_followup_slot_confirmation(
     anchor_text = str(slots_anchor_message.body or "") if slots_anchor_message else ""
     if not anchor_text:
         return None
+
+    if _has_intervening_new_scheduling_request(
+        db,
+        conversation=conversation,
+        anchor_message=slots_anchor_message,
+        current_inbound_message=inbound_message,
+        operation_timezone=operation_timezone,
+    ):
+        return {
+            "mode": "followup_anchor_stale",
+            "response_text": (
+                "Para evitar agendamento errado, me confirme novamente a data e hora desejadas "
+                "(ex.: 16/04 às 08:00) ou me peça os horários de novo."
+            ),
+            "metadata": {"reason": "followup_anchor_stale"},
+        }
 
     anchor_payload = slots_anchor_message.payload if slots_anchor_message and isinstance(slots_anchor_message.payload, dict) else {}
     anchor_scheduling = anchor_payload.get("scheduling") if isinstance(anchor_payload.get("scheduling"), dict) else {}
@@ -1743,6 +1813,7 @@ def _build_scheduling_operation_response(
     db: Session,
     *,
     conversation: Conversation,
+    inbound_message: Message,
     inbound_text: str,
     context: str,
     config: dict[str, Any],
@@ -1782,6 +1853,7 @@ def _build_scheduling_operation_response(
     followup_response = _try_followup_slot_confirmation(
         db,
         conversation=conversation,
+        inbound_message=inbound_message,
         inbound_text=inbound_text,
         unit=unit,
         procedure_type=procedure_type,
@@ -2368,6 +2440,7 @@ def process_inbound_message(
     scheduling_response = _build_scheduling_operation_response(
         db,
         conversation=conversation,
+        inbound_message=inbound_message,
         inbound_text=inbound_text,
         context=context,
         config=config,
