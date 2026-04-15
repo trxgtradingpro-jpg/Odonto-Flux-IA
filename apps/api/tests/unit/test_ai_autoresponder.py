@@ -992,6 +992,67 @@ def test_scheduling_uses_inbound_procedure_over_context(seeded_db, db_session):
     assert "lente" not in normalized_outbound
 
 
+def test_scheduling_uses_recent_context_procedure_when_inbound_is_ambiguous(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quais dias vcs tem disponiveis?",
+    )
+
+    older_catalog_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Oferecemos avaliacao, lentes de contato dental, clareamento e reabilitacao estetica.",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    latest_service_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="As lentes de contato dental comecam a partir de R$ 1.500 e posso te mostrar os dias disponiveis.",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    db_session.add(older_catalog_message)
+    db_session.add(latest_service_message)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") in {"slots_suggested", "no_slots_general", "no_slots_for_period"}
+    assert outbound is not None
+    scheduling = (outbound.payload or {}).get("scheduling") or {}
+    assert scheduling.get("procedure_type") == "Instalação de lentes"
+
+
 def test_scheduling_typo_claramente_dentario_maps_to_clareamento(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

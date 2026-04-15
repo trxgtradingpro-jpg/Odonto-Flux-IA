@@ -2449,13 +2449,19 @@ def _list_available_slots(
     return []
 
 
-def _infer_procedure_from_normalized_text(normalized_text: str) -> str | None:
+def _procedure_mentions_in_normalized_text(normalized_text: str) -> list[str]:
     normalized = _normalize_for_match(normalized_text or "")
     if not normalized:
-        return None
+        return []
+
+    mentions: list[str] = []
+
+    def _add(label: str) -> None:
+        if label not in mentions:
+            mentions.append(label)
 
     if "limpeza" in normalized or "profilax" in normalized:
-        return "Limpeza odontológica"
+        _add("Limpeza odontológica")
 
     # Aceita variações comuns e erros de digitação de "clareamento".
     if (
@@ -2464,23 +2470,43 @@ def _infer_procedure_from_normalized_text(normalized_text: str) -> str | None:
         or "claremento" in normalized
         or "clarear" in normalized
         or "branqueamento" in normalized
+        or ("claramente" in normalized and any(token in normalized for token in ("dental", "dentario", "dentária", "dente")))
     ):
-        return "Clareamento dental"
-    if "claramente" in normalized and any(token in normalized for token in ("dental", "dentario", "dentária", "dente")):
-        return "Clareamento dental"
+        _add("Clareamento dental")
 
     if "lente" in normalized:
-        return "Instalação de lentes"
+        _add("Instalação de lentes")
     if "implante" in normalized:
-        return "Implante dentário"
+        _add("Implante dentário")
     if "ortodont" in normalized:
-        return "Avaliação ortodôntica"
+        _add("Avaliação ortodôntica")
+
+    return mentions
+
+
+def _infer_procedure_from_normalized_text(normalized_text: str) -> str | None:
+    mentions = _procedure_mentions_in_normalized_text(normalized_text)
+    if not mentions:
+        return None
+    return mentions[0]
+
+
+def _infer_procedure_from_context(context: str) -> str | None:
+    # Preferimos o sinal mais recente e inequívoco para evitar "herdar" serviço antigo.
+    lines = [line.strip() for line in str(context or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        mentions = _procedure_mentions_in_normalized_text(line)
+        if len(mentions) == 1:
+            return mentions[0]
+
+    context_mentions = _procedure_mentions_in_normalized_text(context)
+    if len(context_mentions) == 1:
+        return context_mentions[0]
     return None
 
 
 def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     normalized_inbound = _normalize_for_match(inbound_text)
-    normalized_context = _normalize_for_match(context)
 
     # Prioriza sempre o que o paciente pediu na mensagem atual.
     inbound_inference = _infer_procedure_from_normalized_text(normalized_inbound)
@@ -2490,7 +2516,7 @@ def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     # Só usa contexto quando a mensagem atual é curta/ambígua.
     inbound_word_count = len([chunk for chunk in normalized_inbound.split() if chunk])
     if inbound_word_count <= 6:
-        context_inference = _infer_procedure_from_normalized_text(normalized_context)
+        context_inference = _infer_procedure_from_context(context)
         if context_inference:
             return context_inference
 
