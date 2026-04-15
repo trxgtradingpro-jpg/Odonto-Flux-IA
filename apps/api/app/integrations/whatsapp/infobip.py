@@ -122,6 +122,63 @@ class InfobipWhatsAppProvider(WhatsAppProvider):
         }
         return self._post(path='/whatsapp/1/message/template', api_key=access_token, payload=payload)
 
+    def send_interactive_list_message(
+        self,
+        *,
+        phone_number_id: str,
+        access_token: str,
+        to: str,
+        body: str,
+        button_title: str,
+        rows: list[dict],
+        section_title: str | None = None,
+        header_text: str | None = None,
+        footer_text: str | None = None,
+    ) -> dict:
+        normalized_rows: list[dict] = []
+        for index, row in enumerate(rows or [], start=1):
+            row_id = str((row or {}).get('id') or f'slot_{index}')[:200]
+            title = str((row or {}).get('title') or f'Opção {index}')[:24]
+            description = str((row or {}).get('description') or '').strip()[:72]
+            item = {'id': row_id, 'title': title}
+            if description:
+                item['description'] = description
+            normalized_rows.append(item)
+            if len(normalized_rows) >= 10:
+                break
+
+        if not normalized_rows:
+            return self.send_text_message(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                to=to,
+                body=body,
+            )
+
+        content: dict = {
+            'body': {'text': body[:1024]},
+            'action': {
+                'title': (button_title or 'Opções')[:20],
+                'sections': [
+                    {
+                        'title': (section_title or 'Escolha uma opção')[:24],
+                        'rows': normalized_rows,
+                    }
+                ],
+            },
+        }
+        if header_text:
+            content['header'] = {'type': 'TEXT', 'text': str(header_text)[:60]}
+        if footer_text:
+            content['footer'] = {'text': str(footer_text)[:60]}
+
+        payload = {
+            'from': phone_number_id,
+            'to': to,
+            'content': content,
+        }
+        return self._post(path='/whatsapp/1/message/interactive/list', api_key=access_token, payload=payload)
+
     def test_connection(
         self,
         *,

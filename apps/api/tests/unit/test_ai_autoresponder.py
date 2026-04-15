@@ -108,7 +108,15 @@ def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: st
     return conversation, inbound_message
 
 
-def _append_inbound_message(db_session, *, tenant_id, conversation_id, inbound_text: str):
+def _append_inbound_message(
+    db_session,
+    *,
+    tenant_id,
+    conversation_id,
+    inbound_text: str,
+    message_type: str = "text",
+    payload: dict | None = None,
+):
     inbound_message = Message(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
@@ -116,8 +124,8 @@ def _append_inbound_message(db_session, *, tenant_id, conversation_id, inbound_t
         channel="whatsapp",
         sender_type="patient",
         body=inbound_text,
-        message_type="text",
-        payload={},
+        message_type=message_type,
+        payload=payload or {},
         status="received",
     )
     db_session.add(inbound_message)
@@ -541,6 +549,55 @@ def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_se
         tenant_id=tenant_id,
         conversation_id=conversation.id,
         inbound_text="1",
+    )
+    confirm_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=confirm_inbound.id,
+    )
+
+    assert confirm_result["status"] == "responded"
+    assert confirm_result.get("scheduling_mode") in {"appointment_created", "appointment_already_created"}
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+    assert appointment is not None
+    assert appointment.status == "agendada"
+    assert appointment.confirmation_status == "confirmada"
+
+
+def test_followup_interactive_reply_option_confirms_and_persists_appointment(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horario para clareamento dental?",
+    )
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": "slot_1", "title": "Opção 1"}},
     )
     confirm_result = process_inbound_message(
         db_session,

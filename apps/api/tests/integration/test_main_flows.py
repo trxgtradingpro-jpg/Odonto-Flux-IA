@@ -56,6 +56,58 @@ def test_whatsapp_webhook_creates_lead_conversation_and_message(client, auth_hea
 
 
 
+def test_meta_webhook_interactive_list_reply_creates_inbound_message(client, auth_headers, seeded_db, db_session):
+    payload = {
+        'entry': [
+            {
+                'changes': [
+                    {
+                        'value': {
+                            'metadata': {'phone_number_id': 'phone_tenant_a'},
+                            'messages': [
+                                {
+                                    'id': 'wamid.interactive.001',
+                                    'from': '11999994444',
+                                    'timestamp': '1712518003',
+                                    'type': 'interactive',
+                                    'interactive': {
+                                        'type': 'list_reply',
+                                        'list_reply': {
+                                            'id': 'slot_3',
+                                            'title': 'Opção 3',
+                                            'description': 'quinta-feira, 16/04 às 15:00',
+                                        },
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511999994444'))
+    assert patient is not None
+
+    message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == seeded_db['tenant_a'].id,
+            Message.direction == 'inbound',
+            Message.provider_message_id == 'wamid.interactive.001',
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert message is not None
+    assert message.message_type == 'interactive_list_reply'
+    assert message.body == 'Opção 3'
+    assert (message.payload or {}).get('interactive_reply', {}).get('id') == 'slot_3'
+
+
 def test_tenant_isolation_on_patient_list(client, auth_headers):
     payload_a = {'full_name': 'Paciente A', 'phone': '11990000001'}
     payload_b = {'full_name': 'Paciente B', 'phone': '11990000002'}
@@ -206,6 +258,64 @@ def test_infobip_account_dispatches_outbox(client, auth_headers, seeded_db, db_s
     assert refreshed.status == 'sent'
 
 
+def test_infobip_account_dispatches_interactive_list_outbox(client, auth_headers, seeded_db, db_session, monkeypatch):
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'infobip'
+    account.phone_number_id = '5511940431906'
+    account.business_account_id = '3dd13w.api.infobip.com'
+    account.access_token_encrypted = 'infobip-app-key-' + ('x' * 40)
+    db_session.add(account)
+    db_session.commit()
+
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=None,
+        to='5511999990001',
+        body='Selecione uma opção para confirmar.',
+        message_type='interactive_list',
+        interactive={
+            'button_title': 'Opções',
+            'section_title': 'Horários',
+            'rows': [
+                {'id': 'slot_1', 'title': 'Opção 1', 'description': 'quinta-feira, 16/04 às 13:00'},
+                {'id': 'slot_2', 'title': 'Opção 2', 'description': 'quinta-feira, 16/04 às 14:00'},
+            ],
+        },
+    )
+
+    from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
+
+    called = {'interactive': False}
+
+    def _fake_send_interactive_list_message(
+        self,
+        *,
+        phone_number_id,
+        access_token,
+        to,
+        body,
+        button_title,
+        rows,
+        section_title=None,
+        header_text=None,
+        footer_text=None,
+    ):
+        called['interactive'] = True
+        return {'messages': [{'messageId': 'ib-msg-interactive-001'}]}
+
+    monkeypatch.setattr(InfobipWhatsAppProvider, 'send_interactive_list_message', _fake_send_interactive_list_message)
+
+    result = process_outbox_batch(db_session, batch_size=20)
+    assert result['sent'] >= 1
+    assert called['interactive'] is True
+
+    refreshed = db_session.get(OutboxMessage, outbox.id)
+    assert refreshed is not None
+    assert refreshed.status == 'sent'
+
+
 def test_infobip_webhook_with_long_event_id_is_stored_safely(client, auth_headers, seeded_db, db_session):
     tenant_id = seeded_db['tenant_a'].id
     account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
@@ -259,6 +369,56 @@ def test_infobip_webhook_with_long_event_id_is_stored_safely(client, auth_header
     )
     assert message is not None
     assert message.body == 'Oi'
+
+
+def test_infobip_webhook_interactive_list_reply_creates_inbound_message(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'infobip'
+    account.phone_number_id = '447860042894'
+    account.business_account_id = '3dd13w.api.infobip.com'
+    account.access_token_encrypted = 'infobip-app-key-' + ('x' * 40)
+    db_session.add(account)
+    db_session.commit()
+
+    payload = {
+        'results': [
+            {
+                'from': '5511940431906',
+                'to': '447860042894',
+                'integrationType': 'WHATSAPP',
+                'receivedAt': '2026-04-14T23:20:08.000+0000',
+                'messageId': 'ib-interactive-in-001',
+                'pairedMessageId': 'ib-outbound-001',
+                'message': {
+                    'id': 'slot_2',
+                    'title': 'Opção 2',
+                    'description': 'quinta-feira, 16/04 às 14:00',
+                    'type': 'INTERACTIVE_LIST_REPLY',
+                },
+                'contact': {'name': 'Guilherme Gomes'},
+            }
+        ]
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+    assert response.json()['result']['processed'] == 1
+
+    message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.direction == 'inbound',
+            Message.channel == 'whatsapp',
+            Message.provider_message_id == 'ib-interactive-in-001',
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert message is not None
+    assert message.message_type == 'interactive_list_reply'
+    assert message.body == 'Opção 2'
+    assert (message.payload or {}).get('interactive_reply', {}).get('id') == 'slot_2'
 
 
 def test_twilio_account_dispatches_outbox(client, auth_headers, seeded_db, db_session, monkeypatch):

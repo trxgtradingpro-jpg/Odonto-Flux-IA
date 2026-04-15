@@ -923,10 +923,30 @@ def _extract_option_index_choice(text: str) -> int | None:
         return int(raw)
 
     normalized = _normalize_for_match(raw)
-    match = re.search(r"\b(?:opcao|opção)\s*(\d{1,2})\b", normalized)
+    match = re.search(r"\b(?:opcao|opção|slot|op)\s*[_-]?\s*(\d{1,2})\b", normalized)
     if not match:
         return None
     return int(match.group(1))
+
+
+def _extract_option_index_from_inbound_payload(payload: dict[str, Any] | None) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+
+    interactive_reply = payload.get("interactive_reply") if isinstance(payload.get("interactive_reply"), dict) else {}
+    candidates = [
+        interactive_reply.get("id"),
+        interactive_reply.get("title"),
+        (payload.get("message") or {}).get("id") if isinstance(payload.get("message"), dict) else None,
+        (payload.get("message") or {}).get("title") if isinstance(payload.get("message"), dict) else None,
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        parsed = _extract_option_index_choice(str(candidate))
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _extract_time_choice(text: str) -> str | None:
@@ -989,6 +1009,44 @@ def _format_slots_options_message(
         lines.append(option)
     lines.append("Se preferir, me diga o número da opção para eu seguir com a confirmação.")
     return "\n".join(lines)
+
+
+def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, Any]) -> dict[str, Any] | None:
+    mode = str(scheduling_response.get("mode") or "").strip()
+    if mode not in {"slots_suggested", "no_slots_for_period_with_alternatives"}:
+        return None
+
+    metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+    slots_raw = metadata.get("slots")
+    if not isinstance(slots_raw, list):
+        return None
+
+    slots = [str(item).strip() for item in slots_raw if str(item or "").strip()]
+    if not slots:
+        return None
+
+    procedure = str(metadata.get("procedure_type") or "atendimento").strip()
+    rows: list[dict[str, str]] = []
+    for index, slot_label in enumerate(slots[:10], start=1):
+        rows.append(
+            {
+                "id": f"slot_{index}",
+                "title": f"Opção {index}",
+                "description": slot_label[:72],
+            }
+        )
+
+    if not rows:
+        return None
+
+    return {
+        "button_title": "Opções",
+        "section_title": "Horários disponíveis",
+        "header_text": "Escolha um horário",
+        "body_text": f"Selecione uma opção para confirmar seu agendamento de {procedure}.",
+        "footer_text": "Você também pode digitar o número da opção.",
+        "rows": rows,
+    }
 
 
 def _known_contact_names(db: Session, *, conversation: Conversation) -> list[str]:
@@ -1649,7 +1707,8 @@ def _try_followup_slot_confirmation(
     operation_timezone: ZoneInfo,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
-    option_index = _extract_option_index_choice(inbound_text)
+    inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
+    option_index = _extract_option_index_choice(inbound_text) or _extract_option_index_from_inbound_payload(inbound_payload)
     explicit_time = _extract_time_choice(inbound_text)
     confirmation_only = _is_booking_confirmation_message(inbound_text)
 
@@ -1818,6 +1877,7 @@ def _build_scheduling_operation_response(
     context: str,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
+    inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     period = _detect_period_preference(inbound_text)
     explicit_availability_request = _is_explicit_availability_request(inbound_text) or _is_followup_availability_request(
         inbound_text=inbound_text,
@@ -1825,6 +1885,7 @@ def _build_scheduling_operation_response(
     )
     has_followup_confirmation = (
         _extract_option_index_choice(inbound_text) is not None
+        or _extract_option_index_from_inbound_payload(inbound_payload) is not None
         or _extract_time_choice(inbound_text) is not None
         or _is_booking_confirmation_message(inbound_text)
     )
@@ -2455,6 +2516,17 @@ def process_inbound_message(
         )
         if not generated_response:
             return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
+        interactive_payload = (
+            _build_scheduling_interactive_list_payload(scheduling_response)
+            if conversation.channel == "whatsapp"
+            else None
+        )
+        outbound_message_type = "interactive_list" if interactive_payload else "text"
+        dispatch_body = (
+            str(interactive_payload.get("body_text") or generated_response)
+            if interactive_payload
+            else generated_response
+        )
         try:
             outbound_message = Message(
                 tenant_id=tenant_id,
@@ -2463,12 +2535,13 @@ def process_inbound_message(
                 channel=conversation.channel,
                 sender_type="ai",
                 body=generated_response,
-                message_type="text",
+                message_type=outbound_message_type,
                 payload={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
                     "reply_to_message_id": str(inbound_message.id),
                     "scheduling": scheduling_response.get("metadata") or {},
+                    "interactive": interactive_payload,
                 },
                 status=MessageStatus.QUEUED.value,
             )
@@ -2480,8 +2553,9 @@ def process_inbound_message(
                 tenant_id=tenant_id,
                 conversation_id=conversation.id,
                 to=destination,
-                body=generated_response,
-                message_type="text",
+                body=dispatch_body,
+                message_type=outbound_message_type,
+                interactive=interactive_payload,
                 metadata={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),

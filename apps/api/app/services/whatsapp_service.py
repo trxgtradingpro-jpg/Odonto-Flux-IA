@@ -47,6 +47,63 @@ def _safe_webhook_event_id(raw_event_id: str | None) -> str:
     return f'{value[:prefix_size]}:{digest}'
 
 
+def _extract_meta_inbound_body_and_interactive(message: dict) -> tuple[str, str, dict | None]:
+    message_type = str(message.get('type') or 'text').lower().strip() or 'text'
+    interactive = message.get('interactive') if isinstance(message.get('interactive'), dict) else {}
+    list_reply = interactive.get('list_reply') if isinstance(interactive.get('list_reply'), dict) else {}
+    button_reply = interactive.get('button_reply') if isinstance(interactive.get('button_reply'), dict) else {}
+
+    if list_reply:
+        option_id = str(list_reply.get('id') or '').strip()
+        title = str(list_reply.get('title') or '').strip()
+        description = str(list_reply.get('description') or '').strip()
+        body = title or option_id or description
+        return body, 'interactive_list_reply', {'kind': 'list', 'id': option_id, 'title': title, 'description': description}
+
+    if button_reply:
+        option_id = str(button_reply.get('id') or '').strip()
+        title = str(button_reply.get('title') or '').strip()
+        body = title or option_id
+        return body, 'interactive_button_reply', {'kind': 'button', 'id': option_id, 'title': title}
+
+    text_body = str((message.get('text') or {}).get('body') or '').strip()
+    if text_body:
+        return text_body, message_type, None
+
+    button_text = str((message.get('button') or {}).get('text') or '').strip()
+    if button_text:
+        return button_text, message_type, None
+
+    return '', message_type, None
+
+
+def _extract_infobip_inbound_body_and_interactive(result: dict, message_block: dict) -> tuple[str, str, dict | None]:
+    raw_type = str(result.get('type') or message_block.get('type') or 'text').strip()
+    normalized_type = raw_type.lower() or 'text'
+
+    interactive_type = str(message_block.get('type') or '').upper().strip()
+    if interactive_type == 'INTERACTIVE_LIST_REPLY':
+        option_id = str(message_block.get('id') or '').strip()
+        title = str(message_block.get('title') or '').strip()
+        description = str(message_block.get('description') or '').strip()
+        body = title or option_id or description
+        return body, 'interactive_list_reply', {'kind': 'list', 'id': option_id, 'title': title, 'description': description}
+
+    if interactive_type == 'INTERACTIVE_BUTTON_REPLY':
+        option_id = str(message_block.get('id') or '').strip()
+        title = str(message_block.get('title') or '').strip()
+        body = title or option_id
+        return body, 'interactive_button_reply', {'kind': 'button', 'id': option_id, 'title': title}
+
+    inbound_text = str(
+        message_block.get('text')
+        or message_block.get('body')
+        or result.get('text')
+        or ''
+    ).strip()
+    return inbound_text, normalized_type, None
+
+
 def verify_webhook_challenge(mode: str | None, token: str | None, challenge: str | None) -> str:
     if mode == 'subscribe' and token and token == settings.whatsapp_verify_token:
         if challenge:
@@ -412,7 +469,10 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     patient.id,
                     preferred_unit_id=preferred_unit_id,
                 )
-                body = message.get('text', {}).get('body', '')
+                body, inbound_type, interactive_reply = _extract_meta_inbound_body_and_interactive(message)
+                inbound_payload = dict(message)
+                if interactive_reply:
+                    inbound_payload['interactive_reply'] = interactive_reply
                 inbound_message = Message(
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
@@ -421,8 +481,8 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     provider_message_id=event_id,
                     sender_type='patient',
                     body=body,
-                    message_type=message.get('type', 'text'),
-                    payload=message,
+                    message_type=inbound_type,
+                    payload=inbound_payload,
                     status=MessageStatus.RECEIVED.value,
                 )
                 db.add(inbound_message)
@@ -573,15 +633,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         provider_message_id = str(result.get('messageId') or result.get('pairedMessageId') or '').strip()
         sender_phone = str(result.get('from') or '').strip()
         message_block = result.get('message') if isinstance(result.get('message'), dict) else {}
-        inbound_text = str(
-            message_block.get('text')
-            or message_block.get('body')
-            or result.get('text')
-            or ''
-        ).strip()
-        inferred_type = (
-            str(result.get('type') or message_block.get('type') or 'text').lower().strip() or 'text'
-        )
+        inbound_text, inferred_type, interactive_reply = _extract_infobip_inbound_body_and_interactive(result, message_block)
 
         has_status = isinstance(result.get('status'), dict) or bool(result.get('status'))
         is_inbound = bool(sender_phone and inbound_text)
@@ -630,6 +682,9 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 patient.id,
                 preferred_unit_id=preferred_unit_id,
             )
+            inbound_payload = dict(result)
+            if interactive_reply:
+                inbound_payload['interactive_reply'] = interactive_reply
             inbound_message = Message(
                 tenant_id=tenant_id,
                 conversation_id=conversation_id,
@@ -639,7 +694,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 sender_type='patient',
                 body=inbound_text,
                 message_type=inferred_type,
-                payload=result,
+                payload=inbound_payload,
                 status=MessageStatus.RECEIVED.value,
             )
             db.add(inbound_message)
@@ -972,6 +1027,7 @@ def queue_outbound_message(
     body: str,
     message_type: str = 'text',
     template: dict | None = None,
+    interactive: dict | None = None,
     metadata: dict | None = None,
 ) -> OutboxMessage:
     normalized_to = normalize_phone(to)
@@ -987,6 +1043,12 @@ def queue_outbound_message(
             code='WHATSAPP_BODY_REQUIRED',
             message='Mensagem vazia nao pode ser enviada.',
         )
+    if message_type == 'interactive_list' and not isinstance(interactive, dict):
+        raise ApiError(
+            status_code=400,
+            code='WHATSAPP_INTERACTIVE_REQUIRED',
+            message='Mensagem interativa requer payload de interactive list.',
+        )
 
     outbox = OutboxMessage(
         tenant_id=tenant_id,
@@ -998,6 +1060,7 @@ def queue_outbound_message(
             'body': body,
             'message_type': message_type,
             'template': template,
+            'interactive': interactive,
             'metadata': metadata or {},
         },
         retry_count=0,
@@ -1124,6 +1187,19 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
                 template_name=template['name'],
                 language=template.get('language', 'pt_BR'),
                 components=template.get('components', []),
+            )
+        elif payload.get('message_type') == 'interactive_list' and isinstance(payload.get('interactive'), dict):
+            interactive = payload.get('interactive') or {}
+            response = provider.send_interactive_list_message(
+                phone_number_id=account.phone_number_id,
+                access_token=account.access_token_encrypted,
+                to=payload['to'],
+                body=payload.get('body', ''),
+                button_title=str(interactive.get('button_title') or 'Opções'),
+                rows=interactive.get('rows') if isinstance(interactive.get('rows'), list) else [],
+                section_title=str(interactive.get('section_title') or 'Escolha uma opção'),
+                header_text=str(interactive.get('header_text') or '').strip() or None,
+                footer_text=str(interactive.get('footer_text') or '').strip() or None,
             )
         else:
             response = provider.send_text_message(
