@@ -262,7 +262,7 @@ def test_inbound_contact_data_updates_patient_profile(seeded_db, db_session):
     assert "dados_cadastrais_capturados" in (refreshed_conversation.tags or [])
 
 
-def test_period_reply_creates_appointment_automatically(seeded_db, db_session):
+def test_period_reply_suggests_slots_without_auto_booking(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
     _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
@@ -293,6 +293,9 @@ def test_period_reply_creates_appointment_automatically(seeded_db, db_session):
         inbound_message_id=inbound.id,
     )
 
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "slots_suggested"
+
     appointment = db_session.scalar(
         select(Appointment).where(
             Appointment.tenant_id == tenant_id,
@@ -300,12 +303,7 @@ def test_period_reply_creates_appointment_automatically(seeded_db, db_session):
             Appointment.origin == "ai_autoresponder",
         )
     )
-
-    assert result["status"] == "responded"
-    assert result.get("scheduling_mode") == "appointment_created"
-    assert appointment is not None
-    assert appointment.status == "agendada"
-    assert appointment.confirmation_status == "confirmada"
+    assert appointment is None
 
 
 def test_idempotency_prevents_double_auto_reply(seeded_db, db_session):

@@ -1874,7 +1874,7 @@ def _build_scheduling_operation_response(
             procedure_type=procedure_type,
             period=period,
             requested_date=requested_date,
-            max_slots=1,
+            max_slots=slot_limit,
         )
         if not slots:
             period_label = {
@@ -1922,16 +1922,18 @@ def _build_scheduling_operation_response(
                     "procedure_type": procedure_type,
                 },
             }
-        selected_slot = slots[0]
-        return _appointment_response_from_selected_slot(
-            db,
-            conversation=conversation,
-            unit=unit,
-            selected_slot=selected_slot,
-            procedure_type=procedure_type,
-            period=period,
-            requested_date=requested_date,
-        )
+        labels = [slot["label"] for slot in slots]
+        return {
+            "mode": "slots_suggested",
+            "response_text": _format_slots_options_message(slots=slots, period=period, procedure_type=procedure_type),
+            "metadata": {
+                "slots": labels,
+                "unit_id": str(unit.id),
+                "requested_date": requested_date.isoformat() if requested_date else None,
+                "procedure_type": procedure_type,
+                "period": period,
+            },
+        }
 
     slots = _list_available_slots(
         db,
