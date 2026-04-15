@@ -108,6 +108,23 @@ def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: st
     return conversation, inbound_message
 
 
+def _append_inbound_message(db_session, *, tenant_id, conversation_id, inbound_text: str):
+    inbound_message = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body=inbound_text,
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(inbound_message)
+    db_session.commit()
+    return inbound_message
+
+
 def test_handoff_when_patient_requests_human(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
@@ -502,6 +519,53 @@ def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_s
     assert "|" not in (outbound.body or "")
 
 
+def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horario para clareamento dental?",
+    )
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="1",
+    )
+    confirm_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=confirm_inbound.id,
+    )
+
+    assert confirm_result["status"] == "responded"
+    assert confirm_result.get("scheduling_mode") in {"appointment_created", "appointment_already_created"}
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+    assert appointment is not None
+    assert appointment.status == "agendada"
+    assert appointment.confirmation_status == "confirmada"
+
+
 def test_scheduling_uses_inbound_procedure_over_context(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
@@ -716,3 +780,49 @@ def test_llm_response_removes_redundant_name_greeting(monkeypatch, seeded_db, db
     normalized_body = (outbound.body or "").lower().replace("á", "a")
     assert "ola, guilherme" not in normalized_body
     assert normalized_body.startswith("ola!")
+
+
+def test_llm_cannot_claim_appointment_confirmation_without_persistence(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quanto custa o clareamento?",
+    )
+
+    from app.services import ai_autoresponder_service
+
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "classify_intent",
+        lambda *args, **kwargs: {"output": '{"intent":"informacao","confidence":0.99}'},
+    )
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "run_llm_task",
+        lambda *args, **kwargs: {
+            "output": "Agendado o clareamento para quarta-feira, 15/04 as 09:00.",
+            "metadata": {"provider": "mock", "model": "mock"},
+        },
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+    )
+    assert result["status"] == "responded"
+    assert outbound is not None
+    assert "Agendado" not in (outbound.body or "")

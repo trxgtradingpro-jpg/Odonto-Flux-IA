@@ -175,6 +175,15 @@ FOLLOWUP_AVAILABILITY_KEYWORDS = (
     "disponiveis",
     "disponíveis",
 )
+BOOKING_CONFIRMATION_KEYWORDS = (
+    "pode agendar",
+    "pode marcar",
+    "pode confirmar",
+    "confirmo",
+    "quero confirmar",
+    "fechado",
+    "pode fechar",
+)
 
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
@@ -897,6 +906,45 @@ def _is_followup_availability_request(*, inbound_text: str, context: str) -> boo
     return normalized_inbound in {"sim", "pode", "ok", "certo", "isso", "pode sim"}
 
 
+def _extract_option_index_choice(text: str) -> int | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"\d{1,2}", raw):
+        return int(raw)
+
+    normalized = _normalize_for_match(raw)
+    match = re.search(r"\b(?:opcao|opção)\s*(\d{1,2})\b", normalized)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _extract_time_choice(text: str) -> str | None:
+    match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text or "")
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _extract_time_mentions(text: str) -> list[str]:
+    values: list[str] = []
+    for match in re.finditer(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text or ""):
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        token = f"{hour:02d}:{minute:02d}"
+        if token not in values:
+            values.append(token)
+    return values
+
+
+def _is_booking_confirmation_message(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    return any(keyword in normalized for keyword in BOOKING_CONFIRMATION_KEYWORDS)
+
+
 def _format_slots_options_message(
     *,
     slots: list[dict[str, Any]],
@@ -1348,6 +1396,295 @@ def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
     return "Avaliação odontológica"
 
 
+def _latest_ai_outbound_message(db: Session, *, conversation: Conversation) -> Message | None:
+    return db.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.OUTBOUND.value,
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+
+
+def _appointment_response_from_selected_slot(
+    db: Session,
+    *,
+    conversation: Conversation,
+    unit: Unit,
+    selected_slot: dict[str, Any],
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+) -> dict[str, Any]:
+    if not conversation.patient_id:
+        return {
+            "mode": "missing_patient",
+            "response_text": (
+                "Consegui localizar horários, mas preciso confirmar seu cadastro. "
+                "Vou transferir para o atendimento humano finalizar o agendamento."
+            ),
+            "metadata": {"period": period, "reason": "missing_patient"},
+        }
+
+    existing = db.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == conversation.tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.unit_id == unit.id,
+            Appointment.starts_at == selected_slot["starts_at_utc"],
+            Appointment.status.in_(["agendada", "confirmada", "reagendada"]),
+        )
+    )
+    if existing:
+        return {
+            "mode": "appointment_already_created",
+            "response_text": (
+                "Esse horário já está confirmado na sua agenda.\n"
+                f"• Horário: {selected_slot['label']}\n"
+                f"• Unidade: {unit.name}"
+            ),
+            "metadata": {
+                "appointment_id": str(existing.id),
+                "period": period,
+                "selected_slot": selected_slot["label"],
+                "starts_at_utc": existing.starts_at.isoformat(),
+                "unit_id": str(unit.id),
+                "requested_date": requested_date.isoformat() if requested_date else None,
+                "professional_id": (
+                    str(selected_slot.get("professional_id"))
+                    if selected_slot.get("professional_id")
+                    else None
+                ),
+                "professional_name": selected_slot.get("professional_name"),
+            },
+        }
+
+    appointment = Appointment(
+        tenant_id=conversation.tenant_id,
+        patient_id=conversation.patient_id,
+        unit_id=unit.id,
+        professional_id=selected_slot.get("professional_id"),
+        procedure_type=procedure_type,
+        starts_at=selected_slot["starts_at_utc"],
+        ends_at=selected_slot["ends_at_utc"],
+        origin="ai_autoresponder",
+        notes="Agendamento automático via WhatsApp/IA.",
+        status="agendada",
+        confirmation_status="confirmada",
+        confirmed_at=datetime.now(UTC),
+    )
+    db.add(appointment)
+    db.flush()
+
+    db.add(
+        AppointmentEvent(
+            tenant_id=conversation.tenant_id,
+            appointment_id=appointment.id,
+            event_type="created",
+            to_status=appointment.status,
+            metadata_json={
+                "origin": "ai_autoresponder",
+                "channel": "whatsapp",
+                "period_preference": period,
+            },
+            created_by_user_id=None,
+        )
+    )
+
+    tags = set(conversation.tags or [])
+    tags.add("agendamento_confirmado_ia")
+    conversation.tags = sorted(tags)
+    db.add(conversation)
+
+    db.add(
+        MessageEvent(
+            tenant_id=conversation.tenant_id,
+            event_type="ai_appointment_created",
+            payload={
+                "conversation_id": str(conversation.id),
+                "appointment_id": str(appointment.id),
+                "unit_id": str(unit.id),
+                "professional_id": (
+                    str(selected_slot.get("professional_id"))
+                    if selected_slot.get("professional_id")
+                    else None
+                ),
+                "starts_at": appointment.starts_at.isoformat(),
+                "origin": "ai_autoresponder",
+            },
+        )
+    )
+
+    return {
+        "mode": "appointment_created",
+        "response_text": (
+            "Agendamento confirmado com sucesso.\n"
+            f"• Horário: {selected_slot['label']}\n"
+            f"• Unidade: {unit.name}"
+            + (
+                f"\n• Profissional: {selected_slot['professional_name']}"
+                if selected_slot.get("professional_name")
+                else ""
+            )
+            + "\nSe precisar, posso reagendar."
+        ),
+        "metadata": {
+            "appointment_id": str(appointment.id),
+            "period": period,
+            "selected_slot": selected_slot["label"],
+            "starts_at_utc": appointment.starts_at.isoformat(),
+            "unit_id": str(unit.id),
+            "requested_date": requested_date.isoformat() if requested_date else None,
+            "professional_id": (
+                str(selected_slot.get("professional_id"))
+                if selected_slot.get("professional_id")
+                else None
+            ),
+            "professional_name": selected_slot.get("professional_name"),
+        },
+    }
+
+
+def _try_followup_slot_confirmation(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_text: str,
+    unit: Unit,
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+    operation_timezone: ZoneInfo,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    option_index = _extract_option_index_choice(inbound_text)
+    explicit_time = _extract_time_choice(inbound_text)
+    confirmation_only = _is_booking_confirmation_message(inbound_text)
+
+    if option_index is None and not explicit_time and not confirmation_only:
+        return None
+
+    latest_ai_message = _latest_ai_outbound_message(db, conversation=conversation)
+    latest_text = str(latest_ai_message.body or "") if latest_ai_message else ""
+    normalized_latest = _normalize_for_match(latest_text)
+    if not latest_text:
+        return None
+    if "horario" not in normalized_latest and "hora" not in normalized_latest and "1)" not in latest_text:
+        return None
+
+    selected_date = requested_date or _extract_requested_date_from_text(text=latest_text, timezone=operation_timezone)
+    selected_period = period or _detect_period_preference(latest_text)
+    slot_limit = 12 if selected_date else 6
+    slots = _list_available_slots(
+        db,
+        tenant_id=conversation.tenant_id,
+        unit_id=unit.id,
+        config=config,
+        procedure_type=procedure_type,
+        period=selected_period,
+        requested_date=selected_date,
+        max_slots=slot_limit,
+    )
+    if not slots:
+        date_hint = f" para {selected_date.strftime('%d/%m')}" if selected_date else ""
+        return {
+            "mode": "no_slots_general",
+            "response_text": (
+                f"No momento não encontrei horários livres na agenda{date_hint} para este serviço. "
+                "Posso te avisar assim que abrir uma vaga ou te direcionar para atendimento humano."
+            ),
+            "metadata": {
+                "reason": "no_slots_general",
+                "requested_date": selected_date.isoformat() if selected_date else None,
+                "procedure_type": procedure_type,
+            },
+        }
+
+    chosen_slot: dict[str, Any] | None = None
+    if option_index is not None:
+        if 1 <= option_index <= len(slots):
+            chosen_slot = slots[option_index - 1]
+        else:
+            return {
+                "mode": "invalid_slot_option",
+                "response_text": (
+                    f"Não encontrei a opção {option_index} nesta agenda.\n"
+                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=procedure_type)}"
+                ),
+                "metadata": {
+                    "reason": "invalid_slot_option",
+                    "option_index": option_index,
+                    "requested_date": selected_date.isoformat() if selected_date else None,
+                },
+            }
+
+    if not chosen_slot and explicit_time:
+        chosen_slot = next(
+            (
+                slot
+                for slot in slots
+                if slot["starts_at_local"].strftime("%H:%M") == explicit_time
+            ),
+            None,
+        )
+        if not chosen_slot:
+            return {
+                "mode": "requested_time_not_available",
+                "response_text": (
+                    f"No momento não encontrei vaga às {explicit_time}.\n"
+                    f"{_format_slots_options_message(slots=slots[:3], period=selected_period, procedure_type=procedure_type)}"
+                ),
+                "metadata": {
+                    "reason": "requested_time_not_available",
+                    "requested_time": explicit_time,
+                    "requested_date": selected_date.isoformat() if selected_date else None,
+                },
+            }
+
+    if not chosen_slot and confirmation_only:
+        recent_times = _extract_time_mentions(latest_text)
+        if len(recent_times) == 1:
+            chosen_slot = next(
+                (
+                    slot
+                    for slot in slots
+                    if slot["starts_at_local"].strftime("%H:%M") == recent_times[0]
+                ),
+                None,
+            )
+        elif len(slots) == 1:
+            chosen_slot = slots[0]
+        else:
+            return {
+                "mode": "confirmation_requires_selection",
+                "response_text": (
+                    "Perfeito. Para concluir, me diga o número da opção desejada "
+                    "ou informe a hora exata (ex.: 09:00)."
+                ),
+                "metadata": {
+                    "reason": "confirmation_requires_selection",
+                    "requested_date": selected_date.isoformat() if selected_date else None,
+                },
+            }
+
+    if not chosen_slot:
+        return None
+
+    return _appointment_response_from_selected_slot(
+        db,
+        conversation=conversation,
+        unit=unit,
+        selected_slot=chosen_slot,
+        procedure_type=procedure_type,
+        period=selected_period,
+        requested_date=selected_date,
+    )
+
+
 def _build_scheduling_operation_response(
     db: Session,
     *,
@@ -1361,7 +1698,12 @@ def _build_scheduling_operation_response(
         inbound_text=inbound_text,
         context=context,
     )
-    if not period and not explicit_availability_request:
+    has_followup_confirmation = (
+        _extract_option_index_choice(inbound_text) is not None
+        or _extract_time_choice(inbound_text) is not None
+        or _is_booking_confirmation_message(inbound_text)
+    )
+    if not period and not explicit_availability_request and not has_followup_confirmation:
         return None
     if period and not _is_scheduling_context(inbound_text=inbound_text, context=context) and not explicit_availability_request:
         return None
@@ -1382,6 +1724,20 @@ def _build_scheduling_operation_response(
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
     requested_date_label = requested_date.strftime("%d/%m") if requested_date else None
     slot_limit = 12 if requested_date else 3
+
+    followup_response = _try_followup_slot_confirmation(
+        db,
+        conversation=conversation,
+        inbound_text=inbound_text,
+        unit=unit,
+        procedure_type=procedure_type,
+        period=period,
+        requested_date=requested_date,
+        operation_timezone=operation_timezone,
+        config=config,
+    )
+    if followup_response:
+        return followup_response
 
     if period:
         slots = _list_available_slots(
@@ -1436,103 +1792,19 @@ def _build_scheduling_operation_response(
                     "period": period,
                     "reason": "no_slots_for_period",
                     "requested_date": requested_date.isoformat() if requested_date else None,
+                    "procedure_type": procedure_type,
                 },
             }
-        if not conversation.patient_id:
-            return {
-                "mode": "missing_patient",
-                "response_text": (
-                    "Consegui localizar horários, mas preciso confirmar seu cadastro. "
-                    "Vou transferir para o atendimento humano finalizar o agendamento."
-                ),
-                "metadata": {"period": period, "reason": "missing_patient"},
-            }
-
         selected_slot = slots[0]
-        appointment = Appointment(
-            tenant_id=conversation.tenant_id,
-            patient_id=conversation.patient_id,
-            unit_id=unit.id,
-            professional_id=selected_slot.get("professional_id"),
+        return _appointment_response_from_selected_slot(
+            db,
+            conversation=conversation,
+            unit=unit,
+            selected_slot=selected_slot,
             procedure_type=procedure_type,
-            starts_at=selected_slot["starts_at_utc"],
-            ends_at=selected_slot["ends_at_utc"],
-            origin="ai_autoresponder",
-            notes="Agendamento automático via WhatsApp/IA.",
-            status="agendada",
-            confirmation_status="confirmada",
-            confirmed_at=datetime.now(UTC),
+            period=period,
+            requested_date=requested_date,
         )
-        db.add(appointment)
-        db.flush()
-
-        db.add(
-            AppointmentEvent(
-                tenant_id=conversation.tenant_id,
-                appointment_id=appointment.id,
-                event_type="created",
-                to_status=appointment.status,
-                metadata_json={
-                    "origin": "ai_autoresponder",
-                    "channel": "whatsapp",
-                    "period_preference": period,
-                },
-                created_by_user_id=None,
-            )
-        )
-
-        tags = set(conversation.tags or [])
-        tags.add("agendamento_confirmado_ia")
-        conversation.tags = sorted(tags)
-        db.add(conversation)
-
-        db.add(
-            MessageEvent(
-                tenant_id=conversation.tenant_id,
-                event_type="ai_appointment_created",
-                payload={
-                    "conversation_id": str(conversation.id),
-                    "appointment_id": str(appointment.id),
-                    "unit_id": str(unit.id),
-                    "professional_id": (
-                        str(selected_slot.get("professional_id"))
-                        if selected_slot.get("professional_id")
-                        else None
-                    ),
-                    "starts_at": appointment.starts_at.isoformat(),
-                    "origin": "ai_autoresponder",
-                },
-            )
-        )
-
-        return {
-            "mode": "appointment_created",
-            "response_text": (
-                "Agendamento confirmado com sucesso.\n"
-                f"• Horário: {selected_slot['label']}\n"
-                f"• Unidade: {unit.name}"
-                + (
-                    f"\n• Profissional: {selected_slot['professional_name']}"
-                    if selected_slot.get("professional_name")
-                    else ""
-                )
-                + "\nSe precisar, posso reagendar."
-            ),
-            "metadata": {
-                "appointment_id": str(appointment.id),
-                "period": period,
-                "selected_slot": selected_slot["label"],
-                "starts_at_utc": appointment.starts_at.isoformat(),
-                "unit_id": str(unit.id),
-                "requested_date": requested_date.isoformat() if requested_date else None,
-                "professional_id": (
-                    str(selected_slot.get("professional_id"))
-                    if selected_slot.get("professional_id")
-                    else None
-                ),
-                "professional_name": selected_slot.get("professional_name"),
-            },
-        }
 
     slots = _list_available_slots(
         db,
@@ -1566,6 +1838,8 @@ def _build_scheduling_operation_response(
             "slots": labels,
             "unit_id": str(unit.id),
             "requested_date": requested_date.isoformat() if requested_date else None,
+            "procedure_type": procedure_type,
+            "period": period,
         },
     }
 
@@ -1620,6 +1894,17 @@ def _prompt_for_autoresponder(
 
 def _reason_label(reason: str) -> str:
     return REASON_LABELS.get(reason, reason.replace("_", " ").capitalize())
+
+
+def _looks_like_appointment_confirmation(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if "agendado" in normalized or "agendada" in normalized:
+        return True
+    if "agendamento confirmado" in normalized:
+        return True
+    if "consulta confirmada" in normalized:
+        return True
+    return False
 
 
 def _build_metadata(*, config: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2255,6 +2540,12 @@ def process_inbound_message(
             reason="clinical_request_blocked",
             handoff=True,
             guardrail=generated_clinical_pattern,
+        )
+
+    if _looks_like_appointment_confirmation(generated_response):
+        generated_response = (
+            "Posso concluir seu agendamento agora. "
+            "Me informe o número da opção escolhida ou a data e hora exatas (ex.: 16/04 às 09:00)."
         )
 
     try:
