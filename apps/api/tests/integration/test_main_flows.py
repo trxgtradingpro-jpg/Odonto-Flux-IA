@@ -108,6 +108,67 @@ def test_meta_webhook_interactive_list_reply_creates_inbound_message(client, aut
     assert (message.payload or {}).get('interactive_reply', {}).get('id') == 'slot_3'
 
 
+def test_messages_endpoint_returns_most_recent_page(client, auth_headers, seeded_db, db_session):
+    payload = {
+        'entry': [
+            {
+                'changes': [
+                    {
+                        'value': {
+                            'metadata': {'phone_number_id': 'phone_tenant_a'},
+                            'messages': [
+                                {
+                                    'id': 'wamid.msg.recent.001',
+                                    'from': '11988887777',
+                                    'timestamp': '1712518010',
+                                    'text': {'body': 'Oi, conversa para teste de paginação.'},
+                                    'type': 'text',
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511988887777'))
+    assert patient is not None
+    conversation = db_session.scalar(select(Conversation).where(Conversation.patient_id == patient.id))
+    assert conversation is not None
+
+    for index in range(230):
+        db_session.add(
+            Message(
+                tenant_id=seeded_db['tenant_a'].id,
+                conversation_id=conversation.id,
+                direction='outbound',
+                channel='whatsapp',
+                sender_type='ai',
+                body=f'bulk-{index}',
+                message_type='text',
+                payload={},
+                status='sent',
+            )
+        )
+    db_session.commit()
+
+    list_response = client.get(
+        '/api/v1/messages',
+        params={'conversation_id': str(conversation.id), 'limit': 200, 'offset': 0},
+        headers=auth_headers['owner_a'],
+    )
+    assert list_response.status_code == 200
+    data = list_response.json()['data']
+    assert len(data) == 200
+    bodies = [item['body'] for item in data]
+    assert 'bulk-229' in bodies
+    assert 'bulk-0' not in bodies
+
+
 def test_tenant_isolation_on_patient_list(client, auth_headers):
     payload_a = {'full_name': 'Paciente A', 'phone': '11990000001'}
     payload_b = {'full_name': 'Paciente B', 'phone': '11990000002'}

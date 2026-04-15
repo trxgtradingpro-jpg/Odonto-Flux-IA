@@ -210,9 +210,9 @@ BOOKING_WIZARD_CONFIRM_NO_KEYWORDS = (
 )
 BOOKING_WIZARD_DEFAULT_SERVICES = (
     "Avaliação odontológica",
-    "Limpeza odontológica",
     "Clareamento dental",
     "Instalação de lentes",
+    "Limpeza odontológica",
     "Reabilitação estética",
 )
 
@@ -1249,11 +1249,12 @@ def _wizard_build_service_step_response(
 
     rows: list[dict[str, str]] = []
     for index, service in enumerate(services, start=1):
+        service_short = service[:24]
         rows.append(
             {
                 "id": f"svc_{index}",
-                "title": f"Opção {index}",
-                "description": service[:72],
+                "title": service_short,
+                "description": "Toque para escolher",
             }
         )
 
@@ -1301,12 +1302,13 @@ def _wizard_build_unit_step_response(
     rows: list[dict[str, str]] = []
     for index, unit in enumerate(units, start=1):
         option_id = f"unit_{index}"
+        unit_short = unit.name[:24]
         unit_choices.append({"id": str(unit.id), "name": unit.name, "option_id": option_id})
         rows.append(
             {
                 "id": option_id,
-                "title": f"Opção {index}",
-                "description": unit.name[:72],
+                "title": unit_short,
+                "description": "Unidade disponível",
             }
         )
 
@@ -1415,10 +1417,11 @@ def _wizard_build_day_step_response(
 
     rows: list[dict[str, str]] = []
     for index, day_choice in enumerate(day_choices, start=1):
+        day_short = day_choice["label"].split(",")[0][:24]
         rows.append(
             {
                 "id": day_choice["id"],
-                "title": f"Opção {index}",
+                "title": day_short,
                 "description": day_choice["label"][:72],
             }
         )
@@ -1550,10 +1553,11 @@ def _wizard_build_time_step_response(
 
     rows: list[dict[str, str]] = []
     for index, choice in enumerate(slot_choices, start=1):
+        time_short = str(choice.get("time") or f"Opção {index}")[:24]
         rows.append(
             {
                 "id": str(choice.get("id") or f"time_{index}"),
-                "title": f"Opção {index}",
+                "title": time_short,
                 "description": str(choice.get("label") or "")[:72],
             }
         )
@@ -1589,7 +1593,7 @@ def _wizard_build_confirm_step_response(
 ) -> dict[str, Any]:
     slot_label = str(selected_slot_choice.get("label") or "")
     rows = [
-        {"id": "confirm_yes", "title": "Confirmar", "description": "Agendar este horário"},
+        {"id": "confirm_yes", "title": "Confirmar agora", "description": "Agendar este horário"},
         {"id": "confirm_no", "title": "Trocar horário", "description": "Voltar para horários"},
     ]
     return {

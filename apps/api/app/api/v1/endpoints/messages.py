@@ -32,7 +32,12 @@ def list_messages(
         Message.conversation_id == conversation_id,
     )
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.execute(stmt.order_by(Message.created_at.asc()).offset(offset).limit(limit)).scalars().all()
+    # Retorna sempre a página mais recente de mensagens para evitar "sumiço" em
+    # conversas longas (quando há mais de 200 registros).
+    recent_rows = db.execute(
+        stmt.order_by(Message.created_at.desc()).offset(offset).limit(limit)
+    ).scalars().all()
+    rows = list(reversed(recent_rows))
     return {'data': [MessageOutput.model_validate(item, from_attributes=True).model_dump() for item in rows], 'meta': {'total': total, 'limit': limit, 'offset': offset}}
 
 
