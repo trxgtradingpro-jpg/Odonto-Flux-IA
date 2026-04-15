@@ -525,6 +525,194 @@ def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_s
     assert "|" not in (outbound.body or "")
 
 
+def test_booking_wizard_button_flow_creates_appointment(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar",
+    )
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+    assert first_result.get("scheduling_mode") == "booking_wizard_service_select"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert latest_outbound is not None
+    assert latest_outbound.message_type == "interactive_list"
+    service_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert service_rows
+    service_option_id = service_rows[0]["id"]
+
+    second_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": service_option_id, "title": "Opção 1"}},
+    )
+    second_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=second_inbound.id,
+    )
+    assert second_result["status"] == "responded"
+    assert second_result.get("scheduling_mode") == "booking_wizard_unit_select"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    unit_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert unit_rows
+    unit_option_id = unit_rows[0]["id"]
+
+    third_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": unit_option_id, "title": "Opção 1"}},
+    )
+    third_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=third_inbound.id,
+    )
+    assert third_result["status"] == "responded"
+    assert third_result.get("scheduling_mode") == "booking_wizard_day_select"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    day_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert day_rows
+    day_option_id = day_rows[0]["id"]
+
+    fourth_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": day_option_id, "title": "Opção 1"}},
+    )
+    fourth_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=fourth_inbound.id,
+    )
+    assert fourth_result["status"] == "responded"
+    assert fourth_result.get("scheduling_mode") == "booking_wizard_time_select"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    time_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert time_rows
+    time_option_id = time_rows[0]["id"]
+
+    fifth_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": time_option_id, "title": "Opção 1"}},
+    )
+    fifth_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=fifth_inbound.id,
+    )
+    assert fifth_result["status"] == "responded"
+    assert fifth_result.get("scheduling_mode") == "booking_wizard_confirm"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    confirm_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert confirm_rows
+    confirm_option_id = confirm_rows[0]["id"]
+
+    confirm_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Confirmar",
+        message_type="interactive_button_reply",
+        payload={"interactive_reply": {"id": confirm_option_id, "title": "Confirmar"}},
+    )
+    confirm_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=confirm_inbound.id,
+    )
+    assert confirm_result["status"] == "responded"
+    assert confirm_result.get("scheduling_mode") in {"appointment_created", "appointment_already_created"}
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+    assert appointment is not None
+    assert appointment.status == "agendada"
+    assert appointment.confirmation_status == "confirmada"
+
+
 def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

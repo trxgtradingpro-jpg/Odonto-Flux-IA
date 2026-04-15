@@ -207,7 +207,23 @@ def test_webhook_inbound_triggers_ai_decision_and_outbox_dispatch(
     def _fake_send_text_message(self, *, phone_number_id, access_token, to, body):
         return {'messages': [{'id': 'wamid.out.ai.001'}], 'contacts': [{'wa_id': to}]}
 
+    def _fake_send_interactive_list_message(
+        self,
+        *,
+        phone_number_id,
+        access_token,
+        to,
+        body,
+        button_title,
+        rows,
+        section_title=None,
+        header_text=None,
+        footer_text=None,
+    ):
+        return {'messages': [{'id': 'wamid.out.ai.001'}], 'contacts': [{'wa_id': to}]}
+
     monkeypatch.setattr(WhatsAppCloudProvider, 'send_text_message', _fake_send_text_message)
+    monkeypatch.setattr(WhatsAppCloudProvider, 'send_interactive_list_message', _fake_send_interactive_list_message)
 
     result = process_outbox_batch(db_session, batch_size=20)
     assert result['sent'] >= 1

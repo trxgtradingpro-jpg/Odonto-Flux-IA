@@ -184,6 +184,37 @@ BOOKING_CONFIRMATION_KEYWORDS = (
     "fechado",
     "pode fechar",
 )
+BOOKING_WIZARD_FORCE_KEYWORDS = (
+    "quero agendar",
+    "quero marcar",
+    "agendar consulta",
+)
+BOOKING_WIZARD_CONFIRM_YES_KEYWORDS = (
+    "confirm_yes",
+    "sim",
+    "confirmar",
+    "confirmo",
+    "pode confirmar",
+    "pode agendar",
+    "ok",
+    "fechado",
+)
+BOOKING_WIZARD_CONFIRM_NO_KEYWORDS = (
+    "confirm_no",
+    "nao",
+    "não",
+    "trocar",
+    "outro horario",
+    "outro horário",
+    "rever",
+)
+BOOKING_WIZARD_DEFAULT_SERVICES = (
+    "Avaliação odontológica",
+    "Limpeza odontológica",
+    "Clareamento dental",
+    "Instalação de lentes",
+    "Reabilitação estética",
+)
 
 REASON_LABELS = {
     "disabled_global": "Modo IA desativado no tenant.",
@@ -1013,10 +1044,43 @@ def _format_slots_options_message(
 
 def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, Any]) -> dict[str, Any] | None:
     mode = str(scheduling_response.get("mode") or "").strip()
+    metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+
+    if mode.startswith("booking_wizard_"):
+        rows_raw = metadata.get("rows")
+        if not isinstance(rows_raw, list):
+            return None
+        rows: list[dict[str, str]] = []
+        for row in rows_raw[:10]:
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("id") or "").strip()[:200]
+            row_title = str(row.get("title") or "").strip()[:24]
+            row_description = str(row.get("description") or "").strip()[:72]
+            if not row_id or not row_title:
+                continue
+            item = {"id": row_id, "title": row_title}
+            if row_description:
+                item["description"] = row_description
+            rows.append(item)
+        if not rows:
+            return None
+        return {
+            "button_title": str(metadata.get("button_title") or "Opções"),
+            "section_title": str(metadata.get("section_title") or "Escolha uma opção"),
+            "header_text": str(metadata.get("header_text") or "Agendamento"),
+            "body_text": str(
+                metadata.get("body_text")
+                or scheduling_response.get("response_text")
+                or "Selecione uma opção para continuar."
+            ),
+            "footer_text": str(metadata.get("footer_text") or "Use os botões para continuar."),
+            "rows": rows,
+        }
+
     if mode not in {"slots_suggested", "no_slots_for_period_with_alternatives"}:
         return None
 
-    metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
     slots_raw = metadata.get("slots")
     if not isinstance(slots_raw, list):
         return None
@@ -1047,6 +1111,923 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
         "footer_text": "Você também pode digitar o número da opção.",
         "rows": rows,
     }
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Message | None:
+    for message in _recent_ai_outbound_messages(db, conversation=conversation, limit=30):
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        mode = str(payload.get("mode") or "").strip()
+        if mode.startswith("booking_wizard_"):
+            return message
+    return None
+
+
+def _extract_wizard_selection_token(*, inbound_message: Message, inbound_text: str) -> str:
+    payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
+    interactive_reply = payload.get("interactive_reply") if isinstance(payload.get("interactive_reply"), dict) else {}
+    for key in ("id", "title", "description"):
+        value = str(interactive_reply.get(key) or "").strip()
+        if value:
+            return value
+    return str(inbound_text or "").strip()
+
+
+def _wizard_choice_index_from_token(token: str, *, prefix: str) -> int | None:
+    raw = str(token or "").strip()
+    if not raw:
+        return None
+    normalized = _normalize_for_match(raw)
+    match = re.search(rf"\b{re.escape(prefix)}[_-]?(\d{{1,2}})\b", normalized)
+    if match:
+        return int(match.group(1))
+    return _extract_option_index_choice(raw)
+
+
+def _wizard_has_explicit_service_inbound(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    keywords = (
+        "limpeza",
+        "profilax",
+        "clareamento",
+        "lente",
+        "implante",
+        "ortodont",
+        "avaliacao",
+        "avaliação",
+        "reabilit",
+        "raspagem",
+    )
+    return any(keyword in normalized for keyword in keywords)
+
+
+def _wizard_active_units(db: Session, *, tenant_id: UUID) -> list[Unit]:
+    return db.execute(
+        select(Unit)
+        .where(
+            Unit.tenant_id == tenant_id,
+            Unit.is_active.is_(True),
+        )
+        .order_by(Unit.created_at.asc())
+    ).scalars().all()
+
+
+def _wizard_service_options(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    preferred_unit_id: UUID | None = None,
+) -> list[str]:
+    stmt = select(Professional).where(
+        Professional.tenant_id == tenant_id,
+        Professional.is_active.is_(True),
+    )
+    if preferred_unit_id:
+        stmt = stmt.where(Professional.unit_id == preferred_unit_id)
+    professionals = db.execute(stmt).scalars().all()
+
+    seen: set[str] = set()
+    options: list[str] = []
+    for professional in professionals:
+        for procedure in professional.procedures or []:
+            if not isinstance(procedure, str):
+                continue
+            label = re.sub(r"\s+", " ", procedure.strip())
+            if len(label) < 3:
+                continue
+            normalized = _normalize_for_match(label)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            options.append(label)
+
+    if not options:
+        options = list(BOOKING_WIZARD_DEFAULT_SERVICES)
+
+    for default_label in BOOKING_WIZARD_DEFAULT_SERVICES:
+        normalized = _normalize_for_match(default_label)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        options.append(default_label)
+
+    return options[:10]
+
+
+def _wizard_build_service_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    intro_text: str | None,
+    period: str | None,
+    requested_date: date | None,
+    preferred_service: str | None = None,
+) -> dict[str, Any]:
+    services = _wizard_service_options(
+        db,
+        tenant_id=conversation.tenant_id,
+        preferred_unit_id=conversation.unit_id,
+    )
+    preferred_normalized = _normalize_for_match(preferred_service or "")
+    if preferred_normalized:
+        for index, service in enumerate(services):
+            if _normalize_for_match(service) == preferred_normalized:
+                if index > 0:
+                    services.insert(0, services.pop(index))
+                break
+
+    rows: list[dict[str, str]] = []
+    for index, service in enumerate(services, start=1):
+        rows.append(
+            {
+                "id": f"svc_{index}",
+                "title": f"Opção {index}",
+                "description": service[:72],
+            }
+        )
+
+    return {
+        "mode": "booking_wizard_service_select",
+        "response_text": (
+            intro_text
+            or "Para agendar com botões, escolha primeiro o serviço desejado."
+        ),
+        "metadata": {
+            "wizard_step": "service",
+            "services": services,
+            "period": period,
+            "requested_date": requested_date.isoformat() if requested_date else None,
+            "rows": rows,
+            "button_title": "Serviços",
+            "section_title": "Escolha o serviço",
+            "header_text": "Agendamento",
+            "body_text": "Selecione o serviço para continuar.",
+            "footer_text": "Depois eu mostro clínica, dia e horário.",
+        },
+    }
+
+
+def _wizard_build_unit_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+) -> dict[str, Any]:
+    units = _wizard_active_units(db, tenant_id=conversation.tenant_id)
+    if not units:
+        return {
+            "mode": "no_unit_available",
+            "response_text": (
+                "No momento não consegui acessar a agenda da unidade. "
+                "Vou encaminhar para o atendimento humano confirmar seu horário."
+            ),
+            "metadata": {"reason": "no_unit_available"},
+        }
+
+    unit_choices: list[dict[str, str]] = []
+    rows: list[dict[str, str]] = []
+    for index, unit in enumerate(units, start=1):
+        option_id = f"unit_{index}"
+        unit_choices.append({"id": str(unit.id), "name": unit.name, "option_id": option_id})
+        rows.append(
+            {
+                "id": option_id,
+                "title": f"Opção {index}",
+                "description": unit.name[:72],
+            }
+        )
+
+    return {
+        "mode": "booking_wizard_unit_select",
+        "response_text": f"Perfeito. Agora escolha a clínica/unidade para {procedure_type}.",
+        "metadata": {
+            "wizard_step": "unit",
+            "procedure_type": procedure_type,
+            "period": period,
+            "requested_date": requested_date.isoformat() if requested_date else None,
+            "units": unit_choices,
+            "rows": rows,
+            "button_title": "Clínicas",
+            "section_title": "Escolha a clínica",
+            "header_text": "Agendamento",
+            "body_text": "Selecione a clínica para seguir.",
+            "footer_text": "Em seguida escolhemos dia e horário.",
+        },
+    }
+
+
+def _wizard_collect_day_choices(
+    db: Session,
+    *,
+    conversation: Conversation,
+    unit_id: UUID,
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+    operation_timezone: ZoneInfo,
+    config: dict[str, Any],
+) -> list[dict[str, str]]:
+    now_local_date = datetime.now(UTC).astimezone(operation_timezone).date()
+    candidates: list[date] = []
+    if requested_date and requested_date >= now_local_date:
+        candidates.append(requested_date)
+
+    for offset in range(0, 14):
+        candidate = now_local_date + timedelta(days=offset)
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    day_choices: list[dict[str, str]] = []
+    for candidate in candidates:
+        slots = _list_available_slots(
+            db,
+            tenant_id=conversation.tenant_id,
+            unit_id=unit_id,
+            config=config,
+            procedure_type=procedure_type,
+            period=period,
+            requested_date=candidate,
+            max_slots=1,
+        )
+        if not slots:
+            continue
+        first_slot = slots[0]
+        day_choices.append(
+            {
+                "id": f"day_{candidate.isoformat()}",
+                "date": candidate.isoformat(),
+                "label": f"{_weekday_label_pt(candidate.weekday())}, {candidate.strftime('%d/%m')}",
+                "description": f"A partir de {first_slot['starts_at_local'].strftime('%H:%M')}",
+            }
+        )
+        if len(day_choices) >= 7:
+            break
+    return day_choices
+
+
+def _wizard_build_day_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    unit: Unit,
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+    operation_timezone: ZoneInfo,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    day_choices = _wizard_collect_day_choices(
+        db,
+        conversation=conversation,
+        unit_id=unit.id,
+        procedure_type=procedure_type,
+        period=period,
+        requested_date=requested_date,
+        operation_timezone=operation_timezone,
+        config=config,
+    )
+    if not day_choices:
+        return {
+            "mode": "no_slots_general",
+            "response_text": (
+                "No momento não encontrei dias com horários disponíveis para este serviço. "
+                "Posso te direcionar para atendimento humano."
+            ),
+            "metadata": {
+                "reason": "no_slots_general",
+                "procedure_type": procedure_type,
+                "unit_id": str(unit.id),
+            },
+        }
+
+    rows: list[dict[str, str]] = []
+    for index, day_choice in enumerate(day_choices, start=1):
+        rows.append(
+            {
+                "id": day_choice["id"],
+                "title": f"Opção {index}",
+                "description": day_choice["label"][:72],
+            }
+        )
+
+    return {
+        "mode": "booking_wizard_day_select",
+        "response_text": f"Ótimo. Escolha o dia para {procedure_type} na {unit.name}.",
+        "metadata": {
+            "wizard_step": "day",
+            "procedure_type": procedure_type,
+            "unit_id": str(unit.id),
+            "unit_name": unit.name,
+            "period": period,
+            "requested_date": requested_date.isoformat() if requested_date else None,
+            "day_choices": day_choices,
+            "rows": rows,
+            "button_title": "Dias",
+            "section_title": "Escolha o dia",
+            "header_text": "Agendamento",
+            "body_text": "Selecione o dia desejado.",
+            "footer_text": "Depois você escolhe o horário.",
+        },
+    }
+
+
+def _wizard_collect_time_choices(
+    db: Session,
+    *,
+    conversation: Conversation,
+    unit: Unit,
+    procedure_type: str,
+    period: str | None,
+    selected_date: date,
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    slots = _list_available_slots(
+        db,
+        tenant_id=conversation.tenant_id,
+        unit_id=unit.id,
+        config=config,
+        procedure_type=procedure_type,
+        period=period,
+        requested_date=selected_date,
+        max_slots=10,
+    )
+    choices: list[dict[str, Any]] = []
+    for index, slot in enumerate(slots, start=1):
+        choices.append(
+            {
+                "id": f"time_{index}",
+                "label": slot["label"],
+                "starts_at_utc": slot["starts_at_utc"].isoformat(),
+                "ends_at_utc": slot["ends_at_utc"].isoformat(),
+                "starts_at_local": slot["starts_at_local"].isoformat(),
+                "professional_id": (
+                    str(slot.get("professional_id"))
+                    if slot.get("professional_id")
+                    else None
+                ),
+                "professional_name": slot.get("professional_name"),
+                "time": slot["starts_at_local"].strftime("%H:%M"),
+            }
+        )
+    return choices
+
+
+def _wizard_slot_from_choice(choice: dict[str, Any]) -> dict[str, Any] | None:
+    starts_at_utc_raw = choice.get("starts_at_utc")
+    ends_at_utc_raw = choice.get("ends_at_utc")
+    starts_at_local_raw = choice.get("starts_at_local")
+    if not isinstance(starts_at_utc_raw, str) or not isinstance(ends_at_utc_raw, str) or not isinstance(starts_at_local_raw, str):
+        return None
+
+    try:
+        starts_at_utc = datetime.fromisoformat(starts_at_utc_raw)
+        ends_at_utc = datetime.fromisoformat(ends_at_utc_raw)
+        starts_at_local = datetime.fromisoformat(starts_at_local_raw)
+    except ValueError:
+        return None
+
+    if starts_at_utc.tzinfo is None:
+        starts_at_utc = starts_at_utc.replace(tzinfo=UTC)
+    if ends_at_utc.tzinfo is None:
+        ends_at_utc = ends_at_utc.replace(tzinfo=UTC)
+
+    return {
+        "starts_at_utc": starts_at_utc,
+        "ends_at_utc": ends_at_utc,
+        "starts_at_local": starts_at_local,
+        "label": str(choice.get("label") or ""),
+        "professional_id": choice.get("professional_id"),
+        "professional_name": choice.get("professional_name"),
+    }
+
+
+def _wizard_build_time_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    unit: Unit,
+    procedure_type: str,
+    period: str | None,
+    selected_date: date,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    slot_choices = _wizard_collect_time_choices(
+        db,
+        conversation=conversation,
+        unit=unit,
+        procedure_type=procedure_type,
+        period=period,
+        selected_date=selected_date,
+        config=config,
+    )
+    if not slot_choices:
+        return {
+            "mode": "no_slots_general",
+            "response_text": (
+                f"No momento não encontrei horários disponíveis para {selected_date.strftime('%d/%m')}. "
+                "Posso verificar outro dia para você."
+            ),
+            "metadata": {
+                "reason": "no_slots_general",
+                "requested_date": selected_date.isoformat(),
+                "procedure_type": procedure_type,
+                "unit_id": str(unit.id),
+            },
+        }
+
+    rows: list[dict[str, str]] = []
+    for index, choice in enumerate(slot_choices, start=1):
+        rows.append(
+            {
+                "id": str(choice.get("id") or f"time_{index}"),
+                "title": f"Opção {index}",
+                "description": str(choice.get("label") or "")[:72],
+            }
+        )
+
+    return {
+        "mode": "booking_wizard_time_select",
+        "response_text": f"Perfeito. Escolha o horário para {selected_date.strftime('%d/%m')}.",
+        "metadata": {
+            "wizard_step": "time",
+            "procedure_type": procedure_type,
+            "unit_id": str(unit.id),
+            "unit_name": unit.name,
+            "period": period,
+            "requested_date": selected_date.isoformat(),
+            "slot_choices": slot_choices,
+            "rows": rows,
+            "button_title": "Horários",
+            "section_title": "Escolha o horário",
+            "header_text": "Agendamento",
+            "body_text": "Selecione o horário desejado.",
+            "footer_text": "No próximo passo você confirma.",
+        },
+    }
+
+
+def _wizard_build_confirm_step_response(
+    *,
+    procedure_type: str,
+    unit: Unit,
+    selected_date: date,
+    period: str | None,
+    selected_slot_choice: dict[str, Any],
+) -> dict[str, Any]:
+    slot_label = str(selected_slot_choice.get("label") or "")
+    rows = [
+        {"id": "confirm_yes", "title": "Confirmar", "description": "Agendar este horário"},
+        {"id": "confirm_no", "title": "Trocar horário", "description": "Voltar para horários"},
+    ]
+    return {
+        "mode": "booking_wizard_confirm",
+        "response_text": (
+            "Confirma este agendamento?\n"
+            f"• Serviço: {procedure_type}\n"
+            f"• Unidade: {unit.name}\n"
+            f"• Horário: {slot_label}"
+        ),
+        "metadata": {
+            "wizard_step": "confirm",
+            "procedure_type": procedure_type,
+            "unit_id": str(unit.id),
+            "unit_name": unit.name,
+            "period": period,
+            "requested_date": selected_date.isoformat(),
+            "selected_slot": selected_slot_choice,
+            "rows": rows,
+            "button_title": "Confirmar",
+            "section_title": "Confirmar agendamento",
+            "header_text": "Confirmação",
+            "body_text": "Confirme ou troque o horário.",
+            "footer_text": "Escolha uma opção.",
+        },
+    }
+
+
+def _wizard_parse_confirmation_choice(token: str) -> bool | None:
+    normalized = _normalize_for_match(token or "")
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_CONFIRM_YES_KEYWORDS):
+        return True
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_CONFIRM_NO_KEYWORDS):
+        return False
+    return None
+
+
+def _wizard_select_service(token: str, services: list[str]) -> str | None:
+    if not services:
+        return None
+    index = _wizard_choice_index_from_token(token, prefix="svc")
+    if index is not None and 1 <= index <= len(services):
+        return services[index - 1]
+
+    normalized = _normalize_for_match(token)
+    if not normalized:
+        return None
+    for service in services:
+        service_norm = _normalize_for_match(service)
+        if normalized == service_norm or normalized in service_norm:
+            return service
+    return None
+
+
+def _wizard_select_unit(token: str, units: list[dict[str, str]]) -> dict[str, str] | None:
+    if not units:
+        return None
+    index = _wizard_choice_index_from_token(token, prefix="unit")
+    if index is not None and 1 <= index <= len(units):
+        return units[index - 1]
+
+    normalized = _normalize_for_match(token)
+    if not normalized:
+        return None
+    for unit in units:
+        option_id = _normalize_for_match(str(unit.get("option_id") or ""))
+        unit_name = _normalize_for_match(str(unit.get("name") or ""))
+        unit_id = _normalize_for_match(str(unit.get("id") or ""))
+        if normalized in {option_id, unit_id}:
+            return unit
+        if unit_name and (normalized == unit_name or normalized in unit_name):
+            return unit
+    return None
+
+
+def _wizard_select_day(
+    token: str,
+    day_choices: list[dict[str, str]],
+    *,
+    operation_timezone: ZoneInfo,
+) -> date | None:
+    if not day_choices:
+        return None
+    index = _wizard_choice_index_from_token(token, prefix="day")
+    if index is not None and 1 <= index <= len(day_choices):
+        return _parse_iso_date(day_choices[index - 1].get("date"))
+
+    normalized = _normalize_for_match(token)
+    direct_match = re.search(r"\bday[_-](\d{4}-\d{2}-\d{2})\b", normalized)
+    if direct_match:
+        return _parse_iso_date(direct_match.group(1))
+
+    date_from_text = _extract_requested_date_from_text(text=token, timezone=operation_timezone)
+    if date_from_text:
+        return date_from_text
+    return None
+
+
+def _wizard_select_time_choice(token: str, slot_choices: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not slot_choices:
+        return None
+
+    index = _wizard_choice_index_from_token(token, prefix="time")
+    if index is None:
+        index = _extract_option_index_choice(token)
+    if index is not None and 1 <= index <= len(slot_choices):
+        return slot_choices[index - 1]
+
+    explicit_time = _extract_time_choice(token)
+    if explicit_time:
+        for choice in slot_choices:
+            if str(choice.get("time") or "") == explicit_time:
+                return choice
+
+    normalized = _normalize_for_match(token)
+    for choice in slot_choices:
+        option_id = _normalize_for_match(str(choice.get("id") or ""))
+        label = _normalize_for_match(str(choice.get("label") or ""))
+        if normalized in {option_id, label}:
+            return choice
+    return None
+
+
+def _try_booking_wizard_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_message: Message,
+    inbound_text: str,
+    context: str,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    operation_timezone = _resolve_operation_timezone(config)
+    inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
+    has_interactive_reply = isinstance(inbound_payload.get("interactive_reply"), dict)
+    selection_token = _extract_wizard_selection_token(
+        inbound_message=inbound_message,
+        inbound_text=inbound_text,
+    )
+    normalized_inbound = _normalize_for_match(inbound_text)
+    period = _detect_period_preference(inbound_text)
+    requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
+    has_scheduling_keywords = any(keyword in normalized_inbound for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS))
+    force_wizard = any(keyword in normalized_inbound for keyword in BOOKING_WIZARD_FORCE_KEYWORDS)
+    selection_like = (
+        _extract_option_index_choice(inbound_text) is not None
+        or _extract_time_choice(inbound_text) is not None
+        or bool(re.search(r"\b(?:svc|unit|day|time|confirm)[_-]", _normalize_for_match(selection_token)))
+    )
+
+    latest_wizard = _latest_ai_wizard_message(db, conversation=conversation)
+    if latest_wizard:
+        if not (
+            has_interactive_reply
+            or selection_like
+            or has_scheduling_keywords
+            or _is_booking_confirmation_message(inbound_text)
+            or force_wizard
+        ):
+            return None
+
+        if _has_intervening_new_scheduling_request(
+            db,
+            conversation=conversation,
+            anchor_message=latest_wizard,
+            current_inbound_message=inbound_message,
+            operation_timezone=operation_timezone,
+        ):
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="Vamos reiniciar para evitar erro. Escolha o serviço:",
+                period=period,
+                requested_date=requested_date,
+            )
+
+        latest_payload = latest_wizard.payload if isinstance(latest_wizard.payload, dict) else {}
+        latest_mode = str(latest_payload.get("mode") or "").strip()
+        latest_scheduling = latest_payload.get("scheduling") if isinstance(latest_payload.get("scheduling"), dict) else {}
+        carried_period_raw = str(latest_scheduling.get("period") or "").strip().lower()
+        carried_period = period or (carried_period_raw if carried_period_raw in {"morning", "afternoon", "evening"} else None)
+        carried_requested_date = requested_date or _parse_iso_date(latest_scheduling.get("requested_date"))
+
+        if latest_mode == "booking_wizard_service_select":
+            services = latest_scheduling.get("services") if isinstance(latest_scheduling.get("services"), list) else []
+            services = [str(item).strip() for item in services if str(item or "").strip()]
+            selected_service = _wizard_select_service(selection_token, services)
+            if not selected_service:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Não entendi a opção de serviço. Escolha um item da lista:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+            return _wizard_build_unit_step_response(
+                db,
+                conversation=conversation,
+                procedure_type=selected_service,
+                period=carried_period,
+                requested_date=carried_requested_date,
+            )
+
+        if latest_mode == "booking_wizard_unit_select":
+            units_meta = latest_scheduling.get("units") if isinstance(latest_scheduling.get("units"), list) else []
+            selected_unit_meta = _wizard_select_unit(selection_token, units_meta)
+            if not selected_unit_meta:
+                selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or _infer_procedure_type(
+                    inbound_text=inbound_text,
+                    context=context,
+                )
+                return _wizard_build_unit_step_response(
+                    db,
+                    conversation=conversation,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+
+            selected_unit_id_raw = selected_unit_meta.get("id")
+            selected_unit_id = UUID(selected_unit_id_raw) if isinstance(selected_unit_id_raw, str) else None
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == selected_unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            ) if selected_unit_id else None
+            if not unit:
+                return {
+                    "mode": "no_unit_available",
+                    "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
+                    "metadata": {"reason": "no_unit_available"},
+                }
+
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            return _wizard_build_day_step_response(
+                db,
+                conversation=conversation,
+                unit=unit,
+                procedure_type=selected_service,
+                period=carried_period,
+                requested_date=carried_requested_date,
+                operation_timezone=operation_timezone,
+                config=config,
+            )
+
+        if latest_mode == "booking_wizard_day_select":
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            unit_id_raw = latest_scheduling.get("unit_id")
+            try:
+                unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
+            except (TypeError, ValueError):
+                unit_id = None
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            )
+            if not unit:
+                return {
+                    "mode": "no_unit_available",
+                    "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
+                    "metadata": {"reason": "no_unit_available"},
+                }
+
+            day_choices = latest_scheduling.get("day_choices") if isinstance(latest_scheduling.get("day_choices"), list) else []
+            selected_day = _wizard_select_day(
+                selection_token,
+                day_choices,
+                operation_timezone=operation_timezone,
+            )
+            if not selected_day:
+                return _wizard_build_day_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                    operation_timezone=operation_timezone,
+                    config=config,
+                )
+
+            return _wizard_build_time_step_response(
+                db,
+                conversation=conversation,
+                unit=unit,
+                procedure_type=selected_service,
+                period=carried_period,
+                selected_date=selected_day,
+                config=config,
+            )
+
+        if latest_mode == "booking_wizard_time_select":
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            unit_id_raw = latest_scheduling.get("unit_id")
+            try:
+                unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
+            except (TypeError, ValueError):
+                unit_id = None
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            )
+            if not unit:
+                return {
+                    "mode": "no_unit_available",
+                    "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
+                    "metadata": {"reason": "no_unit_available"},
+                }
+
+            selected_day = _parse_iso_date(latest_scheduling.get("requested_date")) or requested_date
+            if not selected_day:
+                return _wizard_build_day_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                    operation_timezone=operation_timezone,
+                    config=config,
+                )
+
+            slot_choices = latest_scheduling.get("slot_choices") if isinstance(latest_scheduling.get("slot_choices"), list) else []
+            selected_choice = _wizard_select_time_choice(selection_token, slot_choices)
+            if not selected_choice:
+                return _wizard_build_time_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    selected_date=selected_day,
+                    config=config,
+                )
+
+            return _wizard_build_confirm_step_response(
+                procedure_type=selected_service,
+                unit=unit,
+                selected_date=selected_day,
+                period=carried_period,
+                selected_slot_choice=selected_choice,
+            )
+
+        if latest_mode == "booking_wizard_confirm":
+            confirmation_choice = _wizard_parse_confirmation_choice(selection_token)
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            unit_id_raw = latest_scheduling.get("unit_id")
+            try:
+                unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
+            except (TypeError, ValueError):
+                unit_id = None
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            )
+            selected_day = _parse_iso_date(latest_scheduling.get("requested_date"))
+            selected_slot_choice = latest_scheduling.get("selected_slot") if isinstance(latest_scheduling.get("selected_slot"), dict) else None
+
+            if not unit or not selected_day or not selected_slot_choice:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Vamos reiniciar o agendamento. Escolha o serviço:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+
+            if confirmation_choice is True:
+                selected_slot = _wizard_slot_from_choice(selected_slot_choice)
+                if not selected_slot:
+                    return _wizard_build_time_step_response(
+                        db,
+                        conversation=conversation,
+                        unit=unit,
+                        procedure_type=selected_service,
+                        period=carried_period,
+                        selected_date=selected_day,
+                        config=config,
+                    )
+                return _appointment_response_from_selected_slot(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    selected_slot=selected_slot,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    requested_date=selected_day,
+                )
+
+            if confirmation_choice is False:
+                return _wizard_build_time_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    selected_date=selected_day,
+                    config=config,
+                )
+
+            return _wizard_build_confirm_step_response(
+                procedure_type=selected_service,
+                unit=unit,
+                selected_date=selected_day,
+                period=carried_period,
+                selected_slot_choice=selected_slot_choice,
+            )
+
+    if not has_scheduling_keywords and not force_wizard:
+        return None
+    if _extract_option_index_choice(inbound_text) is not None or _extract_time_choice(inbound_text) is not None:
+        return None
+
+    has_explicit_service = _wizard_has_explicit_service_inbound(inbound_text)
+    explicit_availability_request = _is_explicit_availability_request(inbound_text)
+    if not force_wizard and (has_explicit_service or explicit_availability_request or requested_date or period):
+        return None
+
+    preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context) if has_explicit_service else None
+    return _wizard_build_service_step_response(
+        db,
+        conversation=conversation,
+        intro_text=None,
+        period=period,
+        requested_date=requested_date,
+        preferred_service=preferred_service,
+    )
 
 
 def _known_contact_names(db: Session, *, conversation: Conversation) -> list[str]:
@@ -1877,6 +2858,17 @@ def _build_scheduling_operation_response(
     context: str,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
+    wizard_response = _try_booking_wizard_response(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+        inbound_text=inbound_text,
+        context=context,
+        config=config,
+    )
+    if wizard_response:
+        return wizard_response
+
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     period = _detect_period_preference(inbound_text)
     explicit_availability_request = _is_explicit_availability_request(inbound_text) or _is_followup_availability_request(
