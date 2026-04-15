@@ -792,6 +792,25 @@ def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_se
     assert appointment is not None
     assert appointment.status == "agendada"
     assert appointment.confirmation_status == "confirmada"
+    db_session.refresh(conversation)
+    assert conversation.status == "finalizada"
+
+    post_menu_message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+            Message.message_type == "interactive_buttons",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert post_menu_message is not None
+    assert (post_menu_message.payload or {}).get("mode") == "post_appointment_menu"
+    post_menu_buttons = (((post_menu_message.payload or {}).get("interactive") or {}).get("buttons") or [])
+    assert post_menu_buttons
+    assert any((item.get("id") or "") == "post_menu_close" for item in post_menu_buttons)
 
 
 def test_followup_interactive_reply_option_confirms_and_persists_appointment(seeded_db, db_session):
@@ -1227,6 +1246,30 @@ def test_greeting_boa_noite_does_not_trigger_period_scheduling(seeded_db, db_ses
     normalized = (outbound.body or "").lower()
     assert "encontrei estes horários" not in normalized
     assert "encontrei estes horarios" not in normalized
+
+
+def test_close_conversation_request_sets_conversation_closed(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Encerrar conversa",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    assert result["status"] == "ignored"
+    assert result["reason"] == "conversation_closed_by_user"
+    assert conversation.status == "finalizada"
 
 
 def test_scheduling_typo_claramente_dentario_maps_to_clareamento(seeded_db, db_session):

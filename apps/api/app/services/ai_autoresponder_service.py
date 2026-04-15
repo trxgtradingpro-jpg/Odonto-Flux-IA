@@ -100,6 +100,15 @@ HUMAN_REQUEST_PATTERNS = [
     "transferir para atendente",
 ]
 
+CLOSE_CONVERSATION_PATTERNS = [
+    "encerrar conversa",
+    "encerrar atendimento",
+    "finalizar conversa",
+    "finalizar atendimento",
+    "encerrar chat",
+    "finalizar chat",
+]
+
 URGENCY_PATTERNS = [
     "urgente",
     "emergencia",
@@ -244,6 +253,7 @@ REASON_LABELS = {
     "response_sent": "Resposta automática enviada para fila.",
     "llm_error": "Falha no provedor de IA, atendimento humano acionado.",
     "dispatch_error": "Falha ao enfileirar mensagem automática.",
+    "conversation_closed_by_user": "Conversa encerrada a pedido do paciente.",
 }
 
 DECISION_RESPONDED = "responded"
@@ -1174,6 +1184,25 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
         "footer_text": "Você também pode digitar o número da opção.",
         "rows": rows,
     }
+
+
+def _build_post_appointment_menu_payload() -> tuple[str, dict[str, Any]]:
+    text_body = (
+        "Atendimento encerrado automaticamente após a confirmação do agendamento.\n"
+        "Se quiser continuar, escolha uma opção no menu abaixo."
+    )
+    interactive_payload: dict[str, Any] = {
+        "interactive_type": "buttons",
+        "header_text": "Próximos passos",
+        "body_text": "Seu agendamento foi concluído. Como você prefere continuar?",
+        "footer_text": "Você pode responder por botão ou texto.",
+        "buttons": [
+            {"id": "post_menu_rebook", "title": "Novo agendamento"},
+            {"id": "post_menu_human", "title": "Falar com atendente"},
+            {"id": "post_menu_close", "title": "Encerrar conversa"},
+        ],
+    }
+    return text_body, interactive_payload
 
 
 def _parse_iso_date(value: Any) -> date | None:
@@ -3567,6 +3596,17 @@ def process_inbound_message(
         inbound_text=inbound_text,
     )
 
+    close_request = _lookup_pattern(inbound_text, CLOSE_CONVERSATION_PATTERNS)
+    if close_request:
+        conversation.status = "finalizada"
+        db.add(conversation)
+        return finish_without_reply(
+            final_decision=DECISION_IGNORED,
+            reason="conversation_closed_by_user",
+            handoff=False,
+            guardrail=close_request,
+        )
+
     human_request = _lookup_pattern(inbound_text, HUMAN_REQUEST_PATTERNS)
     if human_request:
         return finish_without_reply(
@@ -3705,6 +3745,54 @@ def process_inbound_message(
             outbound_message.payload = outbound_payload
             db.add(outbound_message)
 
+            scheduling_mode = str(scheduling_response.get("mode") or "").strip()
+            post_menu_outbox = None
+            post_menu_message = None
+            if scheduling_mode in {"appointment_created", "appointment_already_created"} and conversation.channel == "whatsapp":
+                post_menu_body, post_menu_interactive = _build_post_appointment_menu_payload()
+                post_menu_message = Message(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation.id,
+                    direction=MessageDirection.OUTBOUND.value,
+                    channel=conversation.channel,
+                    sender_type="ai",
+                    body=post_menu_body,
+                    message_type="interactive_buttons",
+                    payload={
+                        "source": "ai_autoresponder",
+                        "mode": "post_appointment_menu",
+                        "reply_to_message_id": str(inbound_message.id),
+                        "interactive": post_menu_interactive,
+                    },
+                    status=MessageStatus.QUEUED.value,
+                )
+                db.add(post_menu_message)
+                db.flush()
+
+                post_menu_outbox = queue_outbound_message(
+                    db,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation.id,
+                    to=destination,
+                    body=str(post_menu_interactive.get("body_text") or post_menu_body),
+                    message_type="interactive_buttons",
+                    interactive=post_menu_interactive,
+                    metadata={
+                        "source": "ai_autoresponder",
+                        "mode": "post_appointment_menu",
+                        "inbound_message_id": str(inbound_message.id),
+                        "outbound_message_id": str(post_menu_message.id),
+                    },
+                )
+
+                post_menu_payload = post_menu_message.payload if isinstance(post_menu_message.payload, dict) else {}
+                post_menu_payload["queued_outbox_id"] = str(post_menu_outbox.id)
+                post_menu_message.payload = post_menu_payload
+                db.add(post_menu_message)
+
+                # Após concluir agendamento, encerra automaticamente a conversa atual.
+                conversation.status = "finalizada"
+
             decision = _create_decision(
                 db,
                 tenant_id=tenant_id,
@@ -3724,6 +3812,8 @@ def process_inbound_message(
                         "knowledge_context_present": False,
                         "scheduling": scheduling_response.get("metadata") or {},
                         "scheduling_mode": scheduling_response.get("mode"),
+                        "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
+                        "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
                     },
                 ),
                 outbound_message_id=outbound_message.id,
@@ -3779,6 +3869,8 @@ def process_inbound_message(
                 "reason_label": _reason_label("response_sent"),
                 "scheduling_mode": scheduling_response.get("mode"),
                 "scheduling": scheduling_response.get("metadata") or {},
+                "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
+                "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
             }
             if captured_profile:
                 payload["captured_profile"] = captured_profile
