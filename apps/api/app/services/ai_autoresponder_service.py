@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from time import perf_counter
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, or_, select
@@ -39,6 +39,7 @@ from app.services.whatsapp_service import assert_whatsapp_account_ready_for_disp
 
 AI_AUTORESPONDER_PROMPT_VERSION = "v1.1"
 INACTIVE_CONVERSATION_RESTART_MINUTES = 20
+WIZARD_STATE_EXPIRATION_MINUTES = 35
 
 AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -240,6 +241,31 @@ BOOKING_WIZARD_CONFIRM_NO_KEYWORDS = (
     "outro horario",
     "outro horário",
     "rever",
+)
+BOOKING_WIZARD_CHANGE_TIME_KEYWORDS = (
+    "confirm_change_time",
+    "trocar horario",
+    "trocar horário",
+    "mudar horario",
+    "mudar horário",
+)
+BOOKING_WIZARD_CHANGE_DAY_KEYWORDS = (
+    "confirm_change_day",
+    "trocar dia",
+    "mudar dia",
+)
+BOOKING_WIZARD_CHANGE_SERVICE_KEYWORDS = (
+    "confirm_change_service",
+    "trocar servico",
+    "trocar serviço",
+    "mudar servico",
+    "mudar serviço",
+)
+BOOKING_WIZARD_HUMAN_KEYWORDS = (
+    "confirm_human",
+    "falar com atendente",
+    "atendente",
+    "humano",
 )
 BOOKING_WIZARD_DEFAULT_SERVICES = (
     "Avaliação odontológica",
@@ -1202,7 +1228,11 @@ def _resolve_welcome_greeting_from_knowledge(knowledge_base: dict[str, Any] | No
     )
 
 
-def _build_conversation_start_welcome_response(*, intro_text: str | None = None) -> dict[str, Any]:
+def _build_conversation_start_welcome_response(
+    *,
+    intro_text: str | None = None,
+    session_token: str | None = None,
+) -> dict[str, Any]:
     rows: list[dict[str, str]] = []
     for option in WELCOME_MENU_OPTIONS:
         row = {
@@ -1214,19 +1244,9 @@ def _build_conversation_start_welcome_response(*, intro_text: str | None = None)
             row["description"] = description[:72]
         rows.append(row)
 
-    return {
-        "mode": "welcome_message_start",
-        "response_text": (
-            intro_text
-            or (
-                "Oi! Que bom te ver por aqui.\n"
-                "Sou a assistente virtual da clínica.\n"
-                "Para começar, escolha uma opção no menu abaixo:"
-            )
-        ),
-        "metadata": {
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "reason": "welcome_message_start",
-            "wizard_step": "start_menu",
             "rows": rows,
             "button_title": "Opções",
             "section_title": "Menu inicial",
@@ -1241,6 +1261,21 @@ def _build_conversation_start_welcome_response(*, intro_text: str | None = None)
             ),
             "footer_text": "Toque em uma opção para continuar.",
         },
+        session_token=session_token,
+        step="start_menu",
+    )
+
+    return {
+        "mode": "welcome_message_start",
+        "response_text": (
+            intro_text
+            or (
+                "Oi! Que bom te ver por aqui.\n"
+                "Sou a assistente virtual da clínica.\n"
+                "Para começar, escolha uma opção no menu abaixo:"
+            )
+        ),
+        "metadata": metadata,
     }
 
 
@@ -1414,7 +1449,7 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
 
     procedure = str(metadata.get("procedure_type") or "atendimento").strip()
     rows: list[dict[str, str]] = []
-    for index, slot_label in enumerate(slots[:10], start=1):
+    for index, slot_label in enumerate(slots[:7], start=1):
         rows.append(
             {
                 "id": f"slot_{index}",
@@ -1422,6 +1457,9 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
                 "description": slot_label[:72],
             }
         )
+    rows.append({"id": "slot_change_day", "title": "Trocar dia", "description": "Ver outros dias"})
+    rows.append({"id": "slot_change_service", "title": "Trocar serviço", "description": "Escolher outro serviço"})
+    rows.append({"id": "slot_handoff", "title": "Falar com atendente", "description": "Encaminhar para humano"})
 
     if not rows:
         return None
@@ -1466,6 +1504,113 @@ def _parse_iso_date(value: Any) -> date | None:
         return date.fromisoformat(raw[:10])
     except ValueError:
         return None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _wizard_new_session_token() -> str:
+    return uuid4().hex[:14]
+
+
+def _wizard_step_from_mode(mode: str) -> str | None:
+    mapping = {
+        "welcome_message_start": "start_menu",
+        "booking_wizard_service_select": "service",
+        "booking_wizard_unit_select": "unit",
+        "booking_wizard_day_select": "day",
+        "booking_wizard_time_select": "time",
+        "booking_wizard_confirm": "confirm",
+        "post_appointment_menu": "post_menu",
+    }
+    return mapping.get(str(mode or "").strip())
+
+
+def _wizard_expected_reply_prefixes(step: str) -> tuple[str, ...]:
+    mapping = {
+        "service": ("svc_",),
+        "unit": ("unit_",),
+        "day": ("day_",),
+        "time": ("time_", "time_change_", "menu_human"),
+        "confirm": ("confirm_",),
+        "start_menu": ("menu_",),
+        "post_menu": ("post_menu_",),
+    }
+    return mapping.get(step, tuple())
+
+
+def _wizard_extract_reply_id(payload: dict[str, Any]) -> str:
+    interactive_reply = payload.get("interactive_reply") if isinstance(payload.get("interactive_reply"), dict) else {}
+    return str(interactive_reply.get("id") or "").strip()
+
+
+def _wizard_reply_is_valid_for_step(*, step: str, reply_id: str) -> bool:
+    normalized = _normalize_for_match(reply_id)
+    if not normalized:
+        return True
+    if normalized in {"menu_human", "post_menu_rebook", "post_menu_human", "post_menu_close"}:
+        return True
+
+    prefixes = _wizard_expected_reply_prefixes(step)
+    if not prefixes:
+        return True
+    return normalized.startswith(prefixes)
+
+
+def _wizard_metadata_with_session(
+    *,
+    metadata: dict[str, Any],
+    session_token: str | None,
+    step: str,
+) -> dict[str, Any]:
+    token = str(session_token or "").strip() or _wizard_new_session_token()
+    now_utc = datetime.now(UTC)
+    output = dict(metadata)
+    output["session_token"] = token
+    output["wizard_step"] = step
+    output["step_created_at"] = now_utc.isoformat()
+    output["step_expires_at"] = (now_utc + timedelta(minutes=WIZARD_STATE_EXPIRATION_MINUTES)).isoformat()
+    output["step_ttl_minutes"] = WIZARD_STATE_EXPIRATION_MINUTES
+    return output
+
+
+def _wizard_session_token_from_message(message: Message | None) -> str | None:
+    if not message or not isinstance(message.payload, dict):
+        return None
+    scheduling = message.payload.get("scheduling") if isinstance(message.payload.get("scheduling"), dict) else {}
+    token = str(scheduling.get("session_token") or "").strip()
+    return token or None
+
+
+def _wizard_session_is_expired(message: Message | None) -> bool:
+    if not message:
+        return False
+
+    now_utc = datetime.now(UTC)
+    if message.created_at:
+        anchor_created_at = message.created_at if message.created_at.tzinfo else message.created_at.replace(tzinfo=UTC)
+        if (now_utc - anchor_created_at).total_seconds() / 60.0 > WIZARD_STATE_EXPIRATION_MINUTES:
+            return True
+
+    if not isinstance(message.payload, dict):
+        return False
+    scheduling = message.payload.get("scheduling") if isinstance(message.payload.get("scheduling"), dict) else {}
+    expires_at = _parse_iso_datetime(scheduling.get("step_expires_at"))
+    if expires_at and expires_at <= now_utc:
+        return True
+    return False
 
 
 def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Message | None:
@@ -1579,6 +1724,7 @@ def _wizard_build_service_step_response(
     period: str | None,
     requested_date: date | None,
     preferred_service: str | None = None,
+    session_token: str | None = None,
 ) -> dict[str, Any]:
     services = _wizard_service_options(
         db,
@@ -1604,14 +1750,8 @@ def _wizard_build_service_step_response(
             }
         )
 
-    return {
-        "mode": "booking_wizard_service_select",
-        "response_text": (
-            intro_text
-            or "Para agendar com botões, escolha primeiro o serviço desejado."
-        ),
-        "metadata": {
-            "wizard_step": "service",
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "services": services,
             "period": period,
             "requested_date": requested_date.isoformat() if requested_date else None,
@@ -1621,7 +1761,19 @@ def _wizard_build_service_step_response(
             "header_text": "Agendamento",
             "body_text": "Selecione o serviço para continuar.",
             "footer_text": "Depois eu mostro clínica, dia e horário.",
+            "preferred_service": preferred_service,
         },
+        session_token=session_token,
+        step="service",
+    )
+
+    return {
+        "mode": "booking_wizard_service_select",
+        "response_text": (
+            intro_text
+            or "Para agendar com botões, escolha primeiro o serviço desejado."
+        ),
+        "metadata": metadata,
     }
 
 
@@ -1632,6 +1784,7 @@ def _wizard_build_unit_step_response(
     procedure_type: str,
     period: str | None,
     requested_date: date | None,
+    session_token: str | None = None,
 ) -> dict[str, Any]:
     units = _wizard_active_units(db, tenant_id=conversation.tenant_id)
     if not units:
@@ -1657,12 +1810,11 @@ def _wizard_build_unit_step_response(
                 "description": "Unidade disponível",
             }
         )
+    rows.append({"id": "unit_change_service", "title": "Trocar serviço", "description": "Escolher outro serviço"})
+    rows.append({"id": "menu_human", "title": "Falar com atendente", "description": "Encaminhar para humano"})
 
-    return {
-        "mode": "booking_wizard_unit_select",
-        "response_text": f"Perfeito. Agora escolha a clínica/unidade para {procedure_type}.",
-        "metadata": {
-            "wizard_step": "unit",
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "procedure_type": procedure_type,
             "period": period,
             "requested_date": requested_date.isoformat() if requested_date else None,
@@ -1674,6 +1826,14 @@ def _wizard_build_unit_step_response(
             "body_text": "Selecione a clínica para seguir.",
             "footer_text": "Em seguida escolhemos dia e horário.",
         },
+        session_token=session_token,
+        step="unit",
+    )
+
+    return {
+        "mode": "booking_wizard_unit_select",
+        "response_text": f"Perfeito. Agora escolha a clínica/unidade para {procedure_type}.",
+        "metadata": metadata,
     }
 
 
@@ -1736,6 +1896,7 @@ def _wizard_build_day_step_response(
     requested_date: date | None,
     operation_timezone: ZoneInfo,
     config: dict[str, Any],
+    session_token: str | None = None,
 ) -> dict[str, Any]:
     day_choices = _wizard_collect_day_choices(
         db,
@@ -1771,12 +1932,11 @@ def _wizard_build_day_step_response(
                 "description": day_choice["label"][:72],
             }
         )
+    rows.append({"id": "day_change_service", "title": "Trocar serviço", "description": "Escolher outro serviço"})
+    rows.append({"id": "menu_human", "title": "Falar com atendente", "description": "Encaminhar para humano"})
 
-    return {
-        "mode": "booking_wizard_day_select",
-        "response_text": f"Ótimo. Escolha o dia para {procedure_type} na {unit.name}.",
-        "metadata": {
-            "wizard_step": "day",
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "procedure_type": procedure_type,
             "unit_id": str(unit.id),
             "unit_name": unit.name,
@@ -1790,6 +1950,14 @@ def _wizard_build_day_step_response(
             "body_text": "Selecione o dia desejado.",
             "footer_text": "Depois você escolhe o horário.",
         },
+        session_token=session_token,
+        step="day",
+    )
+
+    return {
+        "mode": "booking_wizard_day_select",
+        "response_text": f"Ótimo. Escolha o dia para {procedure_type} na {unit.name}.",
+        "metadata": metadata,
     }
 
 
@@ -1872,6 +2040,7 @@ def _wizard_build_time_step_response(
     period: str | None,
     selected_date: date,
     config: dict[str, Any],
+    session_token: str | None = None,
 ) -> dict[str, Any]:
     slot_choices = _wizard_collect_time_choices(
         db,
@@ -1897,8 +2066,9 @@ def _wizard_build_time_step_response(
             },
         }
 
+    visible_slot_choices = slot_choices[:7]
     rows: list[dict[str, str]] = []
-    for index, choice in enumerate(slot_choices, start=1):
+    for index, choice in enumerate(visible_slot_choices, start=1):
         time_short = str(choice.get("time") or f"Opção {index}")[:24]
         rows.append(
             {
@@ -1907,18 +2077,18 @@ def _wizard_build_time_step_response(
                 "description": str(choice.get("label") or "")[:72],
             }
         )
+    rows.append({"id": "time_change_day", "title": "Trocar dia", "description": "Selecionar outro dia"})
+    rows.append({"id": "time_change_service", "title": "Trocar serviço", "description": "Selecionar outro serviço"})
+    rows.append({"id": "menu_human", "title": "Falar com atendente", "description": "Encaminhar para humano"})
 
-    return {
-        "mode": "booking_wizard_time_select",
-        "response_text": f"Perfeito. Escolha o horário para {selected_date.strftime('%d/%m')}.",
-        "metadata": {
-            "wizard_step": "time",
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "procedure_type": procedure_type,
             "unit_id": str(unit.id),
             "unit_name": unit.name,
             "period": period,
             "requested_date": selected_date.isoformat(),
-            "slot_choices": slot_choices,
+            "slot_choices": visible_slot_choices,
             "rows": rows,
             "button_title": "Horários",
             "section_title": "Escolha o horário",
@@ -1926,6 +2096,14 @@ def _wizard_build_time_step_response(
             "body_text": "Selecione o horário desejado.",
             "footer_text": "No próximo passo você confirma.",
         },
+        session_token=session_token,
+        step="time",
+    )
+
+    return {
+        "mode": "booking_wizard_time_select",
+        "response_text": f"Perfeito. Escolha o horário para {selected_date.strftime('%d/%m')}.",
+        "metadata": metadata,
     }
 
 
@@ -1936,22 +2114,16 @@ def _wizard_build_confirm_step_response(
     selected_date: date,
     period: str | None,
     selected_slot_choice: dict[str, Any],
+    session_token: str | None = None,
 ) -> dict[str, Any]:
     slot_label = str(selected_slot_choice.get("label") or "")
     buttons = [
         {"id": "confirm_yes", "title": "Sim"},
         {"id": "confirm_no", "title": "Não"},
+        {"id": "confirm_change_time", "title": "Trocar horário"},
     ]
-    return {
-        "mode": "booking_wizard_confirm",
-        "response_text": (
-            "Confirma este agendamento?\n"
-            f"• Serviço: {procedure_type}\n"
-            f"• Unidade: {unit.name}\n"
-            f"• Horário: {slot_label}"
-        ),
-        "metadata": {
-            "wizard_step": "confirm",
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "procedure_type": procedure_type,
             "unit_id": str(unit.id),
             "unit_name": unit.name,
@@ -1963,6 +2135,18 @@ def _wizard_build_confirm_step_response(
             "body_text": "Confirme ou troque o horário.",
             "footer_text": "Escolha uma opção.",
         },
+        session_token=session_token,
+        step="confirm",
+    )
+    return {
+        "mode": "booking_wizard_confirm",
+        "response_text": (
+            "Confirma este agendamento?\n"
+            f"• Serviço: {procedure_type}\n"
+            f"• Unidade: {unit.name}\n"
+            f"• Horário: {slot_label}"
+        ),
+        "metadata": metadata,
     }
 
 
@@ -1972,6 +2156,19 @@ def _wizard_parse_confirmation_choice(token: str) -> bool | None:
         return True
     if any(keyword in normalized for keyword in BOOKING_WIZARD_CONFIRM_NO_KEYWORDS):
         return False
+    return None
+
+
+def _wizard_parse_confirmation_action(token: str) -> str | None:
+    normalized = _normalize_for_match(token or "")
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_CHANGE_TIME_KEYWORDS):
+        return "change_time"
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_CHANGE_DAY_KEYWORDS):
+        return "change_day"
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_CHANGE_SERVICE_KEYWORDS):
+        return "change_service"
+    if any(keyword in normalized for keyword in BOOKING_WIZARD_HUMAN_KEYWORDS):
+        return "human"
     return None
 
 
@@ -2095,23 +2292,38 @@ def _build_welcome_menu_followup_buttons_response(
     header_text: str,
     body_text: str,
     reason: str,
+    session_token: str | None = None,
 ) -> dict[str, Any]:
+    tags_map = {
+        "support_selected": ["menu_suporte"],
+        "suggestion_selected": ["menu_sugestao"],
+        "complaint_selected": ["menu_reclamacao"],
+    }
+    add_tags = tags_map.get(reason, [])
+
     buttons = [
         {"id": "menu_schedule", "title": "Agendamentos"},
         {"id": "menu_services", "title": "Serviços"},
         {"id": "menu_human", "title": "Falar com atendente"},
     ]
-    return {
-        "mode": mode,
-        "response_text": body_text,
-        "metadata": {
+    metadata = _wizard_metadata_with_session(
+        metadata={
             "reason": reason,
-            "wizard_step": "start_menu_followup",
             "header_text": header_text,
             "body_text": body_text,
             "footer_text": "Você pode tocar em um botão ou escrever sua mensagem.",
             "buttons": buttons,
+            "add_tags": add_tags,
         },
+        session_token=session_token,
+        step="start_menu",
+    )
+    metadata["wizard_step"] = "start_menu_followup"
+
+    return {
+        "mode": mode,
+        "response_text": body_text,
+        "metadata": metadata,
     }
 
 
@@ -2127,6 +2339,7 @@ def _try_booking_wizard_response(
     operation_timezone = _resolve_operation_timezone(config)
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     has_interactive_reply = isinstance(inbound_payload.get("interactive_reply"), dict)
+    interactive_reply_id = _wizard_extract_reply_id(inbound_payload)
     selection_token = _extract_wizard_selection_token(
         inbound_message=inbound_message,
         inbound_text=inbound_text,
@@ -2158,6 +2371,32 @@ def _try_booking_wizard_response(
         ):
             return None
 
+        latest_payload = latest_wizard.payload if isinstance(latest_wizard.payload, dict) else {}
+        latest_mode = str(latest_payload.get("mode") or "").strip()
+        latest_scheduling = latest_payload.get("scheduling") if isinstance(latest_payload.get("scheduling"), dict) else {}
+        latest_step = _wizard_step_from_mode(latest_mode) or ""
+        latest_session_token = str(latest_scheduling.get("session_token") or "").strip() or _wizard_session_token_from_message(latest_wizard)
+
+        if _wizard_session_is_expired(latest_wizard):
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="O fluxo anterior expirou para evitar erro. Vamos começar de novo pelo serviço.",
+                period=period,
+                requested_date=requested_date,
+                preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            )
+
+        if has_interactive_reply and not _wizard_reply_is_valid_for_step(step=latest_step, reply_id=interactive_reply_id):
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="Recebi uma opção de outra etapa. Vamos reiniciar com segurança. Escolha o serviço:",
+                period=period,
+                requested_date=requested_date,
+                preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            )
+
         if _has_intervening_new_scheduling_request(
             db,
             conversation=conversation,
@@ -2171,14 +2410,30 @@ def _try_booking_wizard_response(
                 intro_text="Vamos reiniciar para evitar erro. Escolha o serviço:",
                 period=period,
                 requested_date=requested_date,
+                preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
             )
-
-        latest_payload = latest_wizard.payload if isinstance(latest_wizard.payload, dict) else {}
-        latest_mode = str(latest_payload.get("mode") or "").strip()
-        latest_scheduling = latest_payload.get("scheduling") if isinstance(latest_payload.get("scheduling"), dict) else {}
         carried_period_raw = str(latest_scheduling.get("period") or "").strip().lower()
         carried_period = period or (carried_period_raw if carried_period_raw in {"morning", "afternoon", "evening"} else None)
         carried_requested_date = requested_date or _parse_iso_date(latest_scheduling.get("requested_date"))
+        carried_service = str(latest_scheduling.get("procedure_type") or "").strip()
+        inbound_service = _infer_procedure_from_normalized_text(normalized_inbound)
+        if (
+            carried_service
+            and inbound_service
+            and _normalize_for_match(carried_service) != _normalize_for_match(inbound_service)
+            and (has_scheduling_keywords or force_wizard or _is_explicit_availability_request(inbound_text))
+        ):
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text=(
+                    f"Entendi que você quer {inbound_service}. "
+                    "Para evitar agendamento no serviço errado, confirme o serviço abaixo:"
+                ),
+                period=period,
+                requested_date=requested_date,
+                preferred_service=inbound_service,
+            )
 
         should_restart_from_new_intent = (
             latest_mode in {"booking_wizard_confirm", "booking_wizard_time_select", "post_appointment_menu"}
@@ -2241,7 +2496,8 @@ def _try_booking_wizard_response(
                     preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
                 )
             return _build_conversation_start_welcome_response(
-                intro_text="Escolha uma opção no menu para continuar."
+                intro_text="Escolha uma opção no menu para continuar.",
+                session_token=latest_session_token,
             )
 
         if latest_mode in {
@@ -2259,9 +2515,11 @@ def _try_booking_wizard_response(
                         intro_text="Perfeito. Escolha o serviço para continuar:",
                         period=carried_period,
                         requested_date=carried_requested_date,
+                        session_token=latest_session_token,
                     )
                 return _build_conversation_start_welcome_response(
-                    intro_text="Escolha uma opção no menu para continuar."
+                    intro_text="Escolha uma opção no menu para continuar.",
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_schedule":
@@ -2271,6 +2529,7 @@ def _try_booking_wizard_response(
                     intro_text="Perfeito. Vamos agendar com botões. Escolha o serviço:",
                     period=carried_period,
                     requested_date=carried_requested_date,
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_services":
@@ -2284,6 +2543,7 @@ def _try_booking_wizard_response(
                     period=carried_period,
                     requested_date=carried_requested_date,
                     preferred_service=preferred_service,
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_support":
@@ -2295,6 +2555,7 @@ def _try_booking_wizard_response(
                         "Descreva seu problema em uma mensagem e já encaminho para o time certo."
                     ),
                     reason="support_selected",
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_suggestion":
@@ -2306,6 +2567,7 @@ def _try_booking_wizard_response(
                         "Pode enviar os detalhes agora e nossa equipe vai analisar."
                     ),
                     reason="suggestion_selected",
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_complaint":
@@ -2317,6 +2579,7 @@ def _try_booking_wizard_response(
                         "Vou registrar e priorizar seu atendimento."
                     ),
                     reason="complaint_selected",
+                    session_token=latest_session_token,
                 )
 
             if selected_option == "menu_human":
@@ -2341,6 +2604,7 @@ def _try_booking_wizard_response(
                     intro_text="Não entendi a opção de serviço. Escolha um item da lista:",
                     period=carried_period,
                     requested_date=carried_requested_date,
+                    session_token=latest_session_token,
                 )
             return _wizard_build_unit_step_response(
                 db,
@@ -2348,9 +2612,28 @@ def _try_booking_wizard_response(
                 procedure_type=selected_service,
                 period=carried_period,
                 requested_date=carried_requested_date,
+                session_token=latest_session_token,
             )
 
         if latest_mode == "booking_wizard_unit_select":
+            if selection_token_normalized in {"unit_change_service", "trocar servico", "trocar serviço"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Escolha o serviço desejado:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+            if selection_token_normalized in {"menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
             units_meta = latest_scheduling.get("units") if isinstance(latest_scheduling.get("units"), list) else []
             selected_unit_meta = _wizard_select_unit(selection_token, units_meta)
             if not selected_unit_meta:
@@ -2364,6 +2647,7 @@ def _try_booking_wizard_response(
                     procedure_type=selected_service,
                     period=carried_period,
                     requested_date=carried_requested_date,
+                    session_token=latest_session_token,
                 )
 
             selected_unit_id_raw = selected_unit_meta.get("id")
@@ -2392,10 +2676,29 @@ def _try_booking_wizard_response(
                 requested_date=carried_requested_date,
                 operation_timezone=operation_timezone,
                 config=config,
+                session_token=latest_session_token,
             )
 
         if latest_mode == "booking_wizard_day_select":
             selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            if selection_token_normalized in {"day_change_service", "trocar servico", "trocar serviço"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Escolha o serviço desejado:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+            if selection_token_normalized in {"menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
             unit_id_raw = latest_scheduling.get("unit_id")
             try:
                 unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
@@ -2431,6 +2734,7 @@ def _try_booking_wizard_response(
                     requested_date=carried_requested_date,
                     operation_timezone=operation_timezone,
                     config=config,
+                    session_token=latest_session_token,
                 )
 
             return _wizard_build_time_step_response(
@@ -2441,10 +2745,29 @@ def _try_booking_wizard_response(
                 period=carried_period,
                 selected_date=selected_day,
                 config=config,
+                session_token=latest_session_token,
             )
 
         if latest_mode == "booking_wizard_time_select":
             selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            if selection_token_normalized in {"time_change_service", "trocar servico", "trocar serviço"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos escolher outro serviço:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+            if selection_token_normalized in {"menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
             unit_id_raw = latest_scheduling.get("unit_id")
             try:
                 unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
@@ -2463,6 +2786,18 @@ def _try_booking_wizard_response(
                     "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
                     "metadata": {"reason": "no_unit_available"},
                 }
+            if selection_token_normalized in {"time_change_day", "trocar dia", "mudar dia"}:
+                return _wizard_build_day_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                    operation_timezone=operation_timezone,
+                    config=config,
+                    session_token=latest_session_token,
+                )
 
             selected_day = _parse_iso_date(latest_scheduling.get("requested_date")) or requested_date
             if not selected_day:
@@ -2475,6 +2810,7 @@ def _try_booking_wizard_response(
                     requested_date=carried_requested_date,
                     operation_timezone=operation_timezone,
                     config=config,
+                    session_token=latest_session_token,
                 )
 
             slot_choices = latest_scheduling.get("slot_choices") if isinstance(latest_scheduling.get("slot_choices"), list) else []
@@ -2488,6 +2824,7 @@ def _try_booking_wizard_response(
                     period=carried_period,
                     selected_date=selected_day,
                     config=config,
+                    session_token=latest_session_token,
                 )
 
             return _wizard_build_confirm_step_response(
@@ -2496,10 +2833,12 @@ def _try_booking_wizard_response(
                 selected_date=selected_day,
                 period=carried_period,
                 selected_slot_choice=selected_choice,
+                session_token=latest_session_token,
             )
 
         if latest_mode == "booking_wizard_confirm":
             confirmation_choice = _wizard_parse_confirmation_choice(selection_token)
+            confirmation_action = _wizard_parse_confirmation_action(selection_token)
             selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
             unit_id_raw = latest_scheduling.get("unit_id")
             try:
@@ -2523,6 +2862,37 @@ def _try_booking_wizard_response(
                     intro_text="Vamos reiniciar o agendamento. Escolha o serviço:",
                     period=carried_period,
                     requested_date=carried_requested_date,
+                    session_token=latest_session_token,
+                )
+
+            if confirmation_action == "human":
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
+            if confirmation_action == "change_service":
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos escolher outro serviço:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                )
+            if confirmation_action in {"change_time", "change_day"}:
+                return _wizard_build_time_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    selected_date=selected_day,
+                    config=config,
+                    session_token=latest_session_token,
                 )
 
             if confirmation_choice is True:
@@ -2536,6 +2906,7 @@ def _try_booking_wizard_response(
                         period=carried_period,
                         selected_date=selected_day,
                         config=config,
+                        session_token=latest_session_token,
                     )
                 professional_id_raw = selected_slot.get("professional_id")
                 professional_id = None
@@ -2561,6 +2932,7 @@ def _try_booking_wizard_response(
                             period=carried_period,
                             selected_date=selected_day,
                             config=config,
+                            session_token=latest_session_token,
                         )
                         retry_metadata = (
                             retry_response.get("metadata")
@@ -2595,6 +2967,7 @@ def _try_booking_wizard_response(
                     period=carried_period,
                     selected_date=selected_day,
                     config=config,
+                    session_token=latest_session_token,
                 )
 
             return _wizard_build_confirm_step_response(
@@ -2603,6 +2976,7 @@ def _try_booking_wizard_response(
                 selected_date=selected_day,
                 period=carried_period,
                 selected_slot_choice=selected_slot_choice,
+                session_token=latest_session_token,
             )
 
     if not has_scheduling_keywords and not force_wizard:
@@ -3061,7 +3435,11 @@ def _procedure_mentions_in_normalized_text(normalized_text: str) -> list[str]:
         "clareamento" in normalized
         or "claramento" in normalized
         or "claremento" in normalized
+        or "clareamnto" in normalized
+        or "clariamento" in normalized
+        or "clarea mento" in normalized
         or "clarear" in normalized
+        or "branquear" in normalized
         or "branqueamento" in normalized
         or ("claramente" in normalized and any(token in normalized for token in ("dental", "dentario", "dentária", "dente")))
     ):
@@ -3087,12 +3465,17 @@ def _infer_procedure_from_normalized_text(normalized_text: str) -> str | None:
 def _infer_procedure_from_context(context: str) -> str | None:
     # Preferimos o sinal mais recente e inequívoco para evitar "herdar" serviço antigo.
     lines = [line.strip() for line in str(context or "").splitlines() if line.strip()]
-    for line in reversed(lines):
+    recent_lines = lines[-8:]
+    for line in reversed(recent_lines):
+        normalized_line = _normalize_for_match(line)
+        # Evita inferir serviço a partir de mensagens de catálogo amplo.
+        if any(token in normalized_line for token in ("oferecemos", "servicos", "procedimentos", "tratamentos")):
+            continue
         mentions = _procedure_mentions_in_normalized_text(line)
         if len(mentions) == 1:
             return mentions[0]
 
-    context_mentions = _procedure_mentions_in_normalized_text(context)
+    context_mentions = _procedure_mentions_in_normalized_text("\n".join(recent_lines))
     if len(context_mentions) == 1:
         return context_mentions[0]
     return None
@@ -3238,11 +3621,13 @@ def _appointment_response_from_selected_slot(
             "mode": "appointment_already_created",
             "response_text": (
                 "Esse horário já está confirmado na sua agenda.\n"
+                f"• Serviço: {existing.procedure_type or procedure_type}\n"
                 f"• Horário: {selected_slot['label']}\n"
                 f"• Unidade: {unit.name}"
             ),
             "metadata": {
                 "appointment_id": str(existing.id),
+                "procedure_type": existing.procedure_type or procedure_type,
                 "period": period,
                 "selected_slot": selected_slot["label"],
                 "starts_at_utc": existing.starts_at.isoformat(),
@@ -3349,6 +3734,7 @@ def _appointment_response_from_selected_slot(
         "mode": "appointment_created",
         "response_text": (
             "Agendamento confirmado com sucesso.\n"
+            f"• Serviço: {procedure_type}\n"
             f"• Horário: {selected_slot['label']}\n"
             f"• Unidade: {unit.name}"
             + (
@@ -3360,6 +3746,7 @@ def _appointment_response_from_selected_slot(
         ),
         "metadata": {
             "appointment_id": str(appointment.id),
+            "procedure_type": procedure_type,
             "period": period,
             "selected_slot": selected_slot["label"],
             "starts_at_utc": appointment.starts_at.isoformat(),
@@ -3389,6 +3776,7 @@ def _try_followup_slot_confirmation(
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
+    interactive_reply_id = _normalize_for_match(_wizard_extract_reply_id(inbound_payload))
     option_index = _extract_option_index_choice(inbound_text) or _extract_option_index_from_inbound_payload(inbound_payload)
     explicit_time = _extract_time_choice(inbound_text)
     confirmation_only = _is_booking_confirmation_message(inbound_text)
@@ -3423,6 +3811,7 @@ def _try_followup_slot_confirmation(
     anchor_payload = slots_anchor_message.payload if slots_anchor_message and isinstance(slots_anchor_message.payload, dict) else {}
     anchor_scheduling = anchor_payload.get("scheduling") if isinstance(anchor_payload.get("scheduling"), dict) else {}
     anchor_procedure_type = str(anchor_scheduling.get("procedure_type") or "").strip() or procedure_type
+    anchor_session_token = str(anchor_scheduling.get("session_token") or "").strip() or None
 
     anchor_requested_date: date | None = None
     anchor_requested_date_raw = anchor_scheduling.get("requested_date")
@@ -3434,6 +3823,37 @@ def _try_followup_slot_confirmation(
 
     anchor_period_raw = str(anchor_scheduling.get("period") or "").strip().lower()
     anchor_period = anchor_period_raw if anchor_period_raw in {"morning", "afternoon", "evening"} else None
+
+    if interactive_reply_id in {"slot_change_day", "time_change_day"}:
+        return _wizard_build_day_step_response(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=anchor_procedure_type,
+            period=period or anchor_period,
+            requested_date=requested_date,
+            operation_timezone=operation_timezone,
+            config=config,
+            session_token=anchor_session_token,
+        )
+    if interactive_reply_id in {"slot_change_service", "time_change_service"}:
+        return _wizard_build_service_step_response(
+            db,
+            conversation=conversation,
+            intro_text="Perfeito. Vamos escolher outro serviço:",
+            period=period or anchor_period,
+            requested_date=requested_date,
+        )
+    if interactive_reply_id in {"menu_human", "slot_handoff"}:
+        return {
+            "mode": "menu_human_handoff",
+            "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+            "metadata": {
+                "reason": "patient_requested_human",
+                "handoff_required": True,
+                "handoff_reason": "patient_requested_human",
+            },
+        }
 
     selected_date = (
         requested_date
@@ -3559,6 +3979,7 @@ def _try_followup_slot_confirmation(
         selected_date=confirm_date,
         period=selected_period,
         selected_slot_choice=slot_choice,
+        session_token=anchor_session_token,
     )
 
 
@@ -3601,6 +4022,9 @@ def _build_scheduling_operation_response(
         inbound_text=inbound_text,
         context=context,
     )
+    normalized_inbound = _normalize_for_match(inbound_text)
+    inbound_service_hint = _infer_procedure_from_normalized_text(normalized_inbound)
+    context_service_hint = _infer_procedure_from_context(context)
     has_followup_confirmation = (
         _extract_option_index_choice(inbound_text) is not None
         or _extract_option_index_from_inbound_payload(inbound_payload) is not None
@@ -3611,6 +4035,19 @@ def _build_scheduling_operation_response(
         return None
     if period and not _is_scheduling_context(inbound_text=inbound_text, context=context) and not explicit_availability_request:
         return None
+    if (
+        explicit_availability_request
+        and not has_followup_confirmation
+        and not inbound_service_hint
+        and not context_service_hint
+    ):
+        return _wizard_build_service_step_response(
+            db,
+            conversation=conversation,
+            intro_text="Para não te mostrar o serviço errado, escolha primeiro o serviço desejado:",
+            period=period,
+            requested_date=_extract_requested_date_from_text(text=inbound_text, timezone=_resolve_operation_timezone(config)),
+        )
 
     unit = _resolve_conversation_unit(db, conversation=conversation)
     if not unit:
@@ -3623,7 +4060,11 @@ def _build_scheduling_operation_response(
             "metadata": {"reason": "no_unit_available"},
         }
 
-    procedure_type = _infer_procedure_type(inbound_text=inbound_text, context=context)
+    procedure_type = (
+        inbound_service_hint
+        or context_service_hint
+        or _infer_procedure_type(inbound_text=inbound_text, context=context)
+    )
     operation_timezone = _resolve_operation_timezone(config)
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
     day_availability_request = _is_day_availability_request(inbound_text)
@@ -4153,7 +4594,12 @@ def process_inbound_message(
         return finish_without_reply(final_decision=DECISION_IGNORED, reason="channel_disabled", handoff=False)
 
     if conversation.status == "finalizada":
-        return finish_without_reply(final_decision=DECISION_IGNORED, reason="conversation_closed", handoff=False)
+        conversation.status = "aberta"
+        conversation.ai_autoresponder_consecutive_count = 0
+        conversation.ai_autoresponder_last_decision = None
+        conversation.ai_autoresponder_last_reason = "reopened_by_new_inbound"
+        conversation.ai_autoresponder_last_at = datetime.now(UTC)
+        db.add(conversation)
 
     if not inbound_text:
         return finish_without_reply(final_decision=DECISION_IGNORED, reason="empty_inbound", handoff=False)
@@ -4361,6 +4807,15 @@ def process_inbound_message(
                 or scheduling_metadata.get("reason")
                 or "patient_requested_human"
             )
+            metadata_tags = scheduling_metadata.get("add_tags")
+            if isinstance(metadata_tags, list):
+                tags = set(conversation.tags or [])
+                for tag in metadata_tags:
+                    normalized_tag = str(tag or "").strip()
+                    if normalized_tag:
+                        tags.add(normalized_tag)
+                conversation.tags = sorted(tags)
+                db.add(conversation)
             post_menu_outbox = None
             post_menu_message = None
             if scheduling_mode in {"appointment_created", "appointment_already_created"} and conversation.channel == "whatsapp":

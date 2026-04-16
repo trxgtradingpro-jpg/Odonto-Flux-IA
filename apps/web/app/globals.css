@@ -7,6 +7,18 @@
   --tenant-primary: #0f766e;
   --tenant-secondary: #0ea5a4;
   --tenant-accent: #f59e0b;
+  --surface-base: #f2f4f7;
+  --surface-card: #ffffff;
+  --surface-subtle: #f8fafc;
+  --text-primary: #1c1917;
+  --text-secondary: #475569;
+  --border-soft: #d6d3d1;
+  --radius-xs: 0.45rem;
+  --radius-sm: 0.65rem;
+  --radius-md: 0.9rem;
+  --radius-lg: 1.2rem;
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.08), 0 12px 30px rgba(15, 23, 42, 0.08);
 }
 
 html,
@@ -14,6 +26,7 @@ body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+  scroll-behavior: smooth;
 }
 
 *,
@@ -25,6 +38,7 @@ body {
 body {
   @apply bg-background text-foreground antialiased;
   min-height: 100vh;
+  color: var(--text-primary);
   background-image: radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 15%, transparent), transparent 45%),
     radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-accent) 15%, transparent), transparent 40%);
 }
@@ -47,6 +61,7 @@ input,
 select,
 textarea {
   max-width: 100%;
+  border-radius: var(--radius-sm);
 }
 
 p,
@@ -69,6 +84,86 @@ h4 {
 
 * {
   @apply border-border;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tenant-primary) 55%, white 45%);
+  outline-offset: 2px;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 85%, white 15%);
+  background: #fff;
+  color: var(--text-primary);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: color-mix(in srgb, var(--tenant-primary) 22%, var(--border-soft));
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: color-mix(in srgb, var(--tenant-primary) 60%, white 40%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--tenant-primary) 18%, transparent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #64748b;
+}
+
+select {
+  background-image:
+    linear-gradient(45deg, transparent 50%, #64748b 50%),
+    linear-gradient(135deg, #64748b 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 2px),
+    calc(100% - 12px) calc(50% - 2px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 2rem;
+  appearance: none;
+}
+
+textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+th {
+  letter-spacing: 0.01em;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--tenant-primary) 25%, #94a3b8 75%);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: #e2e8f0;
 }
 
 .surface-soft {
@@ -106,4 +201,46 @@ h4 {
   width: 100%;
   max-width: min(1680px, 100%);
   margin-inline: auto;
+}
+
+.page-section {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 88%, white 12%);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+}
+
+.field-label {
+  margin-bottom: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.field-help {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.field-error {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  color: #b91c1c;
+}
+
+.safe-wrap {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1023px) {
+  .content-shell {
+    max-width: 100%;
+  }
 }

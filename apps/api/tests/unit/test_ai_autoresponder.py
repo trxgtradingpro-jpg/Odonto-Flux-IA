@@ -1960,3 +1960,282 @@ def test_llm_cannot_claim_appointment_confirmation_without_persistence(monkeypat
     assert result["status"] == "responded"
     assert outbound is not None
     assert "Agendado" not in (outbound.body or "")
+
+
+def test_closed_conversation_reopens_when_patient_sends_new_message(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="oi",
+    )
+    conversation.status = "finalizada"
+    db_session.add(conversation)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Oi, voltei",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    assert result["status"] == "responded"
+    assert conversation.status == "aberta"
+
+
+def test_confirm_step_includes_change_time_button(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horario para clareamento dental?",
+    )
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    pick_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="1",
+    )
+    pick_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=pick_inbound.id,
+    )
+    assert pick_result.get("scheduling_mode") == "booking_wizard_confirm"
+
+    confirm_prompt = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert confirm_prompt is not None
+    buttons = (((confirm_prompt.payload or {}).get("interactive") or {}).get("buttons") or [])
+    ids = {str(item.get("id") or "") for item in buttons}
+    assert "confirm_change_time" in ids
+
+
+def test_followup_slot_change_day_action_opens_day_selection(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horarios para limpeza?",
+    )
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    change_day_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Trocar dia",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": "slot_change_day", "title": "Trocar dia"}},
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=change_day_inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_day_select"
+
+
+def test_explicit_availability_without_service_starts_service_step(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quais horarios disponiveis voces tem?",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+
+
+def test_wizard_expired_session_restarts_from_service(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="oi",
+    )
+    stale = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Escolha a clínica.",
+        message_type="interactive_list",
+        payload={
+            "mode": "booking_wizard_unit_select",
+            "scheduling": {
+                "wizard_step": "unit",
+                "session_token": "sessao_antiga",
+                "step_expires_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+                "units": [{"id": str(uuid4()), "name": "Unidade 1", "option_id": "unit_1"}],
+            },
+        },
+        status="sent",
+        created_at=datetime.now(UTC) - timedelta(minutes=40),
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="unit_1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": "unit_1", "title": "Unidade 1"}},
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+
+
+def test_confirm_change_time_action_returns_time_step(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Tem horario para clareamento?",
+    )
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result.get("scheduling_mode") == "slots_suggested"
+
+    pick_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="1",
+    )
+    pick_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=pick_inbound.id,
+    )
+    assert pick_result.get("scheduling_mode") == "booking_wizard_confirm"
+
+    change_time_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Trocar horário",
+        message_type="interactive_button_reply",
+        payload={"interactive_reply": {"id": "confirm_change_time", "title": "Trocar horário"}},
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=change_time_inbound.id,
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_time_select"
+
+
+def test_support_menu_selection_adds_support_tag(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+    )
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+    assert first_result.get("scheduling_mode") == "welcome_message_start"
+
+    support_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Suporte",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": "menu_support", "title": "Suporte"}},
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=support_inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_support_followup"
+    assert "menu_suporte" in (conversation.tags or [])

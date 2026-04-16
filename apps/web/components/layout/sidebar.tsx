@@ -120,7 +120,7 @@ function NavGroupSection({
                 if (mobileOpen) onCloseMobile?.();
               }}
               className={cn(
-                "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
+                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
                 collapsed && "justify-center px-2",
                 active
                   ? "bg-gradient-to-r text-white shadow-sm"
@@ -198,7 +198,7 @@ export function Sidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex h-dvh max-w-[84vw] flex-col border-r border-border bg-white/95 transition-all duration-300",
+          "fixed inset-y-0 left-0 z-40 flex h-dvh max-w-[84vw] flex-col border-r border-border bg-white/95 transition-all duration-300 backdrop-blur",
           "w-[286px] -translate-x-full shadow-none",
           mobileOpen && "translate-x-0 shadow-2xl",
           "lg:static lg:z-auto lg:max-w-none lg:translate-x-0 lg:shadow-none",

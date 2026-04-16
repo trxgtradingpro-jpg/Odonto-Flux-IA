@@ -730,15 +730,32 @@ export default function AgendaPage() {
           </Card>
         </div>
 
-        <Card className="border-stone-200">
-          <CardHeader>
+        <Card className="border-stone-200 bg-white/95">
+          <CardHeader className="border-b border-stone-200/80">
             <CardTitle>Grade visual da agenda</CardTitle>
+            <p className="text-sm text-stone-600">
+              Clique em um bloco para editar manualmente. Cores claras mostram disponibilidade da equipe.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-stone-600">
+              <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-1">
+                <span className="h-2 w-2 rounded-full bg-sky-400" />
+                Horario disponivel
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-stone-200 px-2 py-1">
+                <span className="h-2 w-2 rounded-full bg-stone-500" />
+                Sem profissional definido
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Profissional vinculado
+              </span>
+            </div>
           </CardHeader>
           <CardContent>
-            <div ref={boardRef} className="overflow-auto rounded-lg border border-stone-200 bg-white">
+            <div ref={boardRef} className="overflow-auto rounded-xl border border-stone-200 bg-white">
               <div style={{ minWidth: boardMinWidth }}>
                 <div
-                  className="grid border-b border-stone-200"
+                  className="sticky top-0 z-10 grid border-b border-stone-200 bg-stone-50/95 backdrop-blur"
                   style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(${boardColumnMin}px, 1fr))` }}
                 >
                   <div className="border-r border-stone-200 bg-stone-50 p-2 text-xs font-semibold text-stone-500">Hora</div>
@@ -818,7 +835,7 @@ export default function AgendaPage() {
                             <button
                               type="button"
                               key={appointment.id}
-                              className="absolute left-1 right-1 overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:scale-[1.01]"
+                              className="absolute left-1 right-1 overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                               style={{
                                 top,
                                 minHeight: height,
@@ -830,8 +847,8 @@ export default function AgendaPage() {
                                 setAppointmentEditorOpen(true);
                               }}
                             >
-                              <p className="truncate text-xs font-semibold text-stone-800">{appointment.patient_name}</p>
-                              <p className="truncate text-[11px] text-stone-700">{appointment.procedure_type}</p>
+                              <p className="truncate text-xs font-semibold text-stone-900">{appointment.patient_name}</p>
+                              <p className="truncate text-[11px] font-medium text-stone-800">{appointment.procedure_type}</p>
                               <p className="truncate text-[11px] text-stone-700">{appointment.professional_name}</p>
                             </button>
                           );
@@ -860,10 +877,10 @@ export default function AgendaPage() {
       >
         {selectedAppointment ? (
           <div className="space-y-3">
-            <Card className="border-stone-200">
-              <CardContent className="space-y-3 p-4">
+            <Card className="border-stone-200 bg-white/95">
+              <CardContent className="space-y-4 p-4">
                 <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Paciente</p>
+                  <p className="field-label">Paciente</p>
                   <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
                     <p className="font-semibold text-stone-800">{selectedAppointment.patient_name}</p>
                     <p className="text-xs text-stone-500">{formatPhoneBR(selectedAppointment.patient_phone)}</p>
@@ -872,9 +889,10 @@ export default function AgendaPage() {
 
                 <div className="grid gap-2 md:grid-cols-2">
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Unidade</p>
+                    <label className="field-label" htmlFor="edit-unit-id">Unidade</label>
                     <select
-                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      id="edit-unit-id"
+                      className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                       value={editUnitId}
                       onChange={(event) => {
                         const nextUnitId = event.target.value;
@@ -897,12 +915,14 @@ export default function AgendaPage() {
                         </option>
                       ))}
                     </select>
+                    <p className="field-help">Escolha a unidade onde essa consulta vai ocorrer.</p>
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Profissional</p>
+                    <label className="field-label" htmlFor="edit-professional-id">Profissional (opcional)</label>
                     <select
-                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      id="edit-professional-id"
+                      className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                       value={editProfessionalId}
                       onChange={(event) => setEditProfessionalId(event.target.value)}
                     >
@@ -913,12 +933,14 @@ export default function AgendaPage() {
                         </option>
                       ))}
                     </select>
+                    <p className="field-help">Deixe vazio para manter como "Nao definido".</p>
                   </div>
                 </div>
 
                 <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Procedimento</p>
+                  <label className="field-label" htmlFor="edit-procedure">Procedimento</label>
                   <Input
+                    id="edit-procedure"
                     placeholder="Ex.: Instalacao de lentes"
                     value={editProcedure}
                     onChange={(event: ChangeEvent<HTMLInputElement>) => setEditProcedure(event.target.value)}
@@ -927,8 +949,9 @@ export default function AgendaPage() {
 
                 <div className="grid gap-2 md:grid-cols-2">
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Inicio</p>
+                    <label className="field-label" htmlFor="edit-starts-at">Inicio</label>
                     <Input
+                      id="edit-starts-at"
                       type="datetime-local"
                       value={editStartsAt}
                       onChange={(event: ChangeEvent<HTMLInputElement>) => setEditStartsAt(event.target.value)}
@@ -936,8 +959,9 @@ export default function AgendaPage() {
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Fim</p>
+                    <label className="field-label" htmlFor="edit-ends-at">Fim</label>
                     <Input
+                      id="edit-ends-at"
                       type="datetime-local"
                       value={editEndsAt}
                       onChange={(event: ChangeEvent<HTMLInputElement>) => setEditEndsAt(event.target.value)}
@@ -947,9 +971,10 @@ export default function AgendaPage() {
 
                 <div className="grid gap-2 md:grid-cols-2">
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Status da consulta</p>
+                    <label className="field-label" htmlFor="edit-status">Status da consulta</label>
                     <select
-                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      id="edit-status"
+                      className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                       value={editStatus}
                       onChange={(event) => setEditStatus(event.target.value)}
                     >
@@ -962,9 +987,10 @@ export default function AgendaPage() {
                   </div>
 
                   <div>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Confirmacao</p>
+                    <label className="field-label" htmlFor="edit-confirmation-status">Confirmacao</label>
                     <select
-                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      id="edit-confirmation-status"
+                      className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                       value={editConfirmationStatus}
                       onChange={(event) => setEditConfirmationStatus(event.target.value)}
                     >
@@ -978,16 +1004,17 @@ export default function AgendaPage() {
                 </div>
 
                 <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Observacoes</p>
+                  <label className="field-label" htmlFor="edit-notes">Observacoes</label>
                   <textarea
-                    className="min-h-[84px] w-full rounded-md border border-stone-300 bg-white p-2 text-sm"
+                    id="edit-notes"
+                    className="min-h-[100px] w-full rounded-lg border border-stone-300 bg-white p-2.5 text-sm"
                     placeholder="Observacoes da consulta"
                     value={editNotes}
                     onChange={(event) => setEditNotes(event.target.value)}
                   />
                 </div>
 
-                <div className="flex justify-end gap-2">
+                <div className="flex flex-wrap justify-end gap-2 max-sm:[&>*]:w-full">
                   <Button
                     variant="destructive"
                     onClick={() => {
@@ -1020,16 +1047,20 @@ export default function AgendaPage() {
         )}
       </RightDrawer>
 
-      <Card className="border-stone-200">
+      <Card className="border-stone-200 bg-white/95">
         <CardHeader>
           <CardTitle>Nova consulta</CardTitle>
+          <p className="text-sm text-stone-600">
+            Preencha os dados principais e confirme para salvar na agenda.
+          </p>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Paciente</p>
+              <label className="field-label" htmlFor="create-patient-id">Paciente</label>
               <select
-                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                id="create-patient-id"
+                className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                 value={patientId}
                 onChange={(event) => setPatientId(event.target.value)}
               >
@@ -1042,9 +1073,10 @@ export default function AgendaPage() {
               </select>
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Unidade</p>
+              <label className="field-label" htmlFor="create-unit-id">Unidade</label>
               <select
-                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                id="create-unit-id"
+                className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                 value={unitId}
                 onChange={(event) => {
                   setUnitId(event.target.value);
@@ -1060,9 +1092,10 @@ export default function AgendaPage() {
               </select>
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Profissional</p>
+              <label className="field-label" htmlFor="create-professional-id">Profissional (opcional)</label>
               <select
-                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                id="create-professional-id"
+                className="h-11 w-full rounded-lg border border-stone-300 bg-white px-3 text-sm"
                 value={professionalId}
                 onChange={(event) => setProfessionalId(event.target.value)}
               >
@@ -1075,16 +1108,18 @@ export default function AgendaPage() {
               </select>
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Procedimento</p>
+              <label className="field-label" htmlFor="create-procedure">Procedimento</label>
               <Input
+                id="create-procedure"
                 placeholder="Ex.: Limpeza odontologica"
                 value={procedure}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => setProcedure(event.target.value)}
               />
             </div>
             <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Data e hora</p>
+              <label className="field-label" htmlFor="create-starts-at">Data e hora</label>
               <Input
+                id="create-starts-at"
                 type="datetime-local"
                 value={startsAt}
                 onChange={(event: ChangeEvent<HTMLInputElement>) => setStartsAt(event.target.value)}
@@ -1111,7 +1146,7 @@ export default function AgendaPage() {
 
       <FilterBar search={search} onSearchChange={setSearch} searchPlaceholder="Buscar paciente, unidade ou procedimento...">
         <select
-          className="h-9 rounded-md border border-stone-300 bg-white px-2 text-sm"
+          className="h-11 rounded-lg border border-stone-300 bg-white px-3 text-sm"
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value)}
         >
@@ -1123,7 +1158,7 @@ export default function AgendaPage() {
           <option value="concluida">Concluido</option>
         </select>
         <select
-          className="h-9 rounded-md border border-stone-300 bg-white px-2 text-sm"
+          className="h-11 rounded-lg border border-stone-300 bg-white px-3 text-sm"
           value={unitFilter}
           onChange={(event) => setUnitFilter(event.target.value)}
         >

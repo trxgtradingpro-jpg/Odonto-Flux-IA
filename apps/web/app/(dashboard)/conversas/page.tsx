@@ -485,7 +485,7 @@ export default function ConversasPage() {
   if (inboxQuery.isError || !dataset) return <ErrorState message="Não foi possível carregar o inbox." />;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <PageHeader
         eyebrow="Relacionamento"
         title="Inbox de conversas"
@@ -505,7 +505,7 @@ export default function ConversasPage() {
           </Button>
         ))}
         <select
-          className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs"
+          className="h-10 rounded-lg border border-stone-300 bg-white px-3 text-sm"
           value={unitFilter}
           onChange={(event) => setUnitFilter(event.target.value)}
         >
@@ -515,7 +515,7 @@ export default function ConversasPage() {
           ))}
         </select>
         <select
-          className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs"
+          className="h-10 rounded-lg border border-stone-300 bg-white px-3 text-sm"
           value={ownerFilter}
           onChange={(event) => setOwnerFilter(event.target.value)}
         >
@@ -525,7 +525,7 @@ export default function ConversasPage() {
           ))}
         </select>
         <select
-          className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs"
+          className="h-10 rounded-lg border border-stone-300 bg-white px-3 text-sm"
           value={priorityFilter}
           onChange={(event) => setPriorityFilter(event.target.value as PriorityFilter)}
         >
@@ -536,12 +536,13 @@ export default function ConversasPage() {
         </select>
       </FilterBar>
 
-      <div className="grid gap-4 xl:grid-cols-[320px,minmax(0,1fr)] 2xl:grid-cols-[320px,minmax(0,1fr),360px]">
-        <Card className="border-stone-200">
+      <div className="grid items-start gap-4 xl:grid-cols-[320px,minmax(0,1fr)] 2xl:grid-cols-[320px,minmax(0,1fr),360px]">
+        <Card className="border-stone-200 overflow-hidden">
           <CardHeader>
             <CardTitle>Conversas</CardTitle>
+            <p className="text-sm text-stone-600">Selecione um atendimento para visualizar e responder no painel central.</p>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="max-h-[min(72vh,780px)] space-y-2 overflow-y-auto pr-1">
             {filteredConversations.length ? (
               filteredConversations.map((item) => {
                 const patient = item.patient_id ? patientsById.get(item.patient_id) : null;
@@ -556,7 +557,7 @@ export default function ConversasPage() {
                     onClick={() => setSelectedConversationId(item.id)}
                     className={`w-full rounded-lg border p-3 text-left transition ${
                       isActive ? "border-primary bg-primary/5" : "border-stone-200 hover:bg-stone-50"
-                    }`}
+                    } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -590,7 +591,7 @@ export default function ConversasPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-stone-200">
+        <Card className="border-stone-200 overflow-hidden">
           <CardHeader className="border-b border-stone-200 pb-4">
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -609,7 +610,7 @@ export default function ConversasPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant={selectedAiEnabled ? "outline" : "default"}
-                    className="h-8 gap-1.5"
+                    className="h-9 gap-1.5"
                     onClick={() => toggleAiMutation.mutate(!selectedAiEnabled)}
                     disabled={toggleAiMutation.isPending}
                   >
@@ -618,7 +619,7 @@ export default function ConversasPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="h-8 gap-1.5"
+                    className="h-9 gap-1.5"
                     onClick={() => summarizeMutation.mutate()}
                     disabled={summarizeMutation.isPending}
                   >
@@ -627,7 +628,7 @@ export default function ConversasPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="h-8 gap-1.5"
+                    className="h-9 gap-1.5"
                     onClick={() => suggestionMutation.mutate()}
                     disabled={suggestionMutation.isPending}
                   >
@@ -637,7 +638,7 @@ export default function ConversasPage() {
                   {selectedLead && !selectedPatient ? (
                     <Button
                       variant="outline"
-                      className="h-8 gap-1.5"
+                      className="h-9 gap-1.5"
                       onClick={() => convertLeadMutation.mutate()}
                       disabled={convertLeadMutation.isPending}
                     >
@@ -645,7 +646,7 @@ export default function ConversasPage() {
                       Converter em paciente
                     </Button>
                   ) : null}
-                  <Button variant="destructive" className="h-8 gap-1.5" onClick={() => setCloseDialogOpen(true)}>
+                  <Button variant="destructive" className="h-9 gap-1.5" onClick={() => setCloseDialogOpen(true)}>
                     <CircleOff size={14} />
                     Encerrar conversa
                   </Button>
@@ -658,7 +659,7 @@ export default function ConversasPage() {
               <>
                 <div
                   ref={messageListRef}
-                  className="max-h-[min(60vh,560px)] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4"
+                  className="h-[min(56vh,560px)] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4"
                 >
                   {messagesQuery.isLoading ? (
                     <p className="text-sm text-stone-500">Carregando mensagens...</p>
@@ -693,7 +694,7 @@ export default function ConversasPage() {
                   )}
                 </div>
 
-                <div className="space-y-3 rounded-xl border border-stone-200 p-3">
+                <div className="space-y-3 rounded-xl border border-stone-200 bg-white p-3">
                   <div className="grid gap-2 sm:grid-cols-[1fr,220px]">
                     <Input
                       placeholder="Escreva sua mensagem para o paciente..."
@@ -768,11 +769,12 @@ export default function ConversasPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-stone-200 xl:col-span-2 2xl:col-span-1">
+        <Card className="border-stone-200 overflow-hidden xl:col-span-2 2xl:col-span-1 2xl:sticky 2xl:top-4">
           <CardHeader>
             <CardTitle>Contexto do paciente</CardTitle>
+            <p className="text-sm text-stone-600">Dados clínicos e históricos para apoiar o atendimento em tempo real.</p>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="max-h-[min(72vh,780px)] space-y-4 overflow-y-auto pr-1">
             {selectedConversation ? (
               <>
                 <div className="rounded-lg border border-stone-200 p-3">

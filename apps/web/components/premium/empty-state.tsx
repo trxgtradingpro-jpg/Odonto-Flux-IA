@@ -22,9 +22,9 @@ export function EmptyState({
   className,
 }: EmptyStateProps) {
   return (
-    <Card className={cn("border-dashed border-stone-300 bg-stone-50", className)}>
+    <Card className={cn("border-dashed border-stone-300 bg-stone-50/80", className)}>
       <CardContent className="flex flex-col items-center justify-center gap-3 py-10 text-center">
-        <div className="rounded-full bg-stone-200 p-3 text-stone-600">
+        <div className="rounded-full bg-stone-200 p-3 text-stone-600" aria-hidden="true">
           <Icon size={20} />
         </div>
         <div className="space-y-1">

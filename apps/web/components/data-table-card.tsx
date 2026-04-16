@@ -33,9 +33,12 @@ export function DataTableCard({
   }, [rows, search]);
 
   return (
-    <Card>
+    <Card className="border-stone-200 bg-white/95">
       <CardHeader className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-        <CardTitle>{title}</CardTitle>
+        <div>
+          <CardTitle>{title}</CardTitle>
+          <p className="mt-1 text-xs text-stone-500">{filtered.length} registro(s)</p>
+        </div>
         <Input
           className="w-full sm:max-w-xs"
           placeholder={searchPlaceholder}
@@ -49,25 +52,27 @@ export function DataTableCard({
             Nenhum resultado encontrado.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-stone-200">
-            <Table className="min-w-[680px]">
-              <THead>
-                <TR>
-                  {columns.map((column) => (
-                    <TH key={column.key}>{column.label}</TH>
-                  ))}
-                </TR>
-              </THead>
-              <TBody>
-                {filtered.map((row, index) => (
-                  <TR key={`${row.id ?? index}`}>
+          <div className="overflow-x-auto rounded-xl border border-stone-200">
+            <div className="max-h-[min(72vh,680px)] overflow-y-auto">
+              <Table className="min-w-[680px]">
+                <THead>
+                  <TR>
                     {columns.map((column) => (
-                      <TD key={column.key}>{String(row[column.key] ?? '-')}</TD>
+                      <TH key={column.key}>{column.label}</TH>
                     ))}
                   </TR>
-                ))}
-              </TBody>
-            </Table>
+                </THead>
+                <TBody>
+                  {filtered.map((row, index) => (
+                    <TR key={`${row.id ?? index}`} className={index % 2 ? "bg-white" : "bg-stone-50/40"}>
+                      {columns.map((column) => (
+                        <TD key={column.key}>{String(row[column.key] ?? '-')}</TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
           </div>
         )}
       </CardContent>

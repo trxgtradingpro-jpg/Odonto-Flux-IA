@@ -56,9 +56,14 @@ export function DataTable<T>({
   }, [rows, search, searchBy]);
 
   return (
-    <Card className="border-stone-200">
-      <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <CardTitle>{title}</CardTitle>
+    <Card className="border-stone-200 bg-white/95">
+      <CardHeader className="flex flex-col gap-3 border-b border-stone-200/80 pb-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="safe-wrap">
+          <CardTitle>{title}</CardTitle>
+          <p className="mt-1 text-xs text-stone-500">
+            {filteredRows.length} registro(s){rows.length !== filteredRows.length ? ` de ${rows.length}` : ""}
+          </p>
+        </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end max-sm:[&>*]:w-full">
           <Input
             className="w-full sm:flex-1 lg:w-72"
@@ -71,29 +76,34 @@ export function DataTable<T>({
       </CardHeader>
       <CardContent className="space-y-3">
         {filteredRows.length ? (
-          <div className="overflow-x-auto rounded-lg border border-stone-200">
-            <Table className="min-w-[700px]">
-              <THead>
-                <TR>
-                  {columns.map((column) => (
-                    <TH key={column.key} className={column.className}>
-                      {column.label}
-                    </TH>
-                  ))}
-                </TR>
-              </THead>
-              <TBody>
-                {filteredRows.map((row, index) => (
-                  <TR key={getRowId(row, index)}>
+          <div className="overflow-x-auto rounded-xl border border-stone-200">
+            <div className="max-h-[min(72vh,680px)] overflow-y-auto">
+              <Table className="min-w-[700px]">
+                <THead>
+                  <TR>
                     {columns.map((column) => (
-                      <TD key={column.key} className={column.className}>
-                        {column.render(row)}
-                      </TD>
+                      <TH key={column.key} className={column.className}>
+                        {column.label}
+                      </TH>
                     ))}
                   </TR>
-                ))}
-              </TBody>
-            </Table>
+                </THead>
+                <TBody>
+                  {filteredRows.map((row, index) => (
+                    <TR
+                      key={getRowId(row, index)}
+                      className={index % 2 ? "bg-white" : "bg-stone-50/40"}
+                    >
+                      {columns.map((column) => (
+                        <TD key={column.key} className={column.className}>
+                          {column.render(row)}
+                        </TD>
+                      ))}
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
           </div>
         ) : (
           <EmptyState title={emptyTitle} description={emptyDescription} />

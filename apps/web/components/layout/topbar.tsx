@@ -34,16 +34,16 @@ export function Topbar({
 
   return (
     <header
-      className="sticky top-0 z-20 flex min-h-16 min-w-0 items-center justify-between gap-2 border-b border-border bg-white/90 px-3 py-2 backdrop-blur sm:px-4 md:px-6"
+      className="sticky top-0 z-20 flex min-h-16 min-w-0 items-center justify-between gap-2 border-b border-border bg-white/92 px-3 py-2 backdrop-blur-md sm:px-4 md:px-6 lg:px-8"
       style={{
-        boxShadow: "0 8px 24px rgba(0,0,0,0.04)",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
       }}
     >
       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <Button variant="outline" className="h-9 w-9 shrink-0 px-0" onClick={onToggleSidebar} title="Alternar menu">
           <Menu size={16} />
         </Button>
-        <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 md:flex">
+        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 md:flex">
           {branding?.logoDataUrl ? (
             <Image
               src={branding.logoDataUrl}
@@ -62,10 +62,10 @@ export function Topbar({
             </div>
           )}
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-stone-500">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-stone-500">
               SaaS OdontoFlux {collapsed ? "- compacto" : ""}
             </p>
-            <h2 className="text-sm font-semibold text-stone-800 md:text-base">
+            <h2 className="text-sm font-bold text-stone-800 md:text-base">
               Gestao da clinica em tempo real
             </h2>
           </div>
@@ -73,7 +73,7 @@ export function Topbar({
       </div>
 
       <div className="flex min-w-0 items-center gap-1 sm:gap-2">
-        <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 lg:flex">
+        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 lg:flex">
           <CalendarDays size={14} className="text-stone-500" />
           <span className="text-xs text-stone-600">{today}</span>
         </div>
@@ -83,7 +83,7 @@ export function Topbar({
         <div className="relative">
           <button
             type="button"
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-100"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={() => setOpenNotifications((current) => !current)}
             aria-label="Abrir notificacoes"
           >
@@ -95,7 +95,7 @@ export function Topbar({
             ) : null}
           </button>
           {openNotifications ? (
-            <div className="absolute right-0 top-11 z-30 w-[min(92vw,320px)] rounded-xl border border-stone-200 bg-white p-2 shadow-2xl">
+            <div className="absolute right-0 top-11 z-30 w-[min(92vw,340px)] rounded-2xl border border-stone-200 bg-white p-2 shadow-2xl">
               <div className="flex items-center justify-between px-2 py-1">
                 <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Notificacoes</p>
                 <span className="text-[11px] text-stone-500">
@@ -127,7 +127,7 @@ export function Topbar({
           ) : null}
         </div>
 
-        <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 md:flex">
+        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-white px-2 py-1 md:flex">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-200 text-xs font-semibold text-stone-700">
             {initials(session?.full_name)}
           </div>
