@@ -385,7 +385,9 @@ export default function AgendaPage() {
   const patientsById = new Map(dataset.patients.map((item) => [item.id, item]));
   const unitsById = new Map(dataset.units.map((item) => [item.id, item.name]));
   const professionalsById = new Map(dataset.professionals.map((item) => [item.id, item]));
-  const professionalsForSelectedUnit = dataset.professionals.filter((item) => !unitId || item.unit_id === unitId);
+  const professionalsForSelectedUnit = dataset.professionals.filter(
+    (item) => !unitId || item.unit_id === unitId || !item.unit_id,
+  );
 
   const weekDays = Array.from({ length: 7 }, (_, index) => {
     const date = addDays(weekAnchor, index);
@@ -483,7 +485,9 @@ export default function AgendaPage() {
   const boardHeight = totalMinutes * pxPerMinute;
   const slotMarks = Array.from({ length: Math.floor(totalMinutes / 30) + 1 }, (_, index) => boardStartMinutes + index * 30);
   const boardColumnMin = viewMode === "day" ? 220 : 180;
-  const professionalsForEditedUnit = dataset.professionals.filter((item) => !editUnitId || item.unit_id === editUnitId);
+  const professionalsForEditedUnit = dataset.professionals.filter(
+    (item) => !editUnitId || item.unit_id === editUnitId || !item.unit_id,
+  );
 
   const handleSaveAppointmentEdits = () => {
     if (!selectedAppointment) return;
@@ -912,7 +916,9 @@ export default function AgendaPage() {
                       setEditProfessionalId((current) => {
                         if (!current) return "";
                         const allowed = dataset.professionals.some(
-                          (professional) => professional.id === current && professional.unit_id === nextUnitId,
+                          (professional) =>
+                            professional.id === current &&
+                            (professional.unit_id === nextUnitId || !professional.unit_id),
                         );
                         return allowed ? current : "";
                       });

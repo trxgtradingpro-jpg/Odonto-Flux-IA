@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -2785,7 +2785,7 @@ def _list_available_slots(
     all_professionals = db.execute(
         select(Professional).where(
             Professional.tenant_id == tenant_id,
-            Professional.unit_id == unit_id,
+            or_(Professional.unit_id == unit_id, Professional.unit_id.is_(None)),
             Professional.is_active.is_(True),
         )
     ).scalars().all()
