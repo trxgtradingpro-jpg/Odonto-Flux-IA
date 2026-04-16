@@ -192,14 +192,6 @@ export default function AgendaPage() {
   const [professionalId, setProfessionalId] = useState("");
   const [procedure, setProcedure] = useState("");
   const [startsAt, setStartsAt] = useState("");
-  const [newProfessionalName, setNewProfessionalName] = useState("");
-  const [newProfessionalUnitId, setNewProfessionalUnitId] = useState("");
-  const [newProfessionalSpecialty, setNewProfessionalSpecialty] = useState("");
-  const [newProfessionalCro, setNewProfessionalCro] = useState("");
-  const [newProfessionalStart, setNewProfessionalStart] = useState("08:00");
-  const [newProfessionalEnd, setNewProfessionalEnd] = useState("18:00");
-  const [newProfessionalProcedures, setNewProfessionalProcedures] = useState("");
-  const [newProfessionalDays, setNewProfessionalDays] = useState<number[]>([1, 2, 3, 4, 5]);
 
   const agendaQuery = useQuery<AgendaDataset>({
     queryKey: ["agenda-dataset"],
@@ -268,49 +260,6 @@ export default function AgendaPage() {
       queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
     },
     onError: (error) => toast.error(getApiErrorMessage(error, "Nao foi possivel excluir a consulta.")),
-  });
-
-  const createProfessionalMutation = useMutation({
-    mutationFn: async () => {
-      const procedures = newProfessionalProcedures
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-
-      return api.post("/professionals", {
-        full_name: newProfessionalName,
-        unit_id: newProfessionalUnitId || null,
-        specialty: newProfessionalSpecialty || null,
-        cro_number: newProfessionalCro || null,
-        working_days: newProfessionalDays,
-        shift_start: newProfessionalStart,
-        shift_end: newProfessionalEnd,
-        procedures,
-        is_active: true,
-      });
-    },
-    onSuccess: () => {
-      toast.success("Profissional cadastrado com sucesso.");
-      setNewProfessionalName("");
-      setNewProfessionalUnitId("");
-      setNewProfessionalSpecialty("");
-      setNewProfessionalCro("");
-      setNewProfessionalStart("08:00");
-      setNewProfessionalEnd("18:00");
-      setNewProfessionalProcedures("");
-      setNewProfessionalDays([1, 2, 3, 4, 5]);
-      queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
-    },
-    onError: () => toast.error("Nao foi possivel cadastrar o profissional."),
-  });
-
-  const deleteProfessionalMutation = useMutation({
-    mutationFn: async (professionalId: string) => api.delete(`/professionals/${professionalId}`),
-    onSuccess: () => {
-      toast.success("Profissional excluido com sucesso.");
-      queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
-    },
-    onError: (error) => toast.error(getApiErrorMessage(error, "Nao foi possivel excluir o profissional.")),
   });
 
   const saveColorsMutation = useMutation({
@@ -553,7 +502,7 @@ export default function AgendaPage() {
       <PageHeader
         eyebrow="Agenda inteligente"
         title="Agenda operacional"
-        description="Visual semanal, filtros por equipe, cores por profissional e atualizacao automatica."
+        description="Visual semanal, filtros por equipe, cores por profissional e atualizacao automatica. Cadastro da equipe em Equipe medica."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button variant={viewMode === "day" ? "default" : "outline"} className="h-9" onClick={() => setViewMode("day")}>
@@ -1106,160 +1055,6 @@ export default function AgendaPage() {
             >
               {createMutation.isPending ? "Criando..." : "Criar consulta"}
             </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-stone-200">
-        <CardHeader>
-          <CardTitle>Equipe clinica (dias, horarios e servicos)</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-2 md:grid-cols-4">
-            <Input
-              placeholder="Nome do profissional"
-              value={newProfessionalName}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalName(event.target.value)}
-            />
-            <select
-              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-              value={newProfessionalUnitId}
-              onChange={(event) => setNewProfessionalUnitId(event.target.value)}
-            >
-              <option value="">Unidade</option>
-              {dataset.units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.name}
-                </option>
-              ))}
-            </select>
-            <Input
-              placeholder="Especialidade (opcional)"
-              value={newProfessionalSpecialty}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalSpecialty(event.target.value)}
-            />
-            <Input
-              placeholder="CRO (opcional)"
-              value={newProfessionalCro}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalCro(event.target.value)}
-            />
-          </div>
-
-          <div className="mt-3 grid gap-2 md:grid-cols-3">
-            <Input
-              type="time"
-              value={newProfessionalStart}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalStart(event.target.value)}
-            />
-            <Input
-              type="time"
-              value={newProfessionalEnd}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalEnd(event.target.value)}
-            />
-            <Input
-              placeholder="Servicos (virgula): avaliacao, lentes, limpeza"
-              value={newProfessionalProcedures}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setNewProfessionalProcedures(event.target.value)}
-            />
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-            {WEEK_DAY_OPTIONS.map((day) => {
-              const checked = newProfessionalDays.includes(day.value);
-              return (
-                <label
-                  key={day.value}
-                  className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-stone-300 px-3 py-1 text-xs text-stone-700"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        setNewProfessionalDays((current) =>
-                          Array.from(new Set([...current, day.value])).sort((left, right) => left - right),
-                        );
-                      } else {
-                        setNewProfessionalDays((current) => current.filter((item) => item !== day.value));
-                      }
-                    }}
-                  />
-                  {day.label}
-                </label>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <p className="text-xs text-stone-500">
-              Cadastre cada profissional individualmente. A IA usa essas regras para sugerir e confirmar horarios.
-            </p>
-            <Button
-              onClick={() => {
-                if (!newProfessionalName || !newProfessionalUnitId) {
-                  toast.error("Informe nome e unidade do profissional.");
-                  return;
-                }
-                if (!newProfessionalDays.length) {
-                  toast.error("Selecione ao menos um dia de atendimento.");
-                  return;
-                }
-                createProfessionalMutation.mutate();
-              }}
-              disabled={createProfessionalMutation.isPending}
-            >
-              {createProfessionalMutation.isPending ? "Salvando..." : "Cadastrar profissional"}
-            </Button>
-          </div>
-
-          <div className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Profissionais cadastrados</p>
-            <div className="mt-2 space-y-2">
-              {dataset.professionals.length ? (
-                dataset.professionals.map((professional) => {
-                  const unitName = professional.unit_id ? unitsById.get(professional.unit_id) : "Sem unidade";
-                  const days = professional.working_days
-                    .slice()
-                    .sort()
-                    .map((day) => WEEK_DAY_OPTIONS.find((item) => item.value === day)?.label ?? String(day))
-                    .join(", ");
-                  const isDeletingCurrent =
-                    deleteProfessionalMutation.isPending && deleteProfessionalMutation.variables === professional.id;
-                  return (
-                    <div
-                      key={professional.id}
-                      className="rounded-md border border-stone-200 bg-white p-3 text-sm text-stone-700"
-                    >
-                      <p className="font-semibold text-stone-800">{professional.full_name}</p>
-                      <p className="text-xs text-stone-500">
-                        {unitName} - {professional.shift_start} as {professional.shift_end} - {days || "Sem dias"}
-                      </p>
-                      <p className="mt-1 text-xs text-stone-600">
-                        Servicos: {professional.procedures.length ? professional.procedures.join(", ") : "Nao informados"}
-                      </p>
-                      <div className="mt-2 flex justify-end">
-                        <Button
-                          variant="destructive"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => {
-                            const confirmed = window.confirm(
-                              `Excluir o profissional ${professional.full_name}? Essa acao remove o cadastro.`,
-                            );
-                            if (!confirmed) return;
-                            deleteProfessionalMutation.mutate(professional.id);
-                          }}
-                          disabled={deleteProfessionalMutation.isPending}
-                        >
-                          {isDeletingCurrent ? "Excluindo..." : "Excluir profissional"}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-stone-500">Nenhum profissional cadastrado ainda.</p>
-              )}
-            </div>
           </div>
         </CardContent>
       </Card>
