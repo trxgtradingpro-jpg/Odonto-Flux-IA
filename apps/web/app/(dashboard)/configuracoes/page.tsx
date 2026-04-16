@@ -98,6 +98,7 @@ type AIKnowledgeBaseConfig = {
     differentials: string[];
     target_audience: string;
     tone_preferences: string;
+    welcome_greeting_example: string;
   };
   services: AIKnowledgeServiceItem[];
   insurance: {
@@ -194,6 +195,7 @@ const DEFAULT_AI_KNOWLEDGE_CONFIG: AIKnowledgeBaseConfig = {
     differentials: [],
     target_audience: "",
     tone_preferences: "",
+    welcome_greeting_example: "",
   },
   services: [],
   insurance: {
@@ -249,6 +251,8 @@ const SORRISO_SUL_AI_KNOWLEDGE_PRESET: AIKnowledgeBaseConfig = {
       "adultos que buscam harmonizacao do sorriso, reabilitacao estetica e solucao funcional com orientacao clara",
     tone_preferences:
       "profissional, cordial, objetivo, comercial consultivo e sem jargao tecnico",
+    welcome_greeting_example:
+      "Oi! Que bom te ver por aqui.\nSou a assistente virtual da Clinica Sorriso Sul e posso te ajudar com servicos, valores e agendamentos.\nPara começar, escolha uma opção no menu abaixo:",
   },
   services: [
     {
@@ -1626,6 +1630,28 @@ export default function ConfiguracoesPage() {
                 />
                 <p className="text-xs text-stone-500">
                   Resumo institucional para a IA explicar quem vocês são e qual proposta de valor.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                  Exemplo de saudação / boas-vindas da IA
+                </label>
+                <textarea
+                  className="min-h-[96px] w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  placeholder="Ex.: Oi! Que bom te ver por aqui. Sou a assistente virtual da clínica..."
+                  value={aiKnowledgeDraft.clinic_profile.welcome_greeting_example}
+                  onChange={(event) =>
+                    setAiKnowledgeDraft((current) => ({
+                      ...current,
+                      clinic_profile: {
+                        ...current.clinic_profile,
+                        welcome_greeting_example: event.target.value,
+                      },
+                    }))
+                  }
+                />
+                <p className="text-xs text-stone-500">
+                  Essa mensagem será usada no início da conversa, junto com o menu de opções por botões.
                 </p>
               </div>
               <div className="grid gap-2 md:grid-cols-2">

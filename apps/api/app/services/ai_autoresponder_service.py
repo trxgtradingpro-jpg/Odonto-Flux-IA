@@ -37,6 +37,7 @@ from app.services.llm_service import classify_intent, run_llm_task
 from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
 
 AI_AUTORESPONDER_PROMPT_VERSION = "v1.1"
+INACTIVE_CONVERSATION_RESTART_MINUTES = 20
 
 AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -64,6 +65,7 @@ AI_KNOWLEDGE_BASE_DEFAULT_CONFIG: dict[str, Any] = {
         "differentials": [],
         "target_audience": "",
         "tone_preferences": "",
+        "welcome_greeting_example": "",
     },
     "services": [],
     "insurance": {
@@ -447,6 +449,10 @@ def _normalize_knowledge_config(value: dict[str, Any] | None) -> dict[str, Any]:
             "differentials": _normalize_string_list(profile.get("differentials"), max_items=12),
             "target_audience": _compact_text(profile.get("target_audience"), max_length=240),
             "tone_preferences": _compact_text(profile.get("tone_preferences"), max_length=240),
+            "welcome_greeting_example": _compact_text(
+                profile.get("welcome_greeting_example"),
+                max_length=700,
+            ),
         },
         "services": _normalize_services(merged.get("services")),
         "insurance": {
@@ -524,6 +530,10 @@ def _render_knowledge_context(knowledge_base: dict[str, Any]) -> str:
     tone_preferences = _compact_text(profile.get("tone_preferences"), max_length=240)
     if tone_preferences:
         lines.append(f"Preferencias de tom no atendimento: {tone_preferences}")
+
+    welcome_greeting_example = _compact_text(profile.get("welcome_greeting_example"), max_length=700)
+    if welcome_greeting_example:
+        lines.append(f"Exemplo de saudacao inicial: {welcome_greeting_example}")
 
     services = _normalize_services(knowledge_base.get("services"))
     if services:
@@ -1076,6 +1086,40 @@ def _is_conversation_start_for_welcome(db: Session, *, conversation: Conversatio
     return inbound_count == 1 and outbound_count == 0
 
 
+def _conversation_idle_minutes_before_inbound(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_message: Message,
+) -> float | None:
+    previous_message = db.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.id != inbound_message.id,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .limit(1)
+    )
+    if not previous_message or not previous_message.created_at:
+        return None
+
+    previous_at = previous_message.created_at
+    current_at = inbound_message.created_at or datetime.now(UTC)
+
+    if previous_at.tzinfo is None:
+        previous_at = previous_at.replace(tzinfo=UTC)
+    if current_at.tzinfo is None:
+        current_at = current_at.replace(tzinfo=UTC)
+
+    delta = current_at - previous_at
+    seconds = delta.total_seconds()
+    if seconds < 0:
+        return None
+    return seconds / 60.0
+
+
 def _is_greeting_only_message(text: str) -> bool:
     normalized = _normalize_for_match(text or "")
     cleaned = re.sub(r"[^a-z0-9\s]", " ", normalized)
@@ -1134,6 +1178,29 @@ def _should_send_conversation_start_menu(text: str) -> bool:
     return True
 
 
+def _resolve_welcome_greeting_from_knowledge(knowledge_base: dict[str, Any] | None) -> str | None:
+    if not isinstance(knowledge_base, dict):
+        return None
+    profile = (
+        knowledge_base.get("clinic_profile")
+        if isinstance(knowledge_base.get("clinic_profile"), dict)
+        else {}
+    )
+
+    custom_greeting = _compact_text(profile.get("welcome_greeting_example"), max_length=700)
+    if custom_greeting:
+        return custom_greeting
+
+    clinic_name = _compact_text(profile.get("clinic_name"), max_length=120)
+    if not clinic_name:
+        return None
+    return (
+        f"Oi! Que bom te ver por aqui.\n"
+        f"Sou a assistente virtual da {clinic_name}.\n"
+        "Para começar, escolha uma opção no menu abaixo:"
+    )
+
+
 def _build_conversation_start_welcome_response(*, intro_text: str | None = None) -> dict[str, Any]:
     rows: list[dict[str, str]] = []
     for option in WELCOME_MENU_OPTIONS:
@@ -1152,7 +1219,7 @@ def _build_conversation_start_welcome_response(*, intro_text: str | None = None)
             intro_text
             or (
                 "Oi! Que bom te ver por aqui.\n"
-                "Sou a assistente virtual da Clínica Sorriso Sul.\n"
+                "Sou a assistente virtual da clínica.\n"
                 "Para começar, escolha uma opção no menu abaixo:"
             )
         ),
@@ -1167,7 +1234,7 @@ def _build_conversation_start_welcome_response(*, intro_text: str | None = None)
                 intro_text
                 or (
                     "Oi! Que bom te ver por aqui.\n"
-                    "Sou a assistente virtual da Clínica Sorriso Sul.\n"
+                    "Sou a assistente virtual da clínica.\n"
                     "Para começar, escolha uma opção:"
                 )
             ),
@@ -3936,6 +4003,14 @@ def process_inbound_message(
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     interactive_reply = inbound_payload.get("interactive_reply") if isinstance(inbound_payload.get("interactive_reply"), dict) else {}
     interactive_reply_id = str(interactive_reply.get("id") or "").strip().lower()
+    idle_minutes = _conversation_idle_minutes_before_inbound(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
+    idle_timeout_restart = bool(
+        idle_minutes is not None and idle_minutes >= INACTIVE_CONVERSATION_RESTART_MINUTES
+    )
 
     close_request = _lookup_pattern(inbound_text, CLOSE_CONVERSATION_PATTERNS)
     if close_request:
@@ -3986,6 +4061,12 @@ def process_inbound_message(
                 handoff=False,
             )
 
+    if idle_timeout_restart:
+        conversation.ai_autoresponder_consecutive_count = 0
+        if conversation.status != "aberta":
+            conversation.status = "aberta"
+        db.add(conversation)
+
     consecutive_count = int(conversation.ai_autoresponder_consecutive_count or 0)
     max_consecutive = int(config.get("max_consecutive_auto_replies") or 3)
     if consecutive_count >= max_consecutive:
@@ -4015,8 +4096,21 @@ def process_inbound_message(
             )
 
     scheduling_response = None
-    if _is_conversation_start_for_welcome(db, conversation=conversation) and _should_send_conversation_start_menu(inbound_text):
-        scheduling_response = _build_conversation_start_welcome_response()
+    if idle_timeout_restart:
+        knowledge_base_for_welcome = get_knowledge_base_global_config(db, tenant_id=tenant_id)
+        scheduling_response = _build_conversation_start_welcome_response(
+            intro_text=_resolve_welcome_greeting_from_knowledge(knowledge_base_for_welcome),
+        )
+        metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+        metadata["reason"] = "idle_timeout_restart"
+        metadata["idle_minutes"] = round(idle_minutes or 0.0, 2)
+        metadata["restart_after_minutes"] = INACTIVE_CONVERSATION_RESTART_MINUTES
+        scheduling_response["metadata"] = metadata
+    elif _is_conversation_start_for_welcome(db, conversation=conversation) and _should_send_conversation_start_menu(inbound_text):
+        knowledge_base_for_welcome = get_knowledge_base_global_config(db, tenant_id=tenant_id)
+        scheduling_response = _build_conversation_start_welcome_response(
+            intro_text=_resolve_welcome_greeting_from_knowledge(knowledge_base_for_welcome),
+        )
     if not scheduling_response:
         scheduling_response = _build_scheduling_operation_response(
             db,

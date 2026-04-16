@@ -44,6 +44,16 @@ def _upsert_ai_global_setting(db_session, *, tenant_id, value: dict):
     db_session.commit()
 
 
+def _upsert_ai_knowledge_base_setting(db_session, *, tenant_id, value: dict):
+    item = db_session.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "ai_knowledge_base.global"))
+    if not item:
+        item = Setting(tenant_id=tenant_id, key="ai_knowledge_base.global", value=value, is_secret=False)
+    else:
+        item.value = value
+    db_session.add(item)
+    db_session.commit()
+
+
 def _ensure_valid_whatsapp_account(db_session, *, tenant_id):
     account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
     if not account:
@@ -1278,6 +1288,118 @@ def test_greeting_with_intent_does_not_use_welcome_start_message(seeded_db, db_s
 
     assert result["status"] == "responded"
     assert result.get("scheduling_mode") != "welcome_message_start"
+
+
+def test_idle_conversation_over_twenty_minutes_restarts_with_welcome_menu(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar limpeza",
+    )
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+
+    latest_message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert latest_message is not None
+
+    second_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Quero horario para amanha",
+    )
+    second_inbound.created_at = latest_message.created_at + timedelta(minutes=21)
+    db_session.add(second_inbound)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=second_inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "welcome_message_start"
+    assert outbound is not None
+    assert outbound.message_type == "interactive_list"
+    scheduling_metadata = (outbound.payload or {}).get("scheduling") or {}
+    assert scheduling_metadata.get("reason") == "idle_timeout_restart"
+    assert float(scheduling_metadata.get("idle_minutes") or 0) >= 20
+
+
+def test_welcome_message_uses_custom_greeting_from_knowledge_base(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "clinic_profile": {
+                "clinic_name": "Clinica Exemplo",
+                "welcome_greeting_example": (
+                    "Seja bem-vindo(a)! Eu sou a assistente da Clinica Exemplo.\n"
+                    "Escolha uma opcao para comecarmos."
+                ),
+            }
+        },
+    )
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "welcome_message_start"
+    assert outbound is not None
+    assert "Seja bem-vindo(a)! Eu sou a assistente da Clinica Exemplo." in (outbound.body or "")
+    assert outbound.message_type == "interactive_list"
 
 
 def test_service_catalog_request_opens_service_selection_wizard(seeded_db, db_session):
