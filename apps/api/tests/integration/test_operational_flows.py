@@ -101,6 +101,20 @@ def test_flow_consulta_criada_lembrete_e_confirmacao(client, auth_headers, seede
     assert confirm.status_code == 200
     assert confirm.json()['confirmation_status'] == 'confirmada'
 
+    # Regression: updates with datetime/UUID fields must be JSON-safe in event/audit metadata.
+    reschedule = client.patch(
+        f'/api/v1/appointments/{appointment_id}',
+        headers=auth_headers['owner_a'],
+        json={
+            'unit_id': str(unit.id),
+            'starts_at': (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            'status': 'agendada',
+            'confirmation_status': 'pendente',
+        },
+    )
+    assert reschedule.status_code == 200
+    assert reschedule.json()['unit_id'] == str(unit.id)
+
 
 
 def test_flow_sem_resposta_segunda_tentativa_fila_humana(client, auth_headers, seeded_db, db_session):

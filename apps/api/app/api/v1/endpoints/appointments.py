@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy import func, select
@@ -13,6 +15,20 @@ from app.services.audit_service import record_audit
 from app.services.automation_service import emit_event
 
 router = APIRouter(prefix='/appointments', tags=['appointments'])
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return value
 
 
 @router.get('')
@@ -125,6 +141,7 @@ def update_appointment(
 
     previous_status = str(appointment.status)
     updates = payload.model_dump(exclude_unset=True)
+    safe_updates = _json_safe(updates)
 
     if "unit_id" in updates and updates["unit_id"] is None:
         raise ApiError(
@@ -172,7 +189,7 @@ def update_appointment(
             event_type='updated',
             from_status=previous_status,
             to_status=appointment.status,
-            metadata_json={'changes': updates},
+            metadata_json={'changes': safe_updates},
             created_by_user_id=principal.user.id,
         )
     )
@@ -200,7 +217,7 @@ def update_appointment(
         entity_id=str(appointment.id),
         tenant_id=tenant_id,
         user_id=principal.user.id,
-        metadata=updates,
+        metadata=safe_updates,
     )
 
     return AppointmentOutput.model_validate(appointment, from_attributes=True)

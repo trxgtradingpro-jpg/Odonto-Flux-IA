@@ -126,6 +126,21 @@ function toDateTimeLocalInput(value?: string | null): string {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+function getApiErrorMessage(error: unknown, fallback: string): string {
+  const responseData = (error as { response?: { data?: unknown } })?.response?.data;
+  if (responseData && typeof responseData === "object") {
+    const apiMessage = (responseData as { error?: { message?: string } })?.error?.message;
+    if (typeof apiMessage === "string" && apiMessage.trim()) {
+      return apiMessage;
+    }
+    const directMessage = (responseData as { message?: string })?.message;
+    if (typeof directMessage === "string" && directMessage.trim()) {
+      return directMessage;
+    }
+  }
+  return fallback;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -241,7 +256,7 @@ export default function AgendaPage() {
     mutationFn: async ({ appointmentId, payload }: { appointmentId: string; payload: Record<string, unknown> }) =>
       api.patch(`/appointments/${appointmentId}`, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] }),
-    onError: () => toast.error("Nao foi possivel atualizar a consulta."),
+    onError: (error) => toast.error(getApiErrorMessage(error, "Nao foi possivel atualizar a consulta.")),
   });
 
   const deleteMutation = useMutation({
@@ -252,7 +267,7 @@ export default function AgendaPage() {
       setSelectedAppointment(null);
       queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
     },
-    onError: () => toast.error("Nao foi possivel excluir a consulta."),
+    onError: (error) => toast.error(getApiErrorMessage(error, "Nao foi possivel excluir a consulta.")),
   });
 
   const createProfessionalMutation = useMutation({
