@@ -49,8 +49,8 @@ export function DataTableCard({
             Nenhum resultado encontrado.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <Table>
+          <div className="overflow-x-auto rounded-lg border border-stone-200">
+            <Table className="min-w-[680px]">
               <THead>
                 <TR>
                   {columns.map((column) => (

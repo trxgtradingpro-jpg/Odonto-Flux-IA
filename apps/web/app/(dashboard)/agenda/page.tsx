@@ -442,7 +442,8 @@ export default function AgendaPage() {
   const pxPerMinute = 1.35;
   const boardHeight = totalMinutes * pxPerMinute;
   const slotMarks = Array.from({ length: Math.floor(totalMinutes / 30) + 1 }, (_, index) => boardStartMinutes + index * 30);
-  const boardColumnMin = viewMode === "day" ? 220 : 180;
+  const boardColumnMin = viewMode === "day" ? 180 : 140;
+  const boardMinWidth = 72 + Math.max(displayDays.length, 1) * boardColumnMin;
   const professionalsForEditedUnit = dataset.professionals.filter(
     (item) => !editUnitId || item.unit_id === editUnitId || !item.unit_id,
   );
@@ -604,37 +605,39 @@ export default function AgendaPage() {
                 </Button>
               </div>
 
-              <div className="grid grid-cols-7 gap-1 rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
-                {WEEK_DAY_OPTIONS.map((item) => (
-                  <p key={`month-head-${item.value}`} className="text-center font-semibold text-stone-500">
-                    {item.label}
-                  </p>
-                ))}
-                {monthCalendarDays.map((date) => {
-                  const key = toDayKey(date);
-                  const focused = toDayKey(focusedDate) === key;
-                  const sameMonth = date.getMonth() === monthCursor.getMonth();
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`h-8 rounded-md text-xs transition ${
-                        focused
-                          ? "bg-primary text-primary-foreground"
-                          : sameMonth
-                            ? "text-stone-700 hover:bg-stone-200"
-                            : "text-stone-400"
-                      }`}
-                      onClick={() => {
-                        setFocusedDate(date);
-                        setWeekAnchor(startOfWeekMonday(date));
-                        setMonthCursor(date);
-                      }}
-                    >
-                      {date.getDate()}
-                    </button>
-                  );
-                })}
+              <div className="overflow-x-auto">
+                <div className="grid min-w-[320px] grid-cols-7 gap-1 rounded-md border border-stone-200 bg-stone-50 p-2 text-xs">
+                  {WEEK_DAY_OPTIONS.map((item) => (
+                    <p key={`month-head-${item.value}`} className="text-center font-semibold text-stone-500">
+                      {item.label}
+                    </p>
+                  ))}
+                  {monthCalendarDays.map((date) => {
+                    const key = toDayKey(date);
+                    const focused = toDayKey(focusedDate) === key;
+                    const sameMonth = date.getMonth() === monthCursor.getMonth();
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`h-8 rounded-md text-xs transition ${
+                          focused
+                            ? "bg-primary text-primary-foreground"
+                            : sameMonth
+                              ? "text-stone-700 hover:bg-stone-200"
+                              : "text-stone-400"
+                        }`}
+                        onClick={() => {
+                          setFocusedDate(date);
+                          setWeekAnchor(startOfWeekMonday(date));
+                          setMonthCursor(date);
+                        }}
+                      >
+                        {date.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="space-y-2 rounded-md border border-stone-200 bg-stone-50 p-2">
@@ -733,7 +736,7 @@ export default function AgendaPage() {
           </CardHeader>
           <CardContent>
             <div ref={boardRef} className="overflow-auto rounded-lg border border-stone-200 bg-white">
-              <div className="min-w-[720px] sm:min-w-[820px]">
+              <div style={{ minWidth: boardMinWidth }}>
                 <div
                   className="grid border-b border-stone-200"
                   style={{ gridTemplateColumns: `72px repeat(${Math.max(displayDays.length, 1)}, minmax(${boardColumnMin}px, 1fr))` }}
@@ -815,7 +818,7 @@ export default function AgendaPage() {
                             <button
                               type="button"
                               key={appointment.id}
-                              className="absolute left-1 right-1 rounded-md border p-2 text-left shadow-sm transition hover:scale-[1.01]"
+                              className="absolute left-1 right-1 overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:scale-[1.01]"
                               style={{
                                 top,
                                 minHeight: height,
@@ -827,9 +830,9 @@ export default function AgendaPage() {
                                 setAppointmentEditorOpen(true);
                               }}
                             >
-                              <p className="text-xs font-semibold text-stone-800">{appointment.patient_name}</p>
-                              <p className="text-[11px] text-stone-700">{appointment.procedure_type}</p>
-                              <p className="text-[11px] text-stone-700">{appointment.professional_name}</p>
+                              <p className="truncate text-xs font-semibold text-stone-800">{appointment.patient_name}</p>
+                              <p className="truncate text-[11px] text-stone-700">{appointment.procedure_type}</p>
+                              <p className="truncate text-[11px] text-stone-700">{appointment.professional_name}</p>
                             </button>
                           );
                         })}
@@ -1022,7 +1025,7 @@ export default function AgendaPage() {
           <CardTitle>Nova consulta</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-2 md:grid-cols-6">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
             <div>
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Paciente</p>
               <select

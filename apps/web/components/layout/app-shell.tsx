@@ -66,8 +66,8 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
           session={sessionQuery.data}
           branding={branding}
         />
-        <main className="flex-1 min-w-0 overflow-x-hidden px-3 py-4 sm:px-4 md:px-6 md:py-6">
-          <div className="mx-auto w-full max-w-full">{children}</div>
+        <main className="min-w-0 flex-1 overflow-x-hidden px-3 py-4 pb-24 sm:px-4 sm:pb-28 md:px-6 md:py-6 md:pb-28">
+          <div className="content-shell">{children}</div>
         </main>
       </div>
       <SupportFab />

@@ -11,8 +11,15 @@
 
 html,
 body {
+  width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 body {
@@ -20,6 +27,37 @@ body {
   min-height: 100vh;
   background-image: radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 15%, transparent), transparent 45%),
     radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-accent) 15%, transparent), transparent 40%);
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  max-width: 100%;
+}
+
+p,
+li,
+td,
+th,
+h1,
+h2,
+h3,
+h4 {
+  overflow-wrap: anywhere;
 }
 
 h1,
@@ -62,4 +100,10 @@ h4 {
 
 .focus\:ring-primary\/20:focus {
   --tw-ring-color: color-mix(in srgb, var(--tenant-primary) 20%, transparent) !important;
+}
+
+.content-shell {
+  width: 100%;
+  max-width: min(1680px, 100%);
+  margin-inline: auto;
 }

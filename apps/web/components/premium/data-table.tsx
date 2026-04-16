@@ -59,7 +59,7 @@ export function DataTable<T>({
     <Card className="border-stone-200">
       <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <CardTitle>{title}</CardTitle>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:flex-nowrap lg:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end max-sm:[&>*]:w-full">
           <Input
             className="w-full sm:flex-1 lg:w-72"
             placeholder={searchPlaceholder}
@@ -69,10 +69,10 @@ export function DataTable<T>({
           {rightHeader}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         {filteredRows.length ? (
-          <div className="overflow-x-auto">
-            <Table>
+          <div className="overflow-x-auto rounded-lg border border-stone-200">
+            <Table className="min-w-[700px]">
               <THead>
                 <TR>
                   {columns.map((column) => (

@@ -159,7 +159,7 @@ export function SupportFab() {
   return (
     <>
       {open ? (
-        <Card className="fixed bottom-24 right-4 z-[80] w-[min(92vw,360px)] border-emerald-300 shadow-2xl md:right-6">
+        <Card className="fixed bottom-20 right-3 z-[80] w-[min(94vw,360px)] border-emerald-300 shadow-2xl sm:bottom-24 sm:right-4 md:right-6">
           <CardHeader className="space-y-2 bg-emerald-500 pb-3 text-white">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base text-white">Suporte IA</CardTitle>
@@ -212,10 +212,10 @@ export function SupportFab() {
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="fixed bottom-4 right-3 z-[70] inline-flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 sm:bottom-5 sm:right-4 md:right-6"
+        className="fixed bottom-3 right-3 z-[70] inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 sm:bottom-5 sm:right-4 sm:h-14 sm:w-14 md:right-6"
         aria-label="Abrir suporte IA"
       >
-        <MessageCircle size={24} />
+        <MessageCircle size={22} />
       </button>
     </>
   );

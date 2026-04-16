@@ -21,15 +21,17 @@ export function FilterBar({
 }: FilterBarProps) {
   return (
     <Card className={cn("border-stone-200", className)}>
-      <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="w-full lg:max-w-sm">
+      <CardContent className="flex flex-col gap-3 p-4 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="w-full lg:max-w-md">
           <Input
             placeholder={searchPlaceholder}
             value={search ?? ""}
             onChange={(event) => onSearchChange?.(event.target.value)}
           />
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">{children}</div>
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end [&>*]:min-w-0 max-sm:[&>*]:w-full">
+          {children}
+        </div>
       </CardContent>
     </Card>
   );

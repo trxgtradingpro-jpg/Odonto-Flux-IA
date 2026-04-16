@@ -34,13 +34,13 @@ export function Topbar({
 
   return (
     <header
-      className="sticky top-0 z-20 flex h-16 min-w-0 items-center justify-between border-b border-border bg-white/90 px-3 backdrop-blur sm:px-4 md:px-6"
+      className="sticky top-0 z-20 flex min-h-16 min-w-0 items-center justify-between gap-2 border-b border-border bg-white/90 px-3 py-2 backdrop-blur sm:px-4 md:px-6"
       style={{
         boxShadow: "0 8px 24px rgba(0,0,0,0.04)",
       }}
     >
       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-        <Button variant="outline" className="h-9 w-9 px-0" onClick={onToggleSidebar} title="Alternar menu">
+        <Button variant="outline" className="h-9 w-9 shrink-0 px-0" onClick={onToggleSidebar} title="Alternar menu">
           <Menu size={16} />
         </Button>
         <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 md:flex">
@@ -72,7 +72,7 @@ export function Topbar({
         </div>
       </div>
 
-      <div className="flex items-center gap-1 sm:gap-2">
+      <div className="flex min-w-0 items-center gap-1 sm:gap-2">
         <div className="hidden items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-1.5 lg:flex">
           <CalendarDays size={14} className="text-stone-500" />
           <span className="text-xs text-stone-600">{today}</span>
@@ -137,7 +137,7 @@ export function Topbar({
           </div>
         </div>
 
-        <Button variant="outline" onClick={onLogout} className="gap-1.5 px-2 sm:px-3">
+        <Button variant="outline" onClick={onLogout} className="shrink-0 gap-1.5 px-2 sm:px-3">
           <LogOut size={14} />
           <span className="hidden sm:inline">Sair</span>
         </Button>

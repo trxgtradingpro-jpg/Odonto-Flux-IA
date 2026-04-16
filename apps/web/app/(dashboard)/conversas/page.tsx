@@ -536,7 +536,7 @@ export default function ConversasPage() {
         </select>
       </FilterBar>
 
-      <div className="grid gap-4 xl:grid-cols-[340px,1fr,360px]">
+      <div className="grid gap-4 xl:grid-cols-[320px,minmax(0,1fr)] 2xl:grid-cols-[320px,minmax(0,1fr),360px]">
         <Card className="border-stone-200">
           <CardHeader>
             <CardTitle>Conversas</CardTitle>
@@ -658,7 +658,7 @@ export default function ConversasPage() {
               <>
                 <div
                   ref={messageListRef}
-                  className="max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4"
+                  className="max-h-[min(60vh,560px)] space-y-3 overflow-y-auto rounded-xl border border-stone-200 bg-stone-50 p-4"
                 >
                   {messagesQuery.isLoading ? (
                     <p className="text-sm text-stone-500">Carregando mensagens...</p>
@@ -694,7 +694,7 @@ export default function ConversasPage() {
                 </div>
 
                 <div className="space-y-3 rounded-xl border border-stone-200 p-3">
-                  <div className="grid gap-2 md:grid-cols-[1fr,220px]">
+                  <div className="grid gap-2 sm:grid-cols-[1fr,220px]">
                     <Input
                       placeholder="Escreva sua mensagem para o paciente..."
                       value={draftMessage}
@@ -733,7 +733,7 @@ export default function ConversasPage() {
                     )}
                   </div>
 
-                  <div className="grid gap-2 md:grid-cols-[1fr,220px]">
+                  <div className="grid gap-2 sm:grid-cols-[1fr,220px]">
                     <Input
                       placeholder="Nota interna (não enviada ao paciente)"
                       value={internalNote}
@@ -768,7 +768,7 @@ export default function ConversasPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-stone-200">
+        <Card className="border-stone-200 xl:col-span-2 2xl:col-span-1">
           <CardHeader>
             <CardTitle>Contexto do paciente</CardTitle>
           </CardHeader>

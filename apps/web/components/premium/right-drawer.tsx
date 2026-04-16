@@ -11,7 +11,7 @@ export function RightDrawer({
   title,
   description,
   children,
-  widthClassName = "w-full max-w-xl",
+  widthClassName = "w-full sm:max-w-xl",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -26,7 +26,7 @@ export function RightDrawer({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px]" />
         <Dialog.Content
           className={cn(
-            "fixed right-0 top-0 z-50 h-full overflow-y-auto border-l border-stone-200 bg-white p-5 shadow-2xl",
+            "fixed inset-y-0 right-0 z-50 h-full max-w-full overflow-y-auto overscroll-contain border-l border-stone-200 bg-white p-4 shadow-2xl sm:p-5",
             widthClassName,
           )}
         >
