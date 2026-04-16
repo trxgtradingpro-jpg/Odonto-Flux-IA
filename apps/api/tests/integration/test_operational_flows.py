@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.models import (
+    Appointment,
     Automation,
     AutomationRun,
     CampaignAudience,
@@ -114,6 +115,60 @@ def test_flow_consulta_criada_lembrete_e_confirmacao(client, auth_headers, seede
     )
     assert reschedule.status_code == 200
     assert reschedule.json()['unit_id'] == str(unit.id)
+
+
+def test_delete_professional_unlinks_appointments(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db['tenant_a'].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+
+    professional_response = client.post(
+        '/api/v1/professionals',
+        headers=auth_headers['owner_a'],
+        json={
+            'unit_id': str(unit.id),
+            'full_name': 'Dr Excluir',
+            'working_days': [1, 2, 3, 4, 5],
+            'shift_start': '08:00',
+            'shift_end': '18:00',
+            'procedures': ['Limpeza odontológica'],
+        },
+    )
+    assert professional_response.status_code == 200
+    professional_id = professional_response.json()['id']
+
+    appointment_response = client.post(
+        '/api/v1/appointments',
+        headers=auth_headers['owner_a'],
+        json={
+            'patient_id': str(patient.id),
+            'unit_id': str(unit.id),
+            'professional_id': professional_id,
+            'procedure_type': 'Limpeza odontológica',
+            'starts_at': (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+        },
+    )
+    assert appointment_response.status_code == 200
+    appointment_id = appointment_response.json()['id']
+
+    delete_response = client.delete(
+        f'/api/v1/professionals/{professional_id}',
+        headers=auth_headers['owner_a'],
+    )
+    assert delete_response.status_code == 204
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.id == appointment_id,
+            Appointment.tenant_id == tenant_id,
+        )
+    )
+    assert appointment is not None
+    assert appointment.professional_id is None
+
+    professionals_list = client.get('/api/v1/professionals', headers=auth_headers['owner_a'])
+    assert professionals_list.status_code == 200
+    ids = [item['id'] for item in professionals_list.json()['data']]
+    assert professional_id not in ids
 
 
 

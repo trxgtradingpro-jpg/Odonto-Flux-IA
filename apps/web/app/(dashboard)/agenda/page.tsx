@@ -304,6 +304,15 @@ export default function AgendaPage() {
     onError: () => toast.error("Nao foi possivel cadastrar o profissional."),
   });
 
+  const deleteProfessionalMutation = useMutation({
+    mutationFn: async (professionalId: string) => api.delete(`/professionals/${professionalId}`),
+    onSuccess: () => {
+      toast.success("Profissional excluido com sucesso.");
+      queryClient.invalidateQueries({ queryKey: ["agenda-dataset"] });
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, "Nao foi possivel excluir o profissional.")),
+  });
+
   const saveColorsMutation = useMutation({
     mutationFn: async () =>
       api.put("/settings/agenda.professional_colors", {
@@ -1214,6 +1223,8 @@ export default function AgendaPage() {
                     .sort()
                     .map((day) => WEEK_DAY_OPTIONS.find((item) => item.value === day)?.label ?? String(day))
                     .join(", ");
+                  const isDeletingCurrent =
+                    deleteProfessionalMutation.isPending && deleteProfessionalMutation.variables === professional.id;
                   return (
                     <div
                       key={professional.id}
@@ -1226,6 +1237,22 @@ export default function AgendaPage() {
                       <p className="mt-1 text-xs text-stone-600">
                         Servicos: {professional.procedures.length ? professional.procedures.join(", ") : "Nao informados"}
                       </p>
+                      <div className="mt-2 flex justify-end">
+                        <Button
+                          variant="destructive"
+                          className="h-8 px-2 text-xs"
+                          onClick={() => {
+                            const confirmed = window.confirm(
+                              `Excluir o profissional ${professional.full_name}? Essa acao remove o cadastro.`,
+                            );
+                            if (!confirmed) return;
+                            deleteProfessionalMutation.mutate(professional.id);
+                          }}
+                          disabled={deleteProfessionalMutation.isPending}
+                        >
+                          {isDeletingCurrent ? "Excluindo..." : "Excluir profissional"}
+                        </Button>
+                      </div>
                     </div>
                   );
                 })

@@ -1,13 +1,14 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Query, Response, status
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_current_principal, get_tenant_id
 from app.core.exceptions import ApiError
 from app.db.session import get_db
-from app.models import Professional, Unit
+from app.models import Appointment, Professional, Unit
 from app.schemas.professional import ProfessionalCreate, ProfessionalOutput, ProfessionalUpdate
 from app.services.audit_service import record_audit
 
@@ -111,3 +112,48 @@ def update_professional(
         metadata=updates,
     )
     return ProfessionalOutput.model_validate(item, from_attributes=True)
+
+
+@router.delete("/{professional_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_professional(
+    professional_id: UUID,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    item = db.scalar(
+        select(Professional).where(
+            Professional.id == professional_id,
+            Professional.tenant_id == tenant_id,
+        )
+    )
+    if not item:
+        raise ApiError(status_code=404, code="PROFESSIONAL_NOT_FOUND", message="Profissional nao encontrado")
+
+    reassigned_appointments = db.execute(
+        update(Appointment)
+        .where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.professional_id == professional_id,
+        )
+        .values(professional_id=None, updated_at=datetime.now(UTC))
+    ).rowcount or 0
+
+    professional_name = item.full_name
+    db.delete(item)
+    db.commit()
+
+    record_audit(
+        db,
+        action="professional.delete",
+        entity_type="professional",
+        entity_id=str(professional_id),
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={
+            "full_name": professional_name,
+            "reassigned_appointments": int(reassigned_appointments),
+        },
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
