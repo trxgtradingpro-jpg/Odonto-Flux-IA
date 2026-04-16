@@ -859,101 +859,130 @@ export default function AgendaPage() {
           <div className="space-y-3">
             <Card className="border-stone-200">
               <CardContent className="space-y-3 p-4">
-                <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                  <p className="font-semibold text-stone-800">{selectedAppointment.patient_name}</p>
-                  <p className="text-xs text-stone-500">{formatPhoneBR(selectedAppointment.patient_phone)}</p>
+                <div>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Paciente</p>
+                  <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
+                    <p className="font-semibold text-stone-800">{selectedAppointment.patient_name}</p>
+                    <p className="text-xs text-stone-500">{formatPhoneBR(selectedAppointment.patient_phone)}</p>
+                  </div>
                 </div>
 
                 <div className="grid gap-2 md:grid-cols-2">
-                  <select
-                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-                    value={editUnitId}
-                    onChange={(event) => {
-                      const nextUnitId = event.target.value;
-                      setEditUnitId(nextUnitId);
-                      setEditProfessionalId((current) => {
-                        if (!current) return "";
-                        const allowed = dataset.professionals.some(
-                          (professional) =>
-                            professional.id === current &&
-                            (professional.unit_id === nextUnitId || !professional.unit_id),
-                        );
-                        return allowed ? current : "";
-                      });
-                    }}
-                  >
-                    <option value="">Unidade</option>
-                    {dataset.units.map((unit) => (
-                      <option key={unit.id} value={unit.id}>
-                        {unit.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Unidade</p>
+                    <select
+                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      value={editUnitId}
+                      onChange={(event) => {
+                        const nextUnitId = event.target.value;
+                        setEditUnitId(nextUnitId);
+                        setEditProfessionalId((current) => {
+                          if (!current) return "";
+                          const allowed = dataset.professionals.some(
+                            (professional) =>
+                              professional.id === current &&
+                              (professional.unit_id === nextUnitId || !professional.unit_id),
+                          );
+                          return allowed ? current : "";
+                        });
+                      }}
+                    >
+                      <option value="">Selecione a unidade</option>
+                      {dataset.units.map((unit) => (
+                        <option key={unit.id} value={unit.id}>
+                          {unit.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                  <select
-                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-                    value={editProfessionalId}
-                    onChange={(event) => setEditProfessionalId(event.target.value)}
-                  >
-                    <option value="">Profissional (opcional)</option>
-                    {professionalsForEditedUnit.map((professional) => (
-                      <option key={professional.id} value={professional.id}>
-                        {professional.full_name}
-                      </option>
-                    ))}
-                  </select>
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Profissional</p>
+                    <select
+                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      value={editProfessionalId}
+                      onChange={(event) => setEditProfessionalId(event.target.value)}
+                    >
+                      <option value="">Sem profissional (opcional)</option>
+                      {professionalsForEditedUnit.map((professional) => (
+                        <option key={professional.id} value={professional.id}>
+                          {professional.full_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
-                <Input
-                  placeholder="Procedimento"
-                  value={editProcedure}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => setEditProcedure(event.target.value)}
-                />
-
-                <div className="grid gap-2 md:grid-cols-2">
+                <div>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Procedimento</p>
                   <Input
-                    type="datetime-local"
-                    value={editStartsAt}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditStartsAt(event.target.value)}
-                  />
-                  <Input
-                    type="datetime-local"
-                    value={editEndsAt}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditEndsAt(event.target.value)}
+                    placeholder="Ex.: Instalacao de lentes"
+                    value={editProcedure}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditProcedure(event.target.value)}
                   />
                 </div>
 
                 <div className="grid gap-2 md:grid-cols-2">
-                  <select
-                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-                    value={editStatus}
-                    onChange={(event) => setEditStatus(event.target.value)}
-                  >
-                    {APPOINTMENT_STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-                    value={editConfirmationStatus}
-                    onChange={(event) => setEditConfirmationStatus(event.target.value)}
-                  >
-                    {CONFIRMATION_STATUS_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Inicio</p>
+                    <Input
+                      type="datetime-local"
+                      value={editStartsAt}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setEditStartsAt(event.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Fim</p>
+                    <Input
+                      type="datetime-local"
+                      value={editEndsAt}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setEditEndsAt(event.target.value)}
+                    />
+                  </div>
                 </div>
 
-                <textarea
-                  className="min-h-[84px] w-full rounded-md border border-stone-300 bg-white p-2 text-sm"
-                  placeholder="Observacoes da consulta"
-                  value={editNotes}
-                  onChange={(event) => setEditNotes(event.target.value)}
-                />
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Status da consulta</p>
+                    <select
+                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      value={editStatus}
+                      onChange={(event) => setEditStatus(event.target.value)}
+                    >
+                      {APPOINTMENT_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Confirmacao</p>
+                    <select
+                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      value={editConfirmationStatus}
+                      onChange={(event) => setEditConfirmationStatus(event.target.value)}
+                    >
+                      {CONFIRMATION_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Observacoes</p>
+                  <textarea
+                    className="min-h-[84px] w-full rounded-md border border-stone-300 bg-white p-2 text-sm"
+                    placeholder="Observacoes da consulta"
+                    value={editNotes}
+                    onChange={(event) => setEditNotes(event.target.value)}
+                  />
+                </div>
 
                 <div className="flex justify-end gap-2">
                   <Button
@@ -994,67 +1023,85 @@ export default function AgendaPage() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-2 md:grid-cols-6">
-            <select
-              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-              value={patientId}
-              onChange={(event) => setPatientId(event.target.value)}
-            >
-              <option value="">Paciente</option>
-              {dataset.patients.map((patient) => (
-                <option key={patient.id} value={patient.id}>
-                  {patient.full_name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-              value={unitId}
-              onChange={(event) => {
-                setUnitId(event.target.value);
-                setProfessionalId("");
-              }}
-            >
-              <option value="">Unidade</option>
-              {dataset.units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-              value={professionalId}
-              onChange={(event) => setProfessionalId(event.target.value)}
-            >
-              <option value="">Profissional (opcional)</option>
-              {professionalsForSelectedUnit.map((professional) => (
-                <option key={professional.id} value={professional.id}>
-                  {professional.full_name}
-                </option>
-              ))}
-            </select>
-            <Input
-              placeholder="Procedimento"
-              value={procedure}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setProcedure(event.target.value)}
-            />
-            <Input
-              type="datetime-local"
-              value={startsAt}
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setStartsAt(event.target.value)}
-            />
-            <Button
-              onClick={() => {
-                if (!patientId || !unitId || !procedure || !startsAt) {
-                  toast.error("Preencha todos os campos para criar a consulta.");
-                  return;
-                }
-                createMutation.mutate();
-              }}
-              disabled={createMutation.isPending}
-            >
-              {createMutation.isPending ? "Criando..." : "Criar consulta"}
-            </Button>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Paciente</p>
+              <select
+                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                value={patientId}
+                onChange={(event) => setPatientId(event.target.value)}
+              >
+                <option value="">Selecione o paciente</option>
+                {dataset.patients.map((patient) => (
+                  <option key={patient.id} value={patient.id}>
+                    {patient.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Unidade</p>
+              <select
+                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                value={unitId}
+                onChange={(event) => {
+                  setUnitId(event.target.value);
+                  setProfessionalId("");
+                }}
+              >
+                <option value="">Selecione a unidade</option>
+                {dataset.units.map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Profissional</p>
+              <select
+                className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                value={professionalId}
+                onChange={(event) => setProfessionalId(event.target.value)}
+              >
+                <option value="">Sem profissional (opcional)</option>
+                {professionalsForSelectedUnit.map((professional) => (
+                  <option key={professional.id} value={professional.id}>
+                    {professional.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Procedimento</p>
+              <Input
+                placeholder="Ex.: Limpeza odontologica"
+                value={procedure}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => setProcedure(event.target.value)}
+              />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">Data e hora</p>
+              <Input
+                type="datetime-local"
+                value={startsAt}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => setStartsAt(event.target.value)}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button
+                className="w-full"
+                onClick={() => {
+                  if (!patientId || !unitId || !procedure || !startsAt) {
+                    toast.error("Preencha todos os campos para criar a consulta.");
+                    return;
+                  }
+                  createMutation.mutate();
+                }}
+                disabled={createMutation.isPending}
+              >
+                {createMutation.isPending ? "Criando..." : "Criar consulta"}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
