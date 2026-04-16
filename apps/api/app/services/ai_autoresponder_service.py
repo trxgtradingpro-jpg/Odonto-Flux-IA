@@ -31,6 +31,7 @@ from app.models import (
     User,
 )
 from app.models.enums import MessageDirection, MessageStatus
+from app.services.appointment_validation_service import find_professional_conflict
 from app.services.automation_service import emit_event
 from app.services.audit_service import record_audit
 from app.services.llm_service import classify_intent, run_llm_task
@@ -1474,7 +1475,7 @@ def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Mes
     message = latest_messages[0]
     payload = message.payload if isinstance(message.payload, dict) else {}
     mode = str(payload.get("mode") or "").strip()
-    if mode.startswith("booking_wizard_") or mode == "welcome_message_start":
+    if mode.startswith("booking_wizard_") or mode in {"welcome_message_start", "post_appointment_menu"}:
         return message
     return None
 
@@ -2130,6 +2131,7 @@ def _try_booking_wizard_response(
         inbound_message=inbound_message,
         inbound_text=inbound_text,
     )
+    selection_token_normalized = _normalize_for_match(selection_token)
     normalized_inbound = _normalize_for_match(inbound_text)
     period = _detect_period_preference(inbound_text)
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
@@ -2177,6 +2179,70 @@ def _try_booking_wizard_response(
         carried_period_raw = str(latest_scheduling.get("period") or "").strip().lower()
         carried_period = period or (carried_period_raw if carried_period_raw in {"morning", "afternoon", "evening"} else None)
         carried_requested_date = requested_date or _parse_iso_date(latest_scheduling.get("requested_date"))
+
+        should_restart_from_new_intent = (
+            latest_mode in {"booking_wizard_confirm", "booking_wizard_time_select", "post_appointment_menu"}
+            and not has_interactive_reply
+            and not selection_like
+            and not has_confirmation_choice
+            and (force_wizard or has_scheduling_keywords)
+            and (
+                _wizard_has_explicit_service_inbound(inbound_text)
+                or _is_explicit_availability_request(inbound_text)
+                or requested_date is not None
+                or period is not None
+            )
+        )
+        if should_restart_from_new_intent:
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="Perfeito. Vamos iniciar um novo agendamento. Escolha o serviço:",
+                period=period,
+                requested_date=requested_date,
+                preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            )
+
+        if latest_mode == "post_appointment_menu":
+            if selection_token_normalized in {"post_menu_rebook", "novo agendamento"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos iniciar um novo agendamento. Escolha o serviço:",
+                    period=period,
+                    requested_date=requested_date,
+                )
+            if selection_token_normalized in {"post_menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
+            if selection_token_normalized in {"post_menu_close", "encerrar conversa"}:
+                return {
+                    "mode": "post_menu_close",
+                    "response_text": "Perfeito. Encerramos por aqui. Quando quiser, é só chamar.",
+                    "metadata": {
+                        "reason": "conversation_closed_by_user",
+                        "close_conversation": True,
+                    },
+                }
+            if has_scheduling_keywords or force_wizard:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Escolha o serviço para continuar:",
+                    period=period,
+                    requested_date=requested_date,
+                    preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+                )
+            return _build_conversation_start_welcome_response(
+                intro_text="Escolha uma opção no menu para continuar."
+            )
 
         if latest_mode in {
             "welcome_message_start",
@@ -2471,6 +2537,45 @@ def _try_booking_wizard_response(
                         selected_date=selected_day,
                         config=config,
                     )
+                professional_id_raw = selected_slot.get("professional_id")
+                professional_id = None
+                if professional_id_raw:
+                    try:
+                        professional_id = UUID(str(professional_id_raw))
+                    except (TypeError, ValueError):
+                        professional_id = None
+                if professional_id:
+                    conflict = find_professional_conflict(
+                        db,
+                        tenant_id=conversation.tenant_id,
+                        professional_id=professional_id,
+                        starts_at=selected_slot["starts_at_utc"],
+                        ends_at=selected_slot["ends_at_utc"],
+                    )
+                    if conflict:
+                        retry_response = _wizard_build_time_step_response(
+                            db,
+                            conversation=conversation,
+                            unit=unit,
+                            procedure_type=selected_service,
+                            period=carried_period,
+                            selected_date=selected_day,
+                            config=config,
+                        )
+                        retry_metadata = (
+                            retry_response.get("metadata")
+                            if isinstance(retry_response.get("metadata"), dict)
+                            else {}
+                        )
+                        retry_metadata["reason"] = "selected_slot_no_longer_available"
+                        retry_metadata["body_text"] = (
+                            "Esse horário acabou de ser reservado. Selecione outro horário."
+                        )
+                        retry_response["metadata"] = retry_metadata
+                        retry_response["response_text"] = (
+                            "Esse horário acabou de ser reservado. Vamos escolher outro horário."
+                        )
+                        return retry_response
                 return _appointment_response_from_selected_slot(
                     db,
                     conversation=conversation,
@@ -2501,6 +2606,33 @@ def _try_booking_wizard_response(
             )
 
     if not has_scheduling_keywords and not force_wizard:
+        if selection_token_normalized in {"post_menu_rebook", "novo agendamento"}:
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="Perfeito. Vamos iniciar um novo agendamento. Escolha o serviço:",
+                period=period,
+                requested_date=requested_date,
+            )
+        if selection_token_normalized in {"post_menu_human", "falar com atendente"}:
+            return {
+                "mode": "menu_human_handoff",
+                "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                "metadata": {
+                    "reason": "patient_requested_human",
+                    "handoff_required": True,
+                    "handoff_reason": "patient_requested_human",
+                },
+            }
+        if selection_token_normalized in {"post_menu_close", "encerrar conversa"}:
+            return {
+                "mode": "post_menu_close",
+                "response_text": "Perfeito. Encerramos por aqui. Quando quiser, é só chamar.",
+                "metadata": {
+                    "reason": "conversation_closed_by_user",
+                    "close_conversation": True,
+                },
+            }
         return None
     if _extract_option_index_choice(inbound_text) is not None or _extract_time_choice(inbound_text) is not None:
         return None
@@ -3124,6 +3256,38 @@ def _appointment_response_from_selected_slot(
                 "professional_name": selected_slot.get("professional_name"),
             },
         }
+
+    selected_professional_id = None
+    selected_professional_raw = selected_slot.get("professional_id")
+    if selected_professional_raw:
+        try:
+            selected_professional_id = UUID(str(selected_professional_raw))
+        except (TypeError, ValueError):
+            selected_professional_id = None
+
+    if selected_professional_id:
+        conflict = find_professional_conflict(
+            db,
+            tenant_id=conversation.tenant_id,
+            professional_id=selected_professional_id,
+            starts_at=selected_slot["starts_at_utc"],
+            ends_at=selected_slot["ends_at_utc"],
+        )
+        if conflict:
+            return {
+                "mode": "selected_slot_no_longer_available",
+                "response_text": (
+                    "Esse horário acabou de ser reservado e não está mais disponível.\n"
+                    "Posso te mostrar outras opções."
+                ),
+                "metadata": {
+                    "reason": "selected_slot_no_longer_available",
+                    "period": period,
+                    "procedure_type": procedure_type,
+                    "unit_id": str(unit.id),
+                    "requested_date": requested_date.isoformat() if requested_date else None,
+                },
+            }
 
     appointment = Appointment(
         tenant_id=conversation.tenant_id,
@@ -4191,6 +4355,7 @@ def process_inbound_message(
             )
             scheduling_mode = str(scheduling_response.get("mode") or "").strip()
             handoff_required = bool(scheduling_metadata.get("handoff_required"))
+            close_conversation_requested = bool(scheduling_metadata.get("close_conversation"))
             handoff_reason = str(
                 scheduling_metadata.get("handoff_reason")
                 or scheduling_metadata.get("reason")
@@ -4242,6 +4407,8 @@ def process_inbound_message(
 
                 # Após concluir agendamento, encerra automaticamente a conversa atual.
                 conversation.status = "finalizada"
+            elif close_conversation_requested:
+                conversation.status = "finalizada"
 
             if handoff_required:
                 _notify_handoff(
@@ -4277,6 +4444,7 @@ def process_inbound_message(
                         "scheduling_mode": scheduling_response.get("mode"),
                         "handoff_required": handoff_required,
                         "handoff_reason": handoff_reason if handoff_required else None,
+                        "close_conversation_requested": close_conversation_requested,
                         "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
                         "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
                     },
@@ -4336,6 +4504,7 @@ def process_inbound_message(
                 "scheduling": scheduling_metadata,
                 "handoff_required": handoff_required,
                 "handoff_reason": handoff_reason if handoff_required else None,
+                "close_conversation_requested": close_conversation_requested,
                 "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
                 "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
             }

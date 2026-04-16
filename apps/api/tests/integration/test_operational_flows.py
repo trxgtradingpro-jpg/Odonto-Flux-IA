@@ -9,11 +9,15 @@ from app.models import (
     CampaignAudience,
     CampaignMessage,
     Conversation,
+    Job,
     OutboxMessage,
     Patient,
     PatientTag,
+    Professional,
     Unit,
+    WebhookInbox,
 )
+from app.models.enums import OutboxStatus
 from app.services.automation_service import execute_automation_run
 
 
@@ -42,6 +46,22 @@ def _ensure_unit_and_patient(db_session, tenant_id):
         db_session.flush()
 
     return unit, patient
+
+
+def _create_professional(db_session, *, tenant_id, unit_id, full_name="Dr Profissional"):
+    professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit_id,
+        full_name=full_name,
+        working_days=[0, 1, 2, 3, 4, 5],
+        shift_start="08:00",
+        shift_end="18:00",
+        procedures=["Limpeza odontolÃ³gica", "ReabilitaÃ§Ã£o estÃ©tica"],
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.flush()
+    return professional
 
 
 
@@ -171,6 +191,106 @@ def test_delete_professional_unlinks_appointments(client, auth_headers, seeded_d
     assert professional_id not in ids
 
 
+def test_create_appointment_blocks_overlapping_professional_slot(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    professional = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Slot",
+    )
+    db_session.commit()
+
+    first_start = datetime.now(UTC) + timedelta(days=2)
+    first_end = first_start + timedelta(minutes=60)
+    first = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "professional_id": str(professional.id),
+            "procedure_type": "Limpeza odontolÃ³gica",
+            "starts_at": first_start.isoformat(),
+            "ends_at": first_end.isoformat(),
+        },
+    )
+    assert first.status_code == 200
+
+    conflict_start = first_start + timedelta(minutes=30)
+    conflict_end = conflict_start + timedelta(minutes=60)
+    conflict = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "professional_id": str(professional.id),
+            "procedure_type": "ReabilitaÃ§Ã£o estÃ©tica",
+            "starts_at": conflict_start.isoformat(),
+            "ends_at": conflict_end.isoformat(),
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "PROFESSIONAL_SLOT_CONFLICT"
+
+
+def test_update_appointment_blocks_overlapping_professional_slot(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    professional = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Conflito",
+    )
+    db_session.commit()
+
+    first_start = datetime.now(UTC) + timedelta(days=5)
+    first_end = first_start + timedelta(minutes=60)
+    first = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "professional_id": str(professional.id),
+            "procedure_type": "Limpeza odontolÃ³gica",
+            "starts_at": first_start.isoformat(),
+            "ends_at": first_end.isoformat(),
+        },
+    )
+    assert first.status_code == 200
+
+    second_start = first_start + timedelta(hours=2)
+    second = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "ReabilitaÃ§Ã£o estÃ©tica",
+            "starts_at": second_start.isoformat(),
+            "ends_at": (second_start + timedelta(minutes=60)).isoformat(),
+        },
+    )
+    assert second.status_code == 200
+
+    second_id = second.json()["id"]
+    conflict_update = client.patch(
+        f"/api/v1/appointments/{second_id}",
+        headers=auth_headers["owner_a"],
+        json={
+            "professional_id": str(professional.id),
+            "starts_at": (first_start + timedelta(minutes=20)).isoformat(),
+            "ends_at": (first_start + timedelta(minutes=80)).isoformat(),
+        },
+    )
+    assert conflict_update.status_code == 409
+    assert conflict_update.json()["error"]["code"] == "PROFESSIONAL_SLOT_CONFLICT"
+
+
 
 def test_flow_sem_resposta_segunda_tentativa_fila_humana(client, auth_headers, seeded_db, db_session):
     tenant_id = seeded_db['tenant_a'].id
@@ -289,6 +409,75 @@ def test_flow_orcamento_followup_2dias(client, auth_headers, seeded_db, db_sessi
 
     outbox = db_session.scalar(select(OutboxMessage).where(OutboxMessage.tenant_id == tenant_id))
     assert outbox is not None
+
+
+def test_operations_overview_and_retry_actions(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+
+    outbox_failed = OutboxMessage(
+        tenant_id=tenant_id,
+        channel="whatsapp",
+        status=OutboxStatus.FAILED.value,
+        payload={"message_type": "text", "body": "teste"},
+        retry_count=2,
+        max_retries=5,
+        last_error="Falha de envio",
+    )
+    outbox_dead = OutboxMessage(
+        tenant_id=tenant_id,
+        channel="whatsapp",
+        status=OutboxStatus.DEAD_LETTER.value,
+        payload={"message_type": "interactive_list", "body": "menu"},
+        retry_count=5,
+        max_retries=5,
+        last_error="Conta invalida",
+    )
+    failed_job = Job(
+        tenant_id=tenant_id,
+        job_type="process_whatsapp_outbox",
+        status="failed",
+        payload={"origin": "test"},
+        result={},
+        attempts=3,
+        max_attempts=3,
+        error_message="Erro no worker",
+    )
+    failed_webhook = WebhookInbox(
+        tenant_id=tenant_id,
+        provider="infobip_whatsapp",
+        event_id="evt-test-1",
+        payload={"kind": "message"},
+        processed=False,
+        error_message="Payload invalido",
+    )
+    db_session.add_all([outbox_failed, outbox_dead, failed_job, failed_webhook])
+    db_session.commit()
+
+    overview = client.get("/api/v1/operations/overview", headers=auth_headers["owner_a"])
+    assert overview.status_code == 200
+    overview_data = overview.json()
+    assert overview_data["outbox"]["failed"] >= 2
+    assert overview_data["outbox"]["dead_letter"] >= 1
+    assert overview_data["jobs"]["failed_last_24h"] >= 1
+    assert overview_data["webhooks"]["failed"] >= 1
+
+    failures = client.get("/api/v1/operations/failures", headers=auth_headers["owner_a"])
+    assert failures.status_code == 200
+    assert failures.json()["meta"]["total"] >= 4
+
+    retry_outbox = client.post(
+        f"/api/v1/operations/outbox/{outbox_dead.id}/retry",
+        headers=auth_headers["owner_a"],
+    )
+    assert retry_outbox.status_code == 200
+    assert retry_outbox.json()["status"] == OutboxStatus.PENDING.value
+
+    retry_job = client.post(
+        f"/api/v1/operations/jobs/{failed_job.id}/retry",
+        headers=auth_headers["owner_a"],
+    )
+    assert retry_job.status_code == 200
+    assert retry_job.json()["status"] == "pending"
 
 
 

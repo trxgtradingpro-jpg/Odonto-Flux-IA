@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { ComponentType } from "react";
 import {
+  AlertTriangle,
   BarChart3,
   Bell,
   Bot,
@@ -48,6 +49,7 @@ const navGroups: Array<{ title: string; items: NavItem[] }> = [
     title: "Operacao",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: Gauge },
+      { href: "/operacoes", label: "Operacoes", icon: AlertTriangle },
       { href: "/onboarding", label: "Onboarding", icon: Rocket },
       { href: "/conversas", label: "Conversas", icon: MessageSquare, badgeKey: "conversations" },
       { href: "/agenda", label: "Agenda", icon: CalendarDays, badgeKey: "pendingConfirmations" },

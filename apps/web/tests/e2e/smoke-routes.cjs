@@ -7,6 +7,8 @@ const routes = [
   "/pacientes",
   "/leads",
   "/agenda",
+  "/equipe-medica",
+  "/operacoes",
   "/campanhas",
   "/automacoes",
   "/documentos",

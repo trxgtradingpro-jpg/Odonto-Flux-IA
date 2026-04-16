@@ -11,6 +11,10 @@ from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Appointment, AppointmentEvent, Professional
 from app.schemas.appointment import AppointmentCreate, AppointmentOutput, AppointmentUpdate
+from app.services.appointment_validation_service import (
+    ACTIVE_APPOINTMENT_STATUSES,
+    find_professional_conflict,
+)
 from app.services.audit_service import record_audit
 from app.services.automation_service import emit_event
 
@@ -29,6 +33,16 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, UUID):
         return str(value)
     return value
+
+
+def _target_status_for_create(payload: AppointmentCreate) -> str:
+    # Creation always starts as scheduled in the current API contract.
+    return "agendada"
+
+
+def _target_status_for_update(appointment: Appointment, updates: dict[str, Any]) -> str:
+    raw_status = updates.get("status", appointment.status)
+    return str(raw_status or "").strip().lower()
 
 
 @router.get('')
@@ -55,6 +69,8 @@ def create_appointment(
     tenant_id=Depends(get_tenant_id),
     principal: Principal = Depends(get_current_principal),
 ):
+    target_status = _target_status_for_create(payload)
+
     if payload.professional_id:
         professional = db.scalar(
             select(Professional).where(
@@ -71,6 +87,26 @@ def create_appointment(
                 code="PROFESSIONAL_UNIT_MISMATCH",
                 message="Profissional nao atende na unidade selecionada",
             )
+
+        if target_status in ACTIVE_APPOINTMENT_STATUSES:
+            conflict = find_professional_conflict(
+                db,
+                tenant_id=tenant_id,
+                professional_id=payload.professional_id,
+                starts_at=payload.starts_at,
+                ends_at=payload.ends_at,
+            )
+            if conflict:
+                raise ApiError(
+                    status_code=409,
+                    code="PROFESSIONAL_SLOT_CONFLICT",
+                    message="Profissional ja possui consulta nesse horario",
+                    details={
+                        "conflict_appointment_id": str(conflict.id),
+                        "professional_id": str(payload.professional_id),
+                        "starts_at": payload.starts_at.isoformat(),
+                    },
+                )
 
     appointment = Appointment(
         tenant_id=tenant_id,
@@ -149,11 +185,20 @@ def update_appointment(
             code="UNIT_ID_REQUIRED",
             message="Unidade nao pode ser vazia",
         )
+    if "starts_at" in updates and updates["starts_at"] is None:
+        raise ApiError(
+            status_code=422,
+            code="STARTS_AT_REQUIRED",
+            message="Horario inicial nao pode ser vazio",
+        )
 
     target_unit_id = updates.get("unit_id", appointment.unit_id)
     target_professional_id = (
         updates["professional_id"] if "professional_id" in updates else appointment.professional_id
     )
+    target_starts_at = updates.get("starts_at", appointment.starts_at)
+    target_ends_at = updates.get("ends_at", appointment.ends_at)
+    target_status = _target_status_for_update(appointment, updates)
 
     if target_professional_id:
         professional = db.scalar(
@@ -172,6 +217,27 @@ def update_appointment(
                 code="PROFESSIONAL_UNIT_MISMATCH",
                 message="Profissional nao atende na unidade selecionada",
             )
+
+        if target_status in ACTIVE_APPOINTMENT_STATUSES:
+            conflict = find_professional_conflict(
+                db,
+                tenant_id=tenant_id,
+                professional_id=target_professional_id,
+                starts_at=target_starts_at,
+                ends_at=target_ends_at,
+                exclude_appointment_id=appointment.id,
+            )
+            if conflict:
+                raise ApiError(
+                    status_code=409,
+                    code="PROFESSIONAL_SLOT_CONFLICT",
+                    message="Profissional ja possui consulta nesse horario",
+                    details={
+                        "conflict_appointment_id": str(conflict.id),
+                        "professional_id": str(target_professional_id),
+                        "starts_at": target_starts_at.isoformat() if target_starts_at else None,
+                    },
+                )
 
     for key, value in updates.items():
         setattr(appointment, key, value)

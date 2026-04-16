@@ -9,6 +9,7 @@ from app.models import (
     Message,
     OutboxMessage,
     Patient,
+    Professional,
     Setting,
     Unit,
     WhatsAppAccount,
@@ -141,6 +142,22 @@ def _append_inbound_message(
     db_session.add(inbound_message)
     db_session.commit()
     return inbound_message
+
+
+def _ensure_professional(db_session, *, tenant_id, unit_id, full_name: str = "Dr Wizard"):
+    professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit_id,
+        full_name=full_name,
+        working_days=[0, 1, 2, 3, 4, 5],
+        shift_start="08:00",
+        shift_end="18:00",
+        procedures=["InstalaÃ§Ã£o de lentes", "Clareamento dental"],
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.flush()
+    return professional
 
 
 def test_handoff_when_patient_requests_human(seeded_db, db_session):
@@ -903,6 +920,193 @@ def test_followup_interactive_reply_option_confirms_and_persists_appointment(see
     assert appointment is not None
     assert appointment.status == "agendada"
     assert appointment.confirmation_status == "confirmada"
+
+
+def test_post_appointment_menu_rebook_starts_new_wizard_without_anchor(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Novo agendamento",
+    )
+    inbound.message_type = "interactive_button_reply"
+    inbound.payload = {"interactive_reply": {"id": "post_menu_rebook", "title": "Novo agendamento"}}
+    db_session.add(inbound)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+    assert outbound is not None
+    assert outbound.message_type == "interactive_list"
+
+
+def test_post_appointment_menu_close_button_closes_conversation(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="botao fechar",
+    )
+    inbound.message_type = "interactive_button_reply"
+    inbound.payload = {"interactive_reply": {"id": "post_menu_close", "title": "Encerrar conversa"}}
+    db_session.add(inbound)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "post_menu_close"
+    assert conversation.status == "finalizada"
+
+
+def test_booking_confirm_detects_slot_conflict_and_returns_new_time_options(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+    )
+    unit = db_session.scalar(
+        select(Unit).where(
+            Unit.tenant_id == tenant_id,
+            Unit.is_active.is_(True),
+        )
+    )
+    assert unit is not None
+    professional = _ensure_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Conflito IA",
+    )
+
+    selected_day = (datetime.now(UTC) + timedelta(days=3)).date()
+    starts_at = datetime.now(UTC) + timedelta(days=3, hours=2)
+    ends_at = starts_at + timedelta(minutes=60)
+
+    other_phone = f"5511999{uuid4().hex[:7]}"
+    other_patient = Patient(
+        tenant_id=tenant_id,
+        full_name="Paciente Ocupando Horario",
+        phone=other_phone,
+        normalized_phone=other_phone,
+        status="ativo",
+        origin="manual",
+        lgpd_consent=True,
+        marketing_opt_in=True,
+        tags_cache=[],
+    )
+    db_session.add(other_patient)
+    db_session.flush()
+
+    existing_conflict = Appointment(
+        tenant_id=tenant_id,
+        patient_id=other_patient.id,
+        unit_id=unit.id,
+        professional_id=professional.id,
+        procedure_type="Clareamento dental",
+        starts_at=starts_at,
+        ends_at=ends_at,
+        origin="manual",
+        status="agendada",
+    )
+    db_session.add(existing_conflict)
+
+    stale_confirm = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Confirma este agendamento?",
+        message_type="interactive_buttons",
+        payload={
+            "mode": "booking_wizard_confirm",
+            "scheduling": {
+                "procedure_type": "InstalaÃ§Ã£o de lentes",
+                "unit_id": str(unit.id),
+                "requested_date": selected_day.isoformat(),
+                "selected_slot": {
+                    "id": "time_1",
+                    "label": "quinta-feira, 16/04 Ã s 10:00",
+                    "starts_at_utc": starts_at.isoformat(),
+                    "ends_at_utc": ends_at.isoformat(),
+                    "starts_at_local": starts_at.isoformat(),
+                    "professional_id": str(professional.id),
+                    "professional_name": professional.full_name,
+                    "time": "10:00",
+                },
+                "period": "morning",
+            },
+        },
+        status="sent",
+    )
+    db_session.add(stale_confirm)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Sim",
+        message_type="interactive_button_reply",
+        payload={"interactive_reply": {"id": "confirm_yes", "title": "Sim"}},
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_time_select"
+    assert outbound is not None
+    assert outbound.message_type == "interactive_list"
+    scheduling = (outbound.payload or {}).get("scheduling") or {}
+    assert scheduling.get("reason") == "selected_slot_no_longer_available"
 
 
 def test_followup_option_does_not_use_stale_slots_anchor(seeded_db, db_session):

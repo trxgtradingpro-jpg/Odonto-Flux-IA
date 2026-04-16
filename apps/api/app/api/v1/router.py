@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     leads,
     messages,
     onboarding,
+    operations,
     patients,
     privacy,
     professionals,
@@ -43,6 +44,7 @@ api_router.include_router(campaigns.router)
 api_router.include_router(documents.router)
 api_router.include_router(settings.router)
 api_router.include_router(onboarding.router)
+api_router.include_router(operations.router)
 api_router.include_router(billing.router)
 api_router.include_router(privacy.router)
 api_router.include_router(reports.router)

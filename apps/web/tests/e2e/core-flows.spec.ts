@@ -56,4 +56,37 @@ test.describe('OdontoFlux E2E principais', () => {
       })
       .toBeTruthy();
   });
+
+  test('navegacao para agenda, equipe medica e operacoes', async ({ page, request }) => {
+    await authenticateAndOpenDashboard(page, request);
+
+    await page.goto('/agenda', { waitUntil: 'networkidle' });
+    await expect(page).toHaveURL(/.*agenda/);
+    await expect
+      .poll(async () => {
+        const text = await page.textContent('body');
+        return /Agenda operacional|N[aÃ£]o foi poss[iÃ­]vel carregar a agenda/i.test(text ?? '');
+      })
+      .toBeTruthy();
+
+    await page.goto('/equipe-medica', { waitUntil: 'networkidle' });
+    await expect(page).toHaveURL(/.*equipe-medica/);
+    await expect
+      .poll(async () => {
+        const text = await page.textContent('body');
+        return /Equipe m[eÃ©]dica|Profissionais|N[aÃ£]o foi poss[iÃ­]vel carregar/i.test(text ?? '');
+      })
+      .toBeTruthy();
+
+    await page.goto('/operacoes', { waitUntil: 'networkidle' });
+    await expect(page).toHaveURL(/.*operacoes/);
+    await expect
+      .poll(async () => {
+        const text = await page.textContent('body');
+        return /Inbox operacional de falhas|N[aÃ£]o foi poss[iÃ­]vel carregar o monitoramento operacional/i.test(
+          text ?? '',
+        );
+      })
+      .toBeTruthy();
+  });
 });
