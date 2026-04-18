@@ -191,7 +191,6 @@ export default function OperacoesPage() {
               if (row.source === "outbox") {
                 return (
                   <Button
-                    size="sm"
                     variant="outline"
                     className="h-8 px-2 text-xs"
                     onClick={() => retryOutboxMutation.mutate(row.id)}
@@ -205,7 +204,6 @@ export default function OperacoesPage() {
               if (row.source === "job") {
                 return (
                   <Button
-                    size="sm"
                     variant="outline"
                     className="h-8 px-2 text-xs"
                     onClick={() => retryJobMutation.mutate(row.id)}
@@ -226,4 +224,3 @@ export default function OperacoesPage() {
     </div>
   );
 }
-
