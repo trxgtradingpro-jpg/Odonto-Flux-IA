@@ -25,6 +25,7 @@ from app.models import (
     Message,
     MessageEvent,
     Patient,
+    PatientContact,
     Professional,
     Setting,
     Unit,
@@ -37,9 +38,63 @@ from app.services.audit_service import record_audit
 from app.services.llm_service import classify_intent, run_llm_task
 from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
 
-AI_AUTORESPONDER_PROMPT_VERSION = "v1.1"
+AI_AUTORESPONDER_PROMPT_VERSION = "v1.2"
 INACTIVE_CONVERSATION_RESTART_MINUTES = 20
 WIZARD_STATE_EXPIRATION_MINUTES = 35
+CPF_CONTACT_CHANNEL = "cpf"
+
+AI_ALLOWED_NEXT_ACTIONS = {
+    "none",
+    "show_clinics",
+    "show_services",
+    "show_plans",
+    "show_available_dates",
+    "show_available_times",
+    "verify_date_availability",
+    "open_booking",
+    "show_resume_or_restart_options",
+    "resume_saved_step",
+    "restart_from_beginning",
+    "show_booking_confirmation_options",
+    "finalize_booking_auto",
+    "request_cpf_after_booking",
+    "handoff_human",
+}
+
+BOOKING_RESET_PATTERNS = (
+    "reiniciar atendimento",
+    "recomecar atendimento",
+    "recomeçar atendimento",
+    "comecar do zero",
+    "comecar do zero",
+    "começar do zero",
+    "mudar clinica",
+    "mudar clínica",
+    "trocar clinica",
+    "trocar clínica",
+    "alterar clinica",
+    "alterar clínica",
+)
+
+BOOKING_RESUME_PATTERNS = (
+    "continuar",
+    "continuar de onde parei",
+    "quero continuar",
+    "seguir com isso",
+    "pode continuar",
+)
+
+BOOKING_RESTART_PATTERNS = (
+    "reiniciar",
+    "reiniciar atendimento",
+    "recomecar",
+    "recomecar",
+    "recomeçar",
+    "do zero",
+    "novo atendimento",
+)
+
+CPF_PATTERN = re.compile(r"\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b")
 
 AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
@@ -326,6 +381,7 @@ REASON_LABELS = {
     "whatsapp_not_ready": "Conta WhatsApp indisponível para envio.",
     "response_sent": "Resposta automática enviada para fila.",
     "llm_error": "Falha no provedor de IA, atendimento humano acionado.",
+    "invalid_ai_contract": "Resposta da IA fora do contrato JSON obrigatório.",
     "dispatch_error": "Falha ao enfileirar mensagem automática.",
     "conversation_closed_by_user": "Conversa encerrada a pedido do paciente.",
 }
@@ -918,6 +974,159 @@ def _parse_json_output(raw: str) -> dict[str, Any]:
     return {}
 
 
+def _extract_json_dict_from_text(raw: str) -> dict[str, Any]:
+    parsed = _parse_json_output(raw)
+    if parsed:
+        return parsed
+
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    snippet = text[start : end + 1]
+    return _parse_json_output(snippet)
+
+
+def _parse_and_validate_ai_contract(raw_output: str) -> dict[str, Any] | None:
+    parsed = _extract_json_dict_from_text(raw_output)
+    if not parsed:
+        return None
+
+    reply_text_raw = parsed.get("reply_text")
+    next_action_raw = parsed.get("next_action")
+    action_payload_raw = parsed.get("action_payload")
+    confidence_raw = parsed.get("confidence")
+
+    if not isinstance(reply_text_raw, str):
+        return None
+    if not isinstance(next_action_raw, str):
+        return None
+    if not isinstance(action_payload_raw, dict):
+        return None
+    if not isinstance(confidence_raw, (int, float)):
+        return None
+
+    reply_text = reply_text_raw.strip()
+    next_action = next_action_raw.strip()
+    confidence = float(confidence_raw)
+    if not reply_text:
+        return None
+    if next_action not in AI_ALLOWED_NEXT_ACTIONS:
+        return None
+    if not (0.0 <= confidence <= 1.0):
+        return None
+
+    context_value = action_payload_raw.get("context")
+    if not isinstance(context_value, str) or not context_value.strip():
+        return None
+
+    return {
+        "reply_text": reply_text,
+        "next_action": next_action,
+        "action_payload": action_payload_raw,
+        "confidence": round(confidence, 4),
+    }
+
+
+def _normalize_cpf_digits(value: str | None) -> str | None:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) != 11:
+        return None
+    if len(set(digits)) == 1:
+        return None
+    return digits
+
+
+def _extract_cpf_from_text(text: str) -> str | None:
+    for match in CPF_PATTERN.finditer(str(text or "")):
+        normalized = _normalize_cpf_digits(match.group(1))
+        if normalized:
+            return normalized
+
+    fallback = _normalize_cpf_digits(text)
+    if fallback:
+        return fallback
+    return None
+
+
+def _patient_cpf_contact(db: Session, *, conversation: Conversation) -> PatientContact | None:
+    if not conversation.patient_id:
+        return None
+    return db.scalar(
+        select(PatientContact)
+        .where(
+            PatientContact.tenant_id == conversation.tenant_id,
+            PatientContact.patient_id == conversation.patient_id,
+            PatientContact.channel == CPF_CONTACT_CHANNEL,
+        )
+        .order_by(PatientContact.is_primary.desc(), PatientContact.created_at.asc())
+        .limit(1)
+    )
+
+
+def _patient_saved_cpf(db: Session, *, conversation: Conversation) -> str | None:
+    contact = _patient_cpf_contact(db, conversation=conversation)
+    if not contact:
+        return None
+    return _normalize_cpf_digits(contact.normalized_value or contact.value)
+
+
+def _upsert_patient_cpf(
+    db: Session,
+    *,
+    conversation: Conversation,
+    cpf_digits: str,
+) -> None:
+    normalized = _normalize_cpf_digits(cpf_digits)
+    if not normalized or not conversation.patient_id:
+        return
+
+    existing = _patient_cpf_contact(db, conversation=conversation)
+    if existing:
+        existing.value = normalized
+        existing.normalized_value = normalized
+        existing.is_primary = True
+        existing.is_verified = True
+        db.add(existing)
+        return
+
+    db.add(
+        PatientContact(
+            tenant_id=conversation.tenant_id,
+            patient_id=conversation.patient_id,
+            channel=CPF_CONTACT_CHANNEL,
+            value=normalized,
+            normalized_value=normalized,
+            is_primary=True,
+            is_verified=True,
+        )
+    )
+
+
+def _booking_reset_requested(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in BOOKING_RESET_PATTERNS)
+
+
+def _booking_resume_requested(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in BOOKING_RESUME_PATTERNS)
+
+
+def _booking_restart_requested(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in BOOKING_RESTART_PATTERNS)
+
+
 def _conversation_destination_phone(db: Session, *, conversation: Conversation) -> str | None:
     if conversation.patient_id:
         patient = db.scalar(
@@ -1379,7 +1588,7 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
     mode = str(scheduling_response.get("mode") or "").strip()
     metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
 
-    if mode.startswith("booking_wizard_") or mode == "welcome_message_start":
+    if mode.startswith("booking_") or mode == "welcome_message_start":
         buttons_raw = metadata.get("buttons")
         if isinstance(buttons_raw, list):
             buttons: list[dict[str, str]] = []
@@ -1475,23 +1684,195 @@ def _build_scheduling_interactive_list_payload(scheduling_response: dict[str, An
     }
 
 
-def _build_post_appointment_menu_payload() -> tuple[str, dict[str, Any]]:
+def _build_post_booking_options_payload() -> tuple[str, dict[str, Any]]:
     text_body = (
-        "Atendimento encerrado automaticamente após a confirmação do agendamento.\n"
-        "Se quiser continuar, escolha uma opção no menu abaixo."
+        "Seu agendamento já está confirmado. Se quiser, posso te passar mais detalhes "
+        "ou encerrar o atendimento por aqui."
     )
     interactive_payload: dict[str, Any] = {
         "interactive_type": "buttons",
         "header_text": "Próximos passos",
-        "body_text": "Seu agendamento foi concluído. Como você prefere continuar?",
-        "footer_text": "Você pode responder por botão ou texto.",
+        "body_text": "Como você prefere continuar agora?",
+        "footer_text": "Você pode tocar em um botão ou responder com suas palavras.",
         "buttons": [
-            {"id": "post_menu_rebook", "title": "Novo agendamento"},
-            {"id": "post_menu_human", "title": "Falar com atendente"},
-            {"id": "post_menu_close", "title": "Encerrar conversa"},
+            {"id": "post_info_more", "title": "Mais informações"},
+            {"id": "post_info_close", "title": "Encerrar conversa"},
         ],
     }
     return text_body, interactive_payload
+
+
+def _post_booking_guidance_text(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+) -> str:
+    procedure_label = str(procedure_type or "atendimento").strip()
+    unit_label = str(unit_name or "unidade selecionada").strip()
+    slot_label = str(selected_slot_label or "").strip()
+
+    summary_line = f"Consulta confirmada para {procedure_label} na {unit_label}"
+    if slot_label:
+        summary_line = f"{summary_line}, no horário {slot_label}"
+    summary_line = f"{summary_line}."
+
+    return (
+        "Parabéns, seu agendamento ficou confirmado com sucesso!\n"
+        f"{summary_line}\n"
+        "Para facilitar seu atendimento, leve um documento com foto e, se tiver, exames recentes.\n"
+        "Chegue com 15 minutos de antecedência e, se precisar cancelar, avise com 24 horas."
+    )
+
+
+def _post_booking_close_summary_text(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+) -> str:
+    procedure_label = str(procedure_type or "atendimento").strip()
+    unit_label = str(unit_name or "unidade selecionada").strip()
+    slot_label = str(selected_slot_label or "").strip()
+    detail = f"{procedure_label} em {unit_label}"
+    if slot_label:
+        detail = f"{detail}, horário {slot_label}"
+    return (
+        f"Resumo do atendimento: {detail}.\n"
+        "Conversa encerrada com sucesso. Quando quiser, estamos à disposição."
+    )
+
+
+def _build_booking_cpf_request_response(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+    session_token: str | None = None,
+    retry: bool = False,
+) -> dict[str, Any]:
+    guidance = (
+        "Para agilizar seu atendimento no dia da consulta, você pode me enviar seu CPF agora."
+    )
+    if retry:
+        guidance = (
+            "Não consegui identificar um CPF válido nessa mensagem. "
+            "Se preferir, me envie somente os 11 números."
+        )
+    base_text = (
+        "Perfeito! Seu agendamento já está confirmado.\n"
+        f"• Serviço: {procedure_type or 'Atendimento'}\n"
+        f"• Clínica: {unit_name or 'Unidade selecionada'}\n"
+        + (f"• Horário: {selected_slot_label}\n" if selected_slot_label else "")
+        + guidance
+    )
+    metadata = _wizard_metadata_with_session(
+        metadata={
+            "procedure_type": procedure_type,
+            "unit_name": unit_name,
+            "selected_slot": {"label": selected_slot_label} if selected_slot_label else None,
+            "reason": "request_cpf_after_booking",
+            "body_text": "Envie seu CPF para agilizar o atendimento.",
+            "footer_text": "Usamos esse dado apenas para identificação no atendimento.",
+        },
+        session_token=session_token,
+        step="cpf_after_booking",
+    )
+    return {
+        "mode": "booking_request_cpf_after_booking",
+        "response_text": base_text,
+        "metadata": metadata,
+    }
+
+
+def _build_booking_post_confirmation_response(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+    session_token: str | None = None,
+) -> dict[str, Any]:
+    text_body, interactive_payload = _build_post_booking_options_payload()
+    buttons = interactive_payload.get("buttons") if isinstance(interactive_payload, dict) else []
+    metadata = _wizard_metadata_with_session(
+        metadata={
+            "procedure_type": procedure_type,
+            "unit_name": unit_name,
+            "selected_slot": {"label": selected_slot_label} if selected_slot_label else None,
+            "reason": "post_booking_guidance",
+            "header_text": str(interactive_payload.get("header_text") or "Próximos passos"),
+            "body_text": str(interactive_payload.get("body_text") or text_body),
+            "footer_text": str(interactive_payload.get("footer_text") or "Você pode responder por texto."),
+            "buttons": buttons if isinstance(buttons, list) else [],
+        },
+        session_token=session_token,
+        step="post_confirmation_options",
+    )
+    return {
+        "mode": "booking_post_confirmation_options",
+        "response_text": _post_booking_guidance_text(
+            procedure_type=procedure_type,
+            unit_name=unit_name,
+            selected_slot_label=selected_slot_label,
+        ),
+        "metadata": metadata,
+    }
+
+
+def _build_booking_post_information_followup_response(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+    session_token: str | None = None,
+) -> dict[str, Any]:
+    metadata = _wizard_metadata_with_session(
+        metadata={
+            "procedure_type": procedure_type,
+            "unit_name": unit_name,
+            "selected_slot": {"label": selected_slot_label} if selected_slot_label else None,
+            "reason": "post_booking_more_information",
+        },
+        session_token=session_token,
+        step="post_confirmation_options",
+    )
+    return {
+        "mode": "booking_post_information_followup",
+        "response_text": (
+            "Claro! Se você quiser, também posso te ajudar com localização da clínica, "
+            "preparo para o procedimento ou orientações de reagendamento."
+        ),
+        "metadata": metadata,
+    }
+
+
+def _build_booking_close_with_summary_response(
+    *,
+    procedure_type: str | None,
+    unit_name: str | None,
+    selected_slot_label: str | None,
+    session_token: str | None = None,
+) -> dict[str, Any]:
+    metadata = _wizard_metadata_with_session(
+        metadata={
+            "procedure_type": procedure_type,
+            "unit_name": unit_name,
+            "selected_slot": {"label": selected_slot_label} if selected_slot_label else None,
+            "reason": "booking_closed_by_user",
+            "close_conversation": True,
+        },
+        session_token=session_token,
+        step="post_confirmation_options",
+    )
+    return {
+        "mode": "booking_close_with_summary",
+        "response_text": _post_booking_close_summary_text(
+            procedure_type=procedure_type,
+            unit_name=unit_name,
+            selected_slot_label=selected_slot_label,
+        ),
+        "metadata": metadata,
+    }
 
 
 def _parse_iso_date(value: Any) -> date | None:
@@ -1528,11 +1909,16 @@ def _wizard_new_session_token() -> str:
 def _wizard_step_from_mode(mode: str) -> str | None:
     mapping = {
         "welcome_message_start": "start_menu",
+        "booking_wizard_resume_or_restart": "resume_or_restart",
         "booking_wizard_service_select": "service",
         "booking_wizard_unit_select": "unit",
         "booking_wizard_day_select": "day",
         "booking_wizard_time_select": "time",
         "booking_wizard_confirm": "confirm",
+        "booking_request_cpf_after_booking": "cpf_after_booking",
+        "booking_post_confirmation_options": "post_confirmation_options",
+        "booking_post_information_followup": "post_confirmation_options",
+        "booking_close_with_summary": "post_confirmation_options",
         "post_appointment_menu": "post_menu",
     }
     return mapping.get(str(mode or "").strip())
@@ -1546,6 +1932,8 @@ def _wizard_expected_reply_prefixes(step: str) -> tuple[str, ...]:
         "time": ("time_", "time_change_", "menu_human"),
         "confirm": ("confirm_",),
         "start_menu": ("menu_",),
+        "resume_or_restart": ("resume_saved_step", "restart_from_beginning"),
+        "post_confirmation_options": ("post_info_",),
         "post_menu": ("post_menu_",),
     }
     return mapping.get(step, tuple())
@@ -1560,7 +1948,16 @@ def _wizard_reply_is_valid_for_step(*, step: str, reply_id: str) -> bool:
     normalized = _normalize_for_match(reply_id)
     if not normalized:
         return True
-    if normalized in {"menu_human", "post_menu_rebook", "post_menu_human", "post_menu_close"}:
+    if normalized in {
+        "menu_human",
+        "post_menu_rebook",
+        "post_menu_human",
+        "post_menu_close",
+        "resume_saved_step",
+        "restart_from_beginning",
+        "post_info_more",
+        "post_info_close",
+    }:
         return True
 
     prefixes = _wizard_expected_reply_prefixes(step)
@@ -1583,6 +1980,28 @@ def _wizard_metadata_with_session(
     output["step_created_at"] = now_utc.isoformat()
     output["step_expires_at"] = (now_utc + timedelta(minutes=WIZARD_STATE_EXPIRATION_MINUTES)).isoformat()
     output["step_ttl_minutes"] = WIZARD_STATE_EXPIRATION_MINUTES
+
+    service_selected = str(output.get("service_selected") or output.get("procedure_type") or "").strip()
+    clinic_name = str(output.get("clinic_name") or output.get("unit_name") or "").strip()
+    clinic_id = str(output.get("clinic_id") or output.get("unit_id") or "").strip()
+    selected_date = str(output.get("selected_date") or output.get("requested_date") or "").strip()
+    selected_slot = output.get("selected_slot")
+    selected_time = ""
+    if isinstance(selected_slot, dict):
+        selected_time = str(selected_slot.get("time") or "").strip()
+        if not selected_time:
+            selected_time = str(selected_slot.get("label") or "").strip()
+    elif isinstance(selected_slot, str):
+        selected_time = selected_slot.strip()
+
+    output["service_selected"] = service_selected or None
+    output["clinic_selected"] = {
+        "id": clinic_id or None,
+        "name": clinic_name or None,
+    }
+    output["date_selected"] = selected_date or None
+    output["time_selected"] = selected_time or None
+    output["ultima_interacao_em"] = now_utc.isoformat()
     return output
 
 
@@ -1620,9 +2039,136 @@ def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Mes
     message = latest_messages[0]
     payload = message.payload if isinstance(message.payload, dict) else {}
     mode = str(payload.get("mode") or "").strip()
-    if mode.startswith("booking_wizard_") or mode in {"welcome_message_start", "post_appointment_menu"}:
+    if mode.startswith("booking_") or mode == "welcome_message_start" or mode == "post_appointment_menu":
         return message
     return None
+
+
+def _wizard_state_from_scheduling_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+
+    service = str(metadata.get("service_selected") or metadata.get("procedure_type") or "").strip()
+    clinic_name = str(
+        metadata.get("unit_name")
+        or metadata.get("clinic_name")
+        or ((metadata.get("clinic_selected") or {}).get("name") if isinstance(metadata.get("clinic_selected"), dict) else "")
+    ).strip()
+    clinic_id = str(
+        metadata.get("unit_id")
+        or metadata.get("clinic_id")
+        or ((metadata.get("clinic_selected") or {}).get("id") if isinstance(metadata.get("clinic_selected"), dict) else "")
+    ).strip()
+    selected_date = str(metadata.get("date_selected") or metadata.get("requested_date") or "").strip()
+    selected_slot = metadata.get("selected_slot")
+    selected_time = ""
+    if isinstance(selected_slot, dict):
+        selected_time = str(selected_slot.get("time") or selected_slot.get("label") or "").strip()
+    elif isinstance(selected_slot, str):
+        selected_time = selected_slot.strip()
+    if not selected_time:
+        selected_time = str(metadata.get("time_selected") or "").strip()
+
+    has_progress = any((service, clinic_id, clinic_name, selected_date, selected_time))
+    if not has_progress:
+        return None
+
+    return {
+        "service": service or None,
+        "clinic_id": clinic_id or None,
+        "clinic_name": clinic_name or None,
+        "date": selected_date or None,
+        "time": selected_time or None,
+        "selected_slot": selected_slot if isinstance(selected_slot, dict) else None,
+        "session_token": str(metadata.get("session_token") or "").strip() or None,
+        "requested_date": str(metadata.get("requested_date") or "").strip() or None,
+        "period": str(metadata.get("period") or "").strip() or None,
+    }
+
+
+def _booking_state_summary_text(saved_state: dict[str, Any]) -> str:
+    parts: list[str] = []
+    service = str(saved_state.get("service") or "").strip()
+    clinic_name = str(saved_state.get("clinic_name") or "").strip()
+    selected_date = str(saved_state.get("date") or "").strip()
+    selected_time = str(saved_state.get("time") or "").strip()
+
+    if service:
+        parts.append(f"serviço: {service}")
+    if clinic_name:
+        parts.append(f"clínica: {clinic_name}")
+    if selected_date:
+        parsed_date = _parse_iso_date(selected_date)
+        date_label = parsed_date.strftime("%d/%m") if parsed_date else selected_date
+        parts.append(f"data: {date_label}")
+    if selected_time:
+        parts.append(f"horário: {selected_time}")
+    return ", ".join(parts)
+
+
+def _latest_saved_booking_state(db: Session, *, conversation: Conversation) -> dict[str, Any] | None:
+    recent_messages = _recent_ai_outbound_messages(db, conversation=conversation, limit=25)
+    for message in recent_messages:
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        mode = str(payload.get("mode") or "").strip()
+        if not mode.startswith("booking_"):
+            continue
+        scheduling = payload.get("scheduling") if isinstance(payload.get("scheduling"), dict) else {}
+        state = _wizard_state_from_scheduling_metadata(scheduling)
+        if not state:
+            continue
+        state["mode"] = mode
+        state["last_ai_message_id"] = str(message.id)
+        state["last_ai_message_at"] = message.created_at.isoformat() if message.created_at else None
+        return state
+    return None
+
+
+def _build_resume_or_restart_response(
+    *,
+    saved_state: dict[str, Any],
+    idle_minutes: float | None = None,
+) -> dict[str, Any]:
+    summary = _booking_state_summary_text(saved_state)
+    idle_label = ""
+    if isinstance(idle_minutes, (int, float)):
+        idle_label = f" Faz alguns minutos desde nossa última conversa ({round(float(idle_minutes), 1)} min)."
+
+    reply_text = (
+        "Que bom te ver novamente por aqui."
+        f"{idle_label} Posso continuar exatamente de onde você parou"
+        " ou reiniciar o atendimento do zero, como preferir."
+    )
+    if summary:
+        reply_text = (
+            "Que bom te ver novamente por aqui."
+            f"{idle_label} Eu já tinha separado estas escolhas: {summary}. "
+            "Se quiser, continuo desse ponto para você."
+        )
+
+    rows = [
+        {"id": "resume_saved_step", "title": "Continuar", "description": "Retomar de onde parou"},
+        {"id": "restart_from_beginning", "title": "Reiniciar", "description": "Começar novo atendimento"},
+    ]
+    metadata = _wizard_metadata_with_session(
+        metadata={
+            "reason": "idle_timeout_resume_options",
+            "saved_state": saved_state,
+            "rows": rows,
+            "button_title": "Escolher",
+            "section_title": "Retomar atendimento",
+            "header_text": "Atendimento",
+            "body_text": "Escolha se prefere continuar ou reiniciar.",
+            "footer_text": "Se quiser, também pode responder com suas palavras.",
+        },
+        session_token=str(saved_state.get("session_token") or "").strip() or None,
+        step="resume_or_restart",
+    )
+    return {
+        "mode": "booking_wizard_resume_or_restart",
+        "response_text": reply_text,
+        "metadata": metadata,
+    }
 
 
 def _extract_wizard_selection_token(*, inbound_message: Message, inbound_text: str) -> str:
@@ -1760,7 +2306,7 @@ def _wizard_build_service_step_response(
             "section_title": "Escolha o serviço",
             "header_text": "Agendamento",
             "body_text": "Selecione o serviço para continuar.",
-            "footer_text": "Depois eu mostro clínica, dia e horário.",
+            "footer_text": "Se preferir, também pode escrever o serviço com suas palavras.",
             "preferred_service": preferred_service,
         },
         session_token=session_token,
@@ -1824,7 +2370,7 @@ def _wizard_build_unit_step_response(
             "section_title": "Escolha a clínica",
             "header_text": "Agendamento",
             "body_text": "Selecione a clínica para seguir.",
-            "footer_text": "Em seguida escolhemos dia e horário.",
+            "footer_text": "Se preferir, também pode escrever a clínica que deseja.",
         },
         session_token=session_token,
         step="unit",
@@ -1948,7 +2494,7 @@ def _wizard_build_day_step_response(
             "section_title": "Escolha o dia",
             "header_text": "Agendamento",
             "body_text": "Selecione o dia desejado.",
-            "footer_text": "Depois você escolhe o horário.",
+            "footer_text": "Se preferir, pode me dizer a data por mensagem.",
         },
         session_token=session_token,
         step="day",
@@ -2094,7 +2640,7 @@ def _wizard_build_time_step_response(
             "section_title": "Escolha o horário",
             "header_text": "Agendamento",
             "body_text": "Selecione o horário desejado.",
-            "footer_text": "No próximo passo você confirma.",
+            "footer_text": "Se preferir, pode escrever o horário em texto livre.",
         },
         session_token=session_token,
         step="time",
@@ -2117,6 +2663,7 @@ def _wizard_build_confirm_step_response(
     session_token: str | None = None,
 ) -> dict[str, Any]:
     slot_label = str(selected_slot_choice.get("label") or "")
+    selected_date_label = selected_date.strftime("%d/%m")
     buttons = [
         {"id": "confirm_yes", "title": "Sim"},
         {"id": "confirm_no", "title": "Não"},
@@ -2133,7 +2680,7 @@ def _wizard_build_confirm_step_response(
             "buttons": buttons,
             "header_text": "Confirmação",
             "body_text": "Confirme ou troque o horário.",
-            "footer_text": "Escolha uma opção.",
+            "footer_text": "Você também pode confirmar ou ajustar por mensagem.",
         },
         session_token=session_token,
         step="confirm",
@@ -2141,13 +2688,104 @@ def _wizard_build_confirm_step_response(
     return {
         "mode": "booking_wizard_confirm",
         "response_text": (
-            "Confirma este agendamento?\n"
+            "Perfeito, está quase pronto. Posso confirmar seu agendamento?\n"
             f"• Serviço: {procedure_type}\n"
             f"• Unidade: {unit.name}\n"
+            f"• Data: {selected_date_label}\n"
             f"• Horário: {slot_label}"
         ),
         "metadata": metadata,
     }
+
+
+def _wizard_resume_saved_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    saved_state: dict[str, Any],
+    config: dict[str, Any],
+    operation_timezone: ZoneInfo,
+) -> dict[str, Any]:
+    service = str(saved_state.get("service") or "").strip()
+    if not service:
+        return _wizard_build_service_step_response(
+            db,
+            conversation=conversation,
+            intro_text="Vamos continuar do ponto certo. Primeiro me confirme o serviço desejado:",
+            period=None,
+            requested_date=None,
+            session_token=str(saved_state.get("session_token") or "").strip() or None,
+        )
+
+    clinic_id_raw = str(saved_state.get("clinic_id") or "").strip()
+    clinic_id = None
+    if clinic_id_raw:
+        try:
+            clinic_id = UUID(clinic_id_raw)
+        except (TypeError, ValueError):
+            clinic_id = None
+
+    unit = None
+    if clinic_id:
+        unit = db.scalar(
+            select(Unit).where(
+                Unit.id == clinic_id,
+                Unit.tenant_id == conversation.tenant_id,
+                Unit.is_active.is_(True),
+            )
+        )
+
+    requested_date = _parse_iso_date(saved_state.get("date"))
+    period = str(saved_state.get("period") or "").strip().lower() or None
+    if period not in {"morning", "afternoon", "evening"}:
+        period = None
+    session_token = str(saved_state.get("session_token") or "").strip() or None
+
+    if not unit:
+        return _wizard_build_unit_step_response(
+            db,
+            conversation=conversation,
+            procedure_type=service,
+            period=period,
+            requested_date=requested_date,
+            session_token=session_token,
+        )
+
+    if not requested_date:
+        return _wizard_build_day_step_response(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=service,
+            period=period,
+            requested_date=None,
+            operation_timezone=operation_timezone,
+            config=config,
+            session_token=session_token,
+        )
+
+    selected_slot_raw = saved_state.get("selected_slot")
+    selected_slot = selected_slot_raw if isinstance(selected_slot_raw, dict) else None
+    if not selected_slot:
+        return _wizard_build_time_step_response(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=service,
+            period=period,
+            selected_date=requested_date,
+            config=config,
+            session_token=session_token,
+        )
+
+    return _wizard_build_confirm_step_response(
+        procedure_type=service,
+        unit=unit,
+        selected_date=requested_date,
+        period=period,
+        selected_slot_choice=selected_slot,
+        session_token=session_token,
+    )
 
 
 def _wizard_parse_confirmation_choice(token: str) -> bool | None:
@@ -2348,6 +2986,9 @@ def _try_booking_wizard_response(
     normalized_inbound = _normalize_for_match(inbound_text)
     period = _detect_period_preference(inbound_text)
     requested_date = _extract_requested_date_from_text(text=inbound_text, timezone=operation_timezone)
+    reset_requested = _booking_reset_requested(inbound_text)
+    resume_requested = _booking_resume_requested(inbound_text)
+    restart_requested = _booking_restart_requested(inbound_text)
     has_scheduling_keywords = any(keyword in normalized_inbound for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS))
     force_wizard = any(keyword in normalized_inbound for keyword in BOOKING_WIZARD_FORCE_KEYWORDS)
     has_confirmation_choice = _wizard_parse_confirmation_choice(selection_token) is not None
@@ -2376,6 +3017,15 @@ def _try_booking_wizard_response(
         latest_scheduling = latest_payload.get("scheduling") if isinstance(latest_payload.get("scheduling"), dict) else {}
         latest_step = _wizard_step_from_mode(latest_mode) or ""
         latest_session_token = str(latest_scheduling.get("session_token") or "").strip() or _wizard_session_token_from_message(latest_wizard)
+        if reset_requested:
+            return _wizard_build_service_step_response(
+                db,
+                conversation=conversation,
+                intro_text="Perfeito, vou reorganizar seu atendimento do zero para evitar qualquer confusão. Escolha o serviço:",
+                period=period,
+                requested_date=requested_date,
+                preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+            )
 
         if _wizard_session_is_expired(latest_wizard):
             return _wizard_build_service_step_response(
@@ -2478,14 +3128,17 @@ def _try_booking_wizard_response(
                     },
                 }
             if selection_token_normalized in {"post_menu_close", "encerrar conversa"}:
-                return {
-                    "mode": "post_menu_close",
-                    "response_text": "Perfeito. Encerramos por aqui. Quando quiser, é só chamar.",
-                    "metadata": {
-                        "reason": "conversation_closed_by_user",
-                        "close_conversation": True,
-                    },
-                }
+                return _build_booking_close_with_summary_response(
+                    procedure_type=str(latest_scheduling.get("procedure_type") or "").strip() or None,
+                    unit_name=str(latest_scheduling.get("unit_name") or "").strip() or None,
+                    selected_slot_label=str(
+                        (latest_scheduling.get("selected_slot") or {}).get("label")
+                        if isinstance(latest_scheduling.get("selected_slot"), dict)
+                        else latest_scheduling.get("selected_slot") or ""
+                    ).strip()
+                    or None,
+                    session_token=latest_session_token,
+                )
             if has_scheduling_keywords or force_wizard:
                 return _wizard_build_service_step_response(
                     db,
@@ -2495,8 +3148,15 @@ def _try_booking_wizard_response(
                     requested_date=requested_date,
                     preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
                 )
-            return _build_conversation_start_welcome_response(
-                intro_text="Escolha uma opção no menu para continuar.",
+            return _build_booking_post_confirmation_response(
+                procedure_type=str(latest_scheduling.get("procedure_type") or "").strip() or None,
+                unit_name=str(latest_scheduling.get("unit_name") or "").strip() or None,
+                selected_slot_label=str(
+                    (latest_scheduling.get("selected_slot") or {}).get("label")
+                    if isinstance(latest_scheduling.get("selected_slot"), dict)
+                    else latest_scheduling.get("selected_slot") or ""
+                ).strip()
+                or None,
                 session_token=latest_session_token,
             )
 
@@ -2593,6 +3253,51 @@ def _try_booking_wizard_response(
                     },
                 }
 
+        if latest_mode == "booking_wizard_resume_or_restart":
+            saved_state = latest_scheduling.get("saved_state") if isinstance(latest_scheduling.get("saved_state"), dict) else {}
+            if not saved_state:
+                fallback_state = _wizard_state_from_scheduling_metadata(latest_scheduling)
+                if fallback_state:
+                    saved_state = fallback_state
+
+            if selection_token_normalized == "restart_from_beginning" or restart_requested:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos reiniciar seu atendimento do zero. Escolha o serviço:",
+                    period=period,
+                    requested_date=requested_date,
+                    preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+                )
+
+            if selection_token_normalized == "resume_saved_step" or resume_requested:
+                if not saved_state:
+                    return _wizard_build_service_step_response(
+                        db,
+                        conversation=conversation,
+                        intro_text="Vamos seguir por aqui. Escolha o serviço para continuar:",
+                        period=period,
+                        requested_date=requested_date,
+                        preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+                    )
+                resumed_response = _wizard_resume_saved_step_response(
+                    db,
+                    conversation=conversation,
+                    saved_state=saved_state,
+                    config=config,
+                    operation_timezone=operation_timezone,
+                )
+                resumed_metadata = (
+                    resumed_response.get("metadata")
+                    if isinstance(resumed_response.get("metadata"), dict)
+                    else {}
+                )
+                resumed_metadata["reason"] = "resume_saved_step"
+                resumed_response["metadata"] = resumed_metadata
+                return resumed_response
+
+            return _build_resume_or_restart_response(saved_state=saved_state, idle_minutes=None)
+
         if latest_mode == "booking_wizard_service_select":
             services = latest_scheduling.get("services") if isinstance(latest_scheduling.get("services"), list) else []
             services = [str(item).strip() for item in services if str(item or "").strip()]
@@ -2665,6 +3370,9 @@ def _try_booking_wizard_response(
                     "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
                     "metadata": {"reason": "no_unit_available"},
                 }
+            if conversation.unit_id != unit.id:
+                conversation.unit_id = unit.id
+                db.add(conversation)
 
             selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
             return _wizard_build_day_step_response(
@@ -2979,6 +3687,93 @@ def _try_booking_wizard_response(
                 session_token=latest_session_token,
             )
 
+        if latest_mode == "booking_request_cpf_after_booking":
+            if selection_token_normalized in {"menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
+            cpf_value = _extract_cpf_from_text(inbound_text)
+            procedure_type = str(latest_scheduling.get("procedure_type") or "").strip()
+            unit_name = str(latest_scheduling.get("unit_name") or "").strip()
+            selected_slot = latest_scheduling.get("selected_slot") if isinstance(latest_scheduling.get("selected_slot"), dict) else {}
+            selected_slot_label = str(selected_slot.get("label") or latest_scheduling.get("selected_slot") or "").strip()
+            if cpf_value:
+                _upsert_patient_cpf(
+                    db,
+                    conversation=conversation,
+                    cpf_digits=cpf_value,
+                )
+                return _build_booking_post_confirmation_response(
+                    procedure_type=procedure_type,
+                    unit_name=unit_name,
+                    selected_slot_label=selected_slot_label,
+                    session_token=latest_session_token,
+                )
+
+            return _build_booking_cpf_request_response(
+                procedure_type=procedure_type,
+                unit_name=unit_name,
+                selected_slot_label=selected_slot_label,
+                session_token=latest_session_token,
+                retry=True,
+            )
+
+        if latest_mode in {"booking_post_confirmation_options", "booking_post_information_followup", "post_appointment_menu"}:
+            procedure_type = str(latest_scheduling.get("procedure_type") or "").strip()
+            unit_name = str(latest_scheduling.get("unit_name") or "").strip()
+            selected_slot = latest_scheduling.get("selected_slot") if isinstance(latest_scheduling.get("selected_slot"), dict) else {}
+            selected_slot_label = str(selected_slot.get("label") or latest_scheduling.get("selected_slot") or "").strip()
+
+            if selection_token_normalized in {"post_info_close", "post_menu_close"} or _lookup_pattern(inbound_text, CLOSE_CONVERSATION_PATTERNS):
+                return _build_booking_close_with_summary_response(
+                    procedure_type=procedure_type,
+                    unit_name=unit_name,
+                    selected_slot_label=selected_slot_label,
+                    session_token=latest_session_token,
+                )
+
+            if selection_token_normalized in {"post_info_more"} or "mais inform" in normalized_inbound:
+                return _build_booking_post_information_followup_response(
+                    procedure_type=procedure_type,
+                    unit_name=unit_name,
+                    selected_slot_label=selected_slot_label,
+                    session_token=latest_session_token,
+                )
+
+            if selection_token_normalized in {"menu_human", "post_menu_human"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
+
+            if has_scheduling_keywords or force_wizard or selection_token_normalized in {"post_menu_rebook", "novo agendamento"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos iniciar um novo agendamento. Escolha o serviço:",
+                    period=period,
+                    requested_date=requested_date,
+                    preferred_service=_infer_procedure_type(inbound_text=inbound_text, context=context),
+                )
+
+            return _build_booking_post_confirmation_response(
+                procedure_type=procedure_type,
+                unit_name=unit_name,
+                selected_slot_label=selected_slot_label,
+                session_token=latest_session_token,
+            )
+
     if not has_scheduling_keywords and not force_wizard:
         if selection_token_normalized in {"post_menu_rebook", "novo agendamento"}:
             return _wizard_build_service_step_response(
@@ -2998,29 +3793,45 @@ def _try_booking_wizard_response(
                     "handoff_reason": "patient_requested_human",
                 },
             }
-        if selection_token_normalized in {"post_menu_close", "encerrar conversa"}:
-            return {
-                "mode": "post_menu_close",
-                "response_text": "Perfeito. Encerramos por aqui. Quando quiser, é só chamar.",
-                "metadata": {
-                    "reason": "conversation_closed_by_user",
-                    "close_conversation": True,
-                },
-            }
+        if selection_token_normalized in {"post_menu_close", "post_info_close", "encerrar conversa"}:
+            return _build_booking_close_with_summary_response(
+                procedure_type=None,
+                unit_name=None,
+                selected_slot_label=None,
+                session_token=None,
+            )
         return None
     if _extract_option_index_choice(inbound_text) is not None or _extract_time_choice(inbound_text) is not None:
         return None
 
     has_explicit_service = _wizard_has_explicit_service_inbound(inbound_text)
     explicit_availability_request = _is_explicit_availability_request(inbound_text)
-    if not force_wizard and (has_explicit_service or explicit_availability_request or requested_date or period):
+    should_open_wizard = bool(
+        force_wizard
+        or has_scheduling_keywords
+        or has_explicit_service
+        or explicit_availability_request
+        or requested_date
+        or period
+    )
+    if not should_open_wizard:
         return None
 
-    preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context) if has_explicit_service else None
+    preferred_service = (
+        _infer_procedure_type(inbound_text=inbound_text, context=context)
+        if (has_explicit_service or explicit_availability_request or requested_date or period)
+        else None
+    )
+    intro_text = None
+    if explicit_availability_request or requested_date:
+        intro_text = (
+            "Perfeito! Para te mostrar horários certos e evitar erro no agendamento, "
+            "vamos organizar passo a passo. Primeiro, escolha o serviço."
+        )
     return _wizard_build_service_step_response(
         db,
         conversation=conversation,
-        intro_text=None,
+        intro_text=intro_text,
         period=period,
         requested_date=requested_date,
         preferred_service=preferred_service,
@@ -3617,10 +4428,11 @@ def _appointment_response_from_selected_slot(
         )
     )
     if existing:
+        cpf_already_saved = bool(_patient_saved_cpf(db, conversation=conversation))
         return {
             "mode": "appointment_already_created",
             "response_text": (
-                "Esse horário já está confirmado na sua agenda.\n"
+                "Perfeito, esse horário já está confirmado na sua agenda.\n"
                 f"• Serviço: {existing.procedure_type or procedure_type}\n"
                 f"• Horário: {selected_slot['label']}\n"
                 f"• Unidade: {unit.name}"
@@ -3632,6 +4444,7 @@ def _appointment_response_from_selected_slot(
                 "selected_slot": selected_slot["label"],
                 "starts_at_utc": existing.starts_at.isoformat(),
                 "unit_id": str(unit.id),
+                "unit_name": unit.name,
                 "requested_date": requested_date.isoformat() if requested_date else None,
                 "professional_id": (
                     str(selected_slot.get("professional_id"))
@@ -3639,6 +4452,12 @@ def _appointment_response_from_selected_slot(
                     else None
                 ),
                 "professional_name": selected_slot.get("professional_name"),
+                "cpf_already_saved": cpf_already_saved,
+                "next_followup_mode": (
+                    "booking_post_confirmation_options"
+                    if cpf_already_saved
+                    else "booking_request_cpf_after_booking"
+                ),
             },
         }
 
@@ -3730,10 +4549,11 @@ def _appointment_response_from_selected_slot(
         )
     )
 
+    cpf_already_saved = bool(_patient_saved_cpf(db, conversation=conversation))
     return {
         "mode": "appointment_created",
         "response_text": (
-            "Agendamento confirmado com sucesso.\n"
+            "Excelente, seu horário já ficou reservado com sucesso.\n"
             f"• Serviço: {procedure_type}\n"
             f"• Horário: {selected_slot['label']}\n"
             f"• Unidade: {unit.name}"
@@ -3742,7 +4562,7 @@ def _appointment_response_from_selected_slot(
                 if selected_slot.get("professional_name")
                 else ""
             )
-            + "\nSe precisar, posso reagendar."
+            + "\nVou te orientar no próximo passo para deixar tudo pronto."
         ),
         "metadata": {
             "appointment_id": str(appointment.id),
@@ -3751,6 +4571,7 @@ def _appointment_response_from_selected_slot(
             "selected_slot": selected_slot["label"],
             "starts_at_utc": appointment.starts_at.isoformat(),
             "unit_id": str(unit.id),
+            "unit_name": unit.name,
             "requested_date": requested_date.isoformat() if requested_date else None,
             "professional_id": (
                 str(selected_slot.get("professional_id"))
@@ -3758,6 +4579,12 @@ def _appointment_response_from_selected_slot(
                 else None
             ),
             "professional_name": selected_slot.get("professional_name"),
+            "cpf_already_saved": cpf_already_saved,
+            "next_followup_mode": (
+                "booking_post_confirmation_options"
+                if cpf_already_saved
+                else "booking_request_cpf_after_booking"
+            ),
         },
     }
 
@@ -4206,6 +5033,40 @@ def _build_scheduling_operation_response(
     }
 
 
+def _next_action_from_scheduling_response(scheduling_response: dict[str, Any]) -> str:
+    mode = str(scheduling_response.get("mode") or "").strip()
+    metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+
+    if bool(metadata.get("handoff_required")):
+        return "handoff_human"
+
+    mode_mapping = {
+        "booking_wizard_service_select": "show_services",
+        "booking_wizard_unit_select": "show_clinics",
+        "booking_wizard_day_select": "show_available_dates",
+        "booking_wizard_time_select": "show_available_times",
+        "booking_wizard_confirm": "show_booking_confirmation_options",
+        "booking_wizard_resume_or_restart": "show_resume_or_restart_options",
+        "booking_request_cpf_after_booking": "request_cpf_after_booking",
+        "appointment_created": "finalize_booking_auto",
+        "appointment_already_created": "finalize_booking_auto",
+        "booking_post_confirmation_options": "none",
+        "booking_post_information_followup": "none",
+        "booking_close_with_summary": "none",
+        "menu_human_handoff": "handoff_human",
+        "no_unit_available": "handoff_human",
+        "no_slots_general": "none",
+        "no_slots_for_period": "none",
+        "no_slots_for_period_with_alternatives": "verify_date_availability",
+        "slots_suggested": "verify_date_availability",
+        "welcome_message_start": "none",
+    }
+    mapped = mode_mapping.get(mode, "none")
+    if mapped not in AI_ALLOWED_NEXT_ACTIONS:
+        return "none"
+    return mapped
+
+
 def _recent_context(db: Session, *, tenant_id: UUID, conversation_id: UUID, limit: int = 12) -> str:
     messages = db.execute(
         select(Message)
@@ -4234,23 +5095,49 @@ def _prompt_for_autoresponder(
 
     return (
         "Você é assistente virtual de recepção odontológica do OdontoFlux.\n"
-        "Responda apenas em pt-BR, tom profissional, cordial e objetivo.\n"
+        "Responda somente em pt-BR com tom humano, cordial, consultivo e persuasivo (sem pressão agressiva).\n"
         "Tom desejado: "
-        f"{config.get('tone') or AI_AUTORESPONDER_DEFAULT_CONFIG['tone']}.\n"
-        "Regras obrigatórias:\n"
+        f"{config.get('tone') or AI_AUTORESPONDER_DEFAULT_CONFIG['tone']}.\n\n"
+        "REGRAS CRÍTICAS:\n"
         "1) Nunca ofereça diagnóstico, prescrição, dose, laudo ou conduta clínica.\n"
         "2) Foque em atendimento operacional: acolhimento, horários, confirmação, reagendamento, documentação e repasse para equipe.\n"
-        "3) Se houver urgência ou risco, responda orientando busca de atendimento humano imediato, sem aconselhamento clínico.\n"
-        "4) Mantenha respostas curtas (máximo 4 frases), claras e acionáveis.\n"
-        "5) Use estritamente a base da clínica quando houver informação cadastrada.\n"
-        "6) Se faltar informação na base, não invente; peça dados mínimos ou informe que vai confirmar com a equipe.\n\n"
-        "7) Não repita apresentação completa em toda mensagem e evite citar o nome do paciente em todas as respostas.\n"
-        "8) Ao informar datas/horários, use lista numerada (uma opção por linha).\n"
-        "9) Não diga 'vou verificar e retorno'; responda com opção concreta agora ou faça handoff humano.\n\n"
+        "3) Se houver urgência/risco ou pedido explícito de humano, use next_action=handoff_human.\n"
+        "4) Use a base da clínica quando existir; se faltar informação, não invente.\n"
+        "5) O paciente nunca pode ver comandos internos.\n\n"
+        "FORMATO OBRIGATÓRIO DE SAÍDA (SEM TEXTO FORA DO JSON):\n"
+        "{\n"
+        '  "reply_text": "string em linguagem natural para o paciente",\n'
+        '  "next_action": "uma ação do enum permitido",\n'
+        '  "action_payload": {\n'
+        '    "context": "resumo curto do contexto/intenção"\n'
+        "  },\n"
+        '  "confidence": 0.0\n'
+        "}\n\n"
+        "ENUM PERMITIDO PARA next_action:\n"
+        "- none\n"
+        "- show_clinics\n"
+        "- show_services\n"
+        "- show_plans\n"
+        "- show_available_dates\n"
+        "- show_available_times\n"
+        "- verify_date_availability\n"
+        "- open_booking\n"
+        "- show_resume_or_restart_options\n"
+        "- resume_saved_step\n"
+        "- restart_from_beginning\n"
+        "- show_booking_confirmation_options\n"
+        "- finalize_booking_auto\n"
+        "- request_cpf_after_booking\n"
+        "- handoff_human\n\n"
+        "VALIDAÇÕES:\n"
+        "- Retorne JSON válido.\n"
+        "- Não use markdown.\n"
+        "- Não omita campos.\n"
+        "- confidence deve ser número entre 0 e 1.\n"
+        "- Se não houver ação operacional, use next_action=none.\n\n"
         f"{knowledge_section}"
         f"Histórico recente:\n{context}\n\n"
-        f"Mensagem do paciente:\n{inbound_text}\n\n"
-        "Gere apenas a resposta final ao paciente."
+        f"Mensagem do paciente:\n{inbound_text}\n"
     )
 
 
@@ -4613,6 +5500,9 @@ def process_inbound_message(
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     interactive_reply = inbound_payload.get("interactive_reply") if isinstance(inbound_payload.get("interactive_reply"), dict) else {}
     interactive_reply_id = str(interactive_reply.get("id") or "").strip().lower()
+    latest_wizard_message = _latest_ai_wizard_message(db, conversation=conversation)
+    latest_wizard_payload = latest_wizard_message.payload if latest_wizard_message and isinstance(latest_wizard_message.payload, dict) else {}
+    latest_wizard_mode = str(latest_wizard_payload.get("mode") or "").strip()
     idle_minutes = _conversation_idle_minutes_before_inbound(
         db,
         conversation=conversation,
@@ -4623,7 +5513,7 @@ def process_inbound_message(
     )
 
     close_request = _lookup_pattern(inbound_text, CLOSE_CONVERSATION_PATTERNS)
-    if close_request:
+    if close_request and latest_wizard_mode not in {"booking_post_confirmation_options", "booking_post_information_followup", "post_appointment_menu"}:
         conversation.status = "finalizada"
         db.add(conversation)
         return finish_without_reply(
@@ -4707,15 +5597,27 @@ def process_inbound_message(
 
     scheduling_response = None
     if idle_timeout_restart:
-        knowledge_base_for_welcome = get_knowledge_base_global_config(db, tenant_id=tenant_id)
-        scheduling_response = _build_conversation_start_welcome_response(
-            intro_text=_resolve_welcome_greeting_from_knowledge(knowledge_base_for_welcome),
-        )
-        metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
-        metadata["reason"] = "idle_timeout_restart"
-        metadata["idle_minutes"] = round(idle_minutes or 0.0, 2)
-        metadata["restart_after_minutes"] = INACTIVE_CONVERSATION_RESTART_MINUTES
-        scheduling_response["metadata"] = metadata
+        saved_state = _latest_saved_booking_state(db, conversation=conversation)
+        if saved_state:
+            scheduling_response = _build_resume_or_restart_response(
+                saved_state=saved_state,
+                idle_minutes=idle_minutes,
+            )
+            metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+            metadata["reason"] = "idle_timeout_resume_options"
+            metadata["idle_minutes"] = round(idle_minutes or 0.0, 2)
+            metadata["restart_after_minutes"] = INACTIVE_CONVERSATION_RESTART_MINUTES
+            scheduling_response["metadata"] = metadata
+        else:
+            knowledge_base_for_welcome = get_knowledge_base_global_config(db, tenant_id=tenant_id)
+            scheduling_response = _build_conversation_start_welcome_response(
+                intro_text=_resolve_welcome_greeting_from_knowledge(knowledge_base_for_welcome),
+            )
+            metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
+            metadata["reason"] = "idle_timeout_restart"
+            metadata["idle_minutes"] = round(idle_minutes or 0.0, 2)
+            metadata["restart_after_minutes"] = INACTIVE_CONVERSATION_RESTART_MINUTES
+            scheduling_response["metadata"] = metadata
     elif _is_conversation_start_for_welcome(db, conversation=conversation) and _should_send_conversation_start_menu(inbound_text):
         knowledge_base_for_welcome = get_knowledge_base_global_config(db, tenant_id=tenant_id)
         scheduling_response = _build_conversation_start_welcome_response(
@@ -4731,6 +5633,13 @@ def process_inbound_message(
             config=config,
         )
     if scheduling_response:
+        scheduling_next_action = _next_action_from_scheduling_response(scheduling_response)
+        if scheduling_next_action not in AI_ALLOWED_NEXT_ACTIONS:
+            return finish_without_reply(
+                final_decision=DECISION_HANDOFF,
+                reason="invalid_ai_contract",
+                handoff=True,
+            )
         generated_response = _normalize_response_text(
             db,
             conversation=conversation,
@@ -4743,15 +5652,6 @@ def process_inbound_message(
             if conversation.channel == "whatsapp"
             else None
         )
-        outbound_message_type = "text"
-        if interactive_payload:
-            interactive_type = str(interactive_payload.get("interactive_type") or "list").strip().lower()
-            outbound_message_type = "interactive_buttons" if interactive_type == "buttons" else "interactive_list"
-        dispatch_body = (
-            str(interactive_payload.get("body_text") or generated_response)
-            if interactive_payload
-            else generated_response
-        )
         try:
             outbound_message = Message(
                 tenant_id=tenant_id,
@@ -4760,13 +5660,12 @@ def process_inbound_message(
                 channel=conversation.channel,
                 sender_type="ai",
                 body=generated_response,
-                message_type=outbound_message_type,
+                message_type="text",
                 payload={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
                     "reply_to_message_id": str(inbound_message.id),
                     "scheduling": scheduling_response.get("metadata") or {},
-                    "interactive": interactive_payload,
                 },
                 status=MessageStatus.QUEUED.value,
             )
@@ -4778,9 +5677,8 @@ def process_inbound_message(
                 tenant_id=tenant_id,
                 conversation_id=conversation.id,
                 to=destination,
-                body=dispatch_body,
-                message_type=outbound_message_type,
-                interactive=interactive_payload,
+                body=generated_response,
+                message_type="text",
                 metadata={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
@@ -4793,6 +5691,56 @@ def process_inbound_message(
             outbound_payload["queued_outbox_id"] = str(outbox.id)
             outbound_message.payload = outbound_payload
             db.add(outbound_message)
+
+            interactive_outbox = None
+            interactive_outbound_message = None
+            if interactive_payload:
+                interactive_type = str(interactive_payload.get("interactive_type") or "list").strip().lower()
+                interactive_message_type = "interactive_buttons" if interactive_type == "buttons" else "interactive_list"
+                interactive_body = str(interactive_payload.get("body_text") or "Escolha uma opção para continuar.")
+                interactive_outbound_message = Message(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation.id,
+                    direction=MessageDirection.OUTBOUND.value,
+                    channel=conversation.channel,
+                    sender_type="ai",
+                    body=interactive_body,
+                    message_type=interactive_message_type,
+                    payload={
+                        "source": "ai_autoresponder",
+                        "mode": scheduling_response.get("mode"),
+                        "reply_to_message_id": str(inbound_message.id),
+                        "scheduling": scheduling_response.get("metadata") or {},
+                        "interactive": interactive_payload,
+                    },
+                    status=MessageStatus.QUEUED.value,
+                )
+                db.add(interactive_outbound_message)
+                db.flush()
+
+                interactive_outbox = queue_outbound_message(
+                    db,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation.id,
+                    to=destination,
+                    body=interactive_body,
+                    message_type=interactive_message_type,
+                    interactive=interactive_payload,
+                    metadata={
+                        "source": "ai_autoresponder",
+                        "mode": scheduling_response.get("mode"),
+                        "inbound_message_id": str(inbound_message.id),
+                        "outbound_message_id": str(interactive_outbound_message.id),
+                    },
+                )
+                interactive_payload_data = (
+                    interactive_outbound_message.payload
+                    if isinstance(interactive_outbound_message.payload, dict)
+                    else {}
+                )
+                interactive_payload_data["queued_outbox_id"] = str(interactive_outbox.id)
+                interactive_outbound_message.payload = interactive_payload_data
+                db.add(interactive_outbound_message)
 
             scheduling_metadata = (
                 scheduling_response.get("metadata")
@@ -4816,53 +5764,91 @@ def process_inbound_message(
                         tags.add(normalized_tag)
                 conversation.tags = sorted(tags)
                 db.add(conversation)
-            post_menu_outbox = None
-            post_menu_message = None
+            followup_outbox = None
+            followup_message = None
             if scheduling_mode in {"appointment_created", "appointment_already_created"} and conversation.channel == "whatsapp":
-                post_menu_body, post_menu_interactive = _build_post_appointment_menu_payload()
-                post_menu_message = Message(
+                procedure_type = str(scheduling_metadata.get("procedure_type") or "").strip() or None
+                unit_name = str(scheduling_metadata.get("unit_name") or "").strip() or None
+                selected_slot_label = str(scheduling_metadata.get("selected_slot") or "").strip() or None
+                session_token = str(scheduling_metadata.get("session_token") or "").strip() or None
+
+                cpf_already_saved = bool(
+                    scheduling_metadata.get("cpf_already_saved") or _patient_saved_cpf(db, conversation=conversation)
+                )
+                followup_response = (
+                    _build_booking_post_confirmation_response(
+                        procedure_type=procedure_type,
+                        unit_name=unit_name,
+                        selected_slot_label=selected_slot_label,
+                        session_token=session_token,
+                    )
+                    if cpf_already_saved
+                    else _build_booking_cpf_request_response(
+                        procedure_type=procedure_type,
+                        unit_name=unit_name,
+                        selected_slot_label=selected_slot_label,
+                        session_token=session_token,
+                        retry=False,
+                    )
+                )
+                followup_text = _normalize_response_text(
+                    db,
+                    conversation=conversation,
+                    text=str(followup_response.get("response_text") or ""),
+                )
+                followup_interactive = _build_scheduling_interactive_list_payload(followup_response)
+                followup_type = "text"
+                if followup_interactive:
+                    followup_interactive_type = str(followup_interactive.get("interactive_type") or "buttons").strip().lower()
+                    followup_type = "interactive_buttons" if followup_interactive_type == "buttons" else "interactive_list"
+                followup_dispatch_body = (
+                    str(followup_interactive.get("body_text") or followup_text)
+                    if followup_interactive
+                    else followup_text
+                )
+
+                followup_message = Message(
                     tenant_id=tenant_id,
                     conversation_id=conversation.id,
                     direction=MessageDirection.OUTBOUND.value,
                     channel=conversation.channel,
                     sender_type="ai",
-                    body=post_menu_body,
-                    message_type="interactive_buttons",
+                    body=followup_text,
+                    message_type=followup_type,
                     payload={
                         "source": "ai_autoresponder",
-                        "mode": "post_appointment_menu",
+                        "mode": followup_response.get("mode"),
                         "reply_to_message_id": str(inbound_message.id),
-                        "interactive": post_menu_interactive,
+                        "scheduling": followup_response.get("metadata") or {},
+                        "interactive": followup_interactive,
                     },
                     status=MessageStatus.QUEUED.value,
                 )
-                db.add(post_menu_message)
+                db.add(followup_message)
                 db.flush()
 
-                post_menu_outbox = queue_outbound_message(
+                followup_outbox = queue_outbound_message(
                     db,
                     tenant_id=tenant_id,
                     conversation_id=conversation.id,
                     to=destination,
-                    body=str(post_menu_interactive.get("body_text") or post_menu_body),
-                    message_type="interactive_buttons",
-                    interactive=post_menu_interactive,
+                    body=followup_dispatch_body,
+                    message_type=followup_type,
+                    interactive=followup_interactive,
                     metadata={
                         "source": "ai_autoresponder",
-                        "mode": "post_appointment_menu",
+                        "mode": followup_response.get("mode"),
                         "inbound_message_id": str(inbound_message.id),
-                        "outbound_message_id": str(post_menu_message.id),
+                        "outbound_message_id": str(followup_message.id),
                     },
                 )
 
-                post_menu_payload = post_menu_message.payload if isinstance(post_menu_message.payload, dict) else {}
-                post_menu_payload["queued_outbox_id"] = str(post_menu_outbox.id)
-                post_menu_message.payload = post_menu_payload
-                db.add(post_menu_message)
+                followup_payload = followup_message.payload if isinstance(followup_message.payload, dict) else {}
+                followup_payload["queued_outbox_id"] = str(followup_outbox.id)
+                followup_message.payload = followup_payload
+                db.add(followup_message)
 
-                # Após concluir agendamento, encerra automaticamente a conversa atual.
-                conversation.status = "finalizada"
-            elif close_conversation_requested:
+            if close_conversation_requested:
                 conversation.status = "finalizada"
 
             if handoff_required:
@@ -4886,7 +5872,7 @@ def process_inbound_message(
                 final_decision=final_decision,
                 decision_reason=decision_reason,
                 generated_response=generated_response,
-                confidence=None,
+                confidence=0.92,
                 llm_payload=None,
                 handoff_required=handoff_required,
                 metadata=_build_metadata(
@@ -4894,14 +5880,20 @@ def process_inbound_message(
                     extra={
                         "outbox_id": str(outbox.id),
                         "outbound_message_id": str(outbound_message.id),
+                        "interactive_outbox_id": str(interactive_outbox.id) if interactive_outbox else None,
+                        "interactive_outbound_message_id": (
+                            str(interactive_outbound_message.id) if interactive_outbound_message else None
+                        ),
                         "knowledge_context_present": False,
                         "scheduling": scheduling_metadata,
                         "scheduling_mode": scheduling_response.get("mode"),
+                        "next_action": scheduling_next_action,
+                        "action_payload": {"context": str(scheduling_response.get("mode") or "scheduling")},
                         "handoff_required": handoff_required,
                         "handoff_reason": handoff_reason if handoff_required else None,
                         "close_conversation_requested": close_conversation_requested,
-                        "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
-                        "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
+                        "followup_outbox_id": str(followup_outbox.id) if followup_outbox else None,
+                        "followup_outbound_message_id": str(followup_message.id) if followup_message else None,
                     },
                 ),
                 outbound_message_id=outbound_message.id,
@@ -4953,15 +5945,20 @@ def process_inbound_message(
                 "decision_id": str(decision.id),
                 "outbox_id": str(outbox.id),
                 "outbound_message_id": str(outbound_message.id),
+                "interactive_outbox_id": str(interactive_outbox.id) if interactive_outbox else None,
+                "interactive_outbound_message_id": (
+                    str(interactive_outbound_message.id) if interactive_outbound_message else None
+                ),
                 "reason": decision_reason,
                 "reason_label": _reason_label(decision_reason),
                 "scheduling_mode": scheduling_response.get("mode"),
+                "next_action": scheduling_next_action,
                 "scheduling": scheduling_metadata,
                 "handoff_required": handoff_required,
                 "handoff_reason": handoff_reason if handoff_required else None,
                 "close_conversation_requested": close_conversation_requested,
-                "post_menu_outbox_id": str(post_menu_outbox.id) if post_menu_outbox else None,
-                "post_menu_outbound_message_id": str(post_menu_message.id) if post_menu_message else None,
+                "followup_outbox_id": str(followup_outbox.id) if followup_outbox else None,
+                "followup_outbound_message_id": str(followup_message.id) if followup_message else None,
             }
             if captured_profile:
                 payload["captured_profile"] = captured_profile
@@ -5030,21 +6027,51 @@ def process_inbound_message(
 
     llm_payload: dict[str, Any] | None = None
     generated_response = ""
+    contract_next_action = "none"
+    contract_action_payload: dict[str, Any] = {"context": "general"}
+    contract_confidence = confidence
     started_at = perf_counter()
     try:
-        llm_result = run_llm_task(
-            db,
-            tenant_id=tenant_id,
-            conversation_id=conversation.id,
-            task="auto_responder",
-            prompt=prompt,
-        )
-        llm_payload = {"prompt": prompt, **llm_result}
+        llm_prompt = prompt
+        contract_output: dict[str, Any] | None = None
+        for attempt in range(2):
+            llm_result = run_llm_task(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                task="auto_responder",
+                prompt=llm_prompt,
+            )
+            llm_payload = {"prompt": llm_prompt, **llm_result}
+            contract_output = _parse_and_validate_ai_contract(str(llm_result.get("output") or ""))
+            if contract_output:
+                break
+            if attempt == 0:
+                llm_prompt = (
+                    f"{prompt}\n\n"
+                    "A saída anterior ficou inválida. "
+                    "Responda novamente com JSON válido e somente JSON, mantendo todos os campos obrigatórios."
+                )
+
+        if not contract_output:
+            return finish_without_reply(
+                final_decision=DECISION_HANDOFF,
+                reason="invalid_ai_contract",
+                handoff=True,
+            )
+
         generated_response = _normalize_response_text(
             db,
             conversation=conversation,
-            text=str(llm_result.get("output") or ""),
+            text=str(contract_output.get("reply_text") or ""),
         )
+        contract_next_action = str(contract_output.get("next_action") or "none").strip() or "none"
+        contract_action_payload_raw = contract_output.get("action_payload")
+        if isinstance(contract_action_payload_raw, dict):
+            contract_action_payload = contract_action_payload_raw
+        parsed_contract_confidence = contract_output.get("confidence")
+        if isinstance(parsed_contract_confidence, (int, float)):
+            contract_confidence = float(parsed_contract_confidence)
     except Exception as exc:
         logger.exception(
             "ai_autoresponder.llm_error",
@@ -5056,6 +6083,20 @@ def process_inbound_message(
 
     if not generated_response:
         return finish_without_reply(final_decision=DECISION_HANDOFF, reason="llm_error", handoff=True)
+
+    if contract_next_action == "handoff_human":
+        return finish_without_reply(
+            final_decision=DECISION_HANDOFF,
+            reason="patient_requested_human",
+            handoff=True,
+        )
+
+    if contract_confidence is not None and contract_confidence < threshold:
+        return finish_without_reply(
+            final_decision=DECISION_HANDOFF,
+            reason="low_confidence",
+            handoff=True,
+        )
 
     generated_clinical_pattern = _lookup_pattern(generated_response, CLINICAL_PATTERNS)
     if generated_clinical_pattern:
@@ -5084,6 +6125,8 @@ def process_inbound_message(
             payload={
                 "source": "ai_autoresponder",
                 "reply_to_message_id": str(inbound_message.id),
+                "next_action": contract_next_action,
+                "action_payload": contract_action_payload,
             },
             status=MessageStatus.QUEUED.value,
         )
@@ -5101,6 +6144,7 @@ def process_inbound_message(
                 "source": "ai_autoresponder",
                 "inbound_message_id": str(inbound_message.id),
                 "outbound_message_id": str(outbound_message.id),
+                "next_action": contract_next_action,
             },
         )
 
@@ -5124,7 +6168,7 @@ def process_inbound_message(
             final_decision=DECISION_RESPONDED,
             decision_reason="response_sent",
             generated_response=generated_response,
-            confidence=confidence,
+            confidence=contract_confidence,
             llm_payload=llm_payload,
             metadata=_build_metadata(
                 config=config,
@@ -5132,6 +6176,8 @@ def process_inbound_message(
                     "outbox_id": str(outbox.id),
                     "outbound_message_id": str(outbound_message.id),
                     "knowledge_context_present": bool(knowledge_context),
+                    "next_action": contract_next_action,
+                    "action_payload": contract_action_payload,
                 },
             ),
             outbound_message_id=outbound_message.id,
@@ -5167,6 +6213,8 @@ def process_inbound_message(
             "outbound_message_id": str(outbound_message.id),
             "reason": "response_sent",
             "reason_label": _reason_label("response_sent"),
+            "next_action": contract_next_action,
+            "action_payload": contract_action_payload,
         }
         if captured_profile:
             payload["captured_profile"] = captured_profile
