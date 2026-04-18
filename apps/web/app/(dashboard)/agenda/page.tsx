@@ -933,7 +933,7 @@ export default function AgendaPage() {
                         </option>
                       ))}
                     </select>
-                    <p className="field-help">Deixe vazio para manter como "Nao definido".</p>
+                    <p className="field-help">Deixe vazio para manter como &quot;Nao definido&quot;.</p>
                   </div>
                 </div>
 
