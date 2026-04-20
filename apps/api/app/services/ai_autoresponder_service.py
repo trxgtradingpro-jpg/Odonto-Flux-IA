@@ -2130,6 +2130,12 @@ def _booking_state_summary_text(saved_state: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _has_meaningful_saved_state(saved_state: dict[str, Any] | None) -> bool:
+    if not isinstance(saved_state, dict):
+        return False
+    return bool(_booking_state_summary_text(saved_state))
+
+
 def _latest_saved_booking_state(db: Session, *, conversation: Conversation) -> dict[str, Any] | None:
     recent_messages = _recent_ai_outbound_messages(db, conversation=conversation, limit=25)
     for message in recent_messages:
@@ -3278,6 +3284,16 @@ def _try_booking_wizard_response(
                 fallback_state = _wizard_state_from_scheduling_metadata(latest_scheduling)
                 if fallback_state:
                     saved_state = fallback_state
+            has_saved_state = _has_meaningful_saved_state(saved_state)
+
+            if not has_saved_state:
+                return _build_conversation_start_welcome_response(
+                    intro_text=(
+                        "Vamos começar seu atendimento agora.\n"
+                        "Escolha uma opção para eu te ajudar da melhor forma:"
+                    ),
+                    session_token=latest_session_token,
+                )
 
             if selection_token_normalized == "restart_from_beginning" or restart_requested:
                 return _wizard_build_service_step_response(
@@ -5617,9 +5633,9 @@ def process_inbound_message(
     scheduling_response = None
     if idle_timeout_restart:
         saved_state = _latest_saved_booking_state(db, conversation=conversation)
-        if saved_state:
+        if _has_meaningful_saved_state(saved_state):
             scheduling_response = _build_resume_or_restart_response(
-                saved_state=saved_state,
+                saved_state=saved_state or {},
                 idle_minutes=idle_minutes,
             )
             metadata = scheduling_response.get("metadata") if isinstance(scheduling_response.get("metadata"), dict) else {}
