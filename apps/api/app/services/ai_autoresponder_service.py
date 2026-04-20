@@ -2044,32 +2044,56 @@ def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Mes
     return None
 
 
+def _normalize_resume_value(value: Any) -> str:
+    if value is None:
+        return ""
+    text = re.sub(r"\s+", " ", str(value).strip())
+    if not text:
+        return ""
+    normalized = _normalize_for_match(text)
+    if normalized in {
+        "none",
+        "null",
+        "undefined",
+        "nao definido",
+        "nao definida",
+        "n/a",
+        "-",
+    }:
+        return ""
+    return text
+
+
 def _wizard_state_from_scheduling_metadata(metadata: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(metadata, dict):
         return None
 
-    service = str(metadata.get("service_selected") or metadata.get("procedure_type") or "").strip()
-    clinic_name = str(
+    service = _normalize_resume_value(
+        metadata.get("service_selected") or metadata.get("procedure_type")
+    )
+    clinic_name = _normalize_resume_value(
         metadata.get("unit_name")
         or metadata.get("clinic_name")
         or ((metadata.get("clinic_selected") or {}).get("name") if isinstance(metadata.get("clinic_selected"), dict) else "")
-    ).strip()
-    clinic_id = str(
+    )
+    clinic_id = _normalize_resume_value(
         metadata.get("unit_id")
         or metadata.get("clinic_id")
         or ((metadata.get("clinic_selected") or {}).get("id") if isinstance(metadata.get("clinic_selected"), dict) else "")
-    ).strip()
-    selected_date = str(metadata.get("date_selected") or metadata.get("requested_date") or "").strip()
+    )
+    selected_date = _normalize_resume_value(metadata.get("date_selected") or metadata.get("requested_date"))
     selected_slot = metadata.get("selected_slot")
     selected_time = ""
     if isinstance(selected_slot, dict):
-        selected_time = str(selected_slot.get("time") or selected_slot.get("label") or "").strip()
+        selected_time = _normalize_resume_value(selected_slot.get("time") or selected_slot.get("label"))
     elif isinstance(selected_slot, str):
-        selected_time = selected_slot.strip()
+        selected_time = _normalize_resume_value(selected_slot)
     if not selected_time:
-        selected_time = str(metadata.get("time_selected") or "").strip()
+        selected_time = _normalize_resume_value(metadata.get("time_selected"))
 
-    has_progress = any((service, clinic_id, clinic_name, selected_date, selected_time))
+    has_displayable_progress = any((service, clinic_name, selected_date, selected_time))
+    has_technical_progress = bool(clinic_id and any((service, selected_date, selected_time)))
+    has_progress = has_displayable_progress or has_technical_progress
     if not has_progress:
         return None
 
@@ -2088,10 +2112,10 @@ def _wizard_state_from_scheduling_metadata(metadata: dict[str, Any]) -> dict[str
 
 def _booking_state_summary_text(saved_state: dict[str, Any]) -> str:
     parts: list[str] = []
-    service = str(saved_state.get("service") or "").strip()
-    clinic_name = str(saved_state.get("clinic_name") or "").strip()
-    selected_date = str(saved_state.get("date") or "").strip()
-    selected_time = str(saved_state.get("time") or "").strip()
+    service = _normalize_resume_value(saved_state.get("service"))
+    clinic_name = _normalize_resume_value(saved_state.get("clinic_name"))
+    selected_date = _normalize_resume_value(saved_state.get("date"))
+    selected_time = _normalize_resume_value(saved_state.get("time"))
 
     if service:
         parts.append(f"serviço: {service}")
@@ -2130,20 +2154,15 @@ def _build_resume_or_restart_response(
     idle_minutes: float | None = None,
 ) -> dict[str, Any]:
     summary = _booking_state_summary_text(saved_state)
-    idle_label = ""
-    if isinstance(idle_minutes, (int, float)):
-        idle_label = f" Faz alguns minutos desde nossa última conversa ({round(float(idle_minutes), 1)} min)."
-
     reply_text = (
-        "Que bom te ver novamente por aqui."
-        f"{idle_label} Posso continuar exatamente de onde você parou"
-        " ou reiniciar o atendimento do zero, como preferir."
+        "Que bom te ver novamente por aqui. "
+        "Se você quiser, continuo exatamente de onde paramos."
     )
     if summary:
         reply_text = (
             "Que bom te ver novamente por aqui."
-            f"{idle_label} Eu já tinha separado estas escolhas: {summary}. "
-            "Se quiser, continuo desse ponto para você."
+            f" Eu já tinha separado estas escolhas: {summary}. "
+            "Se fizer sentido para você, continuo desse ponto agora."
         )
 
     rows = [
