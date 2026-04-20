@@ -5652,6 +5652,29 @@ def process_inbound_message(
             if conversation.channel == "whatsapp"
             else None
         )
+        scheduling_metadata = (
+            scheduling_response.get("metadata")
+            if isinstance(scheduling_response.get("metadata"), dict)
+            else {}
+        )
+        scheduling_mode = str(scheduling_response.get("mode") or "").strip()
+
+        # Evita mensagem duplicada nos fluxos de boas-vindas/retomada após inatividade:
+        # nesses modos enviamos apenas uma mensagem interativa já com o texto humanizado.
+        single_message_modes = {"welcome_message_start", "booking_wizard_resume_or_restart"}
+        inline_interactive_payload: dict[str, Any] | None = None
+        if interactive_payload and scheduling_mode in single_message_modes:
+            inline_interactive_payload = dict(interactive_payload)
+            inline_interactive_payload["body_text"] = generated_response
+
+        dispatch_message_type = "text"
+        dispatch_interactive = None
+        dispatch_body = generated_response
+        if inline_interactive_payload:
+            inline_interactive_type = str(inline_interactive_payload.get("interactive_type") or "list").strip().lower()
+            dispatch_message_type = "interactive_buttons" if inline_interactive_type == "buttons" else "interactive_list"
+            dispatch_interactive = inline_interactive_payload
+            dispatch_body = str(inline_interactive_payload.get("body_text") or generated_response)
         try:
             outbound_message = Message(
                 tenant_id=tenant_id,
@@ -5660,12 +5683,13 @@ def process_inbound_message(
                 channel=conversation.channel,
                 sender_type="ai",
                 body=generated_response,
-                message_type="text",
+                message_type=dispatch_message_type,
                 payload={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
                     "reply_to_message_id": str(inbound_message.id),
                     "scheduling": scheduling_response.get("metadata") or {},
+                    "interactive": dispatch_interactive,
                 },
                 status=MessageStatus.QUEUED.value,
             )
@@ -5677,8 +5701,9 @@ def process_inbound_message(
                 tenant_id=tenant_id,
                 conversation_id=conversation.id,
                 to=destination,
-                body=generated_response,
-                message_type="text",
+                body=dispatch_body,
+                message_type=dispatch_message_type,
+                interactive=dispatch_interactive,
                 metadata={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
@@ -5694,7 +5719,7 @@ def process_inbound_message(
 
             interactive_outbox = None
             interactive_outbound_message = None
-            if interactive_payload:
+            if interactive_payload and not inline_interactive_payload:
                 interactive_type = str(interactive_payload.get("interactive_type") or "list").strip().lower()
                 interactive_message_type = "interactive_buttons" if interactive_type == "buttons" else "interactive_list"
                 interactive_body = str(interactive_payload.get("body_text") or "Escolha uma opção para continuar.")
@@ -5741,13 +5766,6 @@ def process_inbound_message(
                 interactive_payload_data["queued_outbox_id"] = str(interactive_outbox.id)
                 interactive_outbound_message.payload = interactive_payload_data
                 db.add(interactive_outbound_message)
-
-            scheduling_metadata = (
-                scheduling_response.get("metadata")
-                if isinstance(scheduling_response.get("metadata"), dict)
-                else {}
-            )
-            scheduling_mode = str(scheduling_response.get("mode") or "").strip()
             handoff_required = bool(scheduling_metadata.get("handoff_required"))
             close_conversation_requested = bool(scheduling_metadata.get("close_conversation"))
             handoff_reason = str(
