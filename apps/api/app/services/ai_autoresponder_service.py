@@ -1398,20 +1398,9 @@ def _is_greeting_only_message(text: str) -> bool:
 
 
 def _should_send_conversation_start_menu(text: str) -> bool:
-    normalized = _normalize_for_match(text or "")
-    if not normalized:
-        return False
-
-    has_direct_scheduling = any(
-        keyword in normalized
-        for keyword in (*SCHEDULING_INTENT_KEYWORDS, *AVAILABILITY_REQUEST_KEYWORDS)
-    )
-    if has_direct_scheduling:
-        return False
-
-    if _wizard_has_explicit_service_inbound(text):
-        return False
-    return True
+    # O menu inicial deve aparecer só em saudações curtas (ex.: "oi", "bom dia").
+    # Mensagens com intenção clara devem seguir para a IA decidir o próximo passo.
+    return _is_greeting_only_message(text)
 
 
 def _resolve_welcome_greeting_from_knowledge(knowledge_base: dict[str, Any] | None) -> str | None:
@@ -3202,10 +3191,8 @@ def _try_booking_wizard_response(
                         requested_date=carried_requested_date,
                         session_token=latest_session_token,
                     )
-                return _build_conversation_start_welcome_response(
-                    intro_text="Escolha uma opção no menu para continuar.",
-                    session_token=latest_session_token,
-                )
+                # Não trava em menu fixo: texto livre segue para a IA principal analisar.
+                return None
 
             if selected_option == "menu_schedule":
                 return _wizard_build_service_step_response(
@@ -3331,7 +3318,25 @@ def _try_booking_wizard_response(
                 resumed_response["metadata"] = resumed_metadata
                 return resumed_response
 
-            return _build_resume_or_restart_response(saved_state=saved_state, idle_minutes=None)
+            if has_scheduling_keywords or force_wizard:
+                resumed_response = _wizard_resume_saved_step_response(
+                    db,
+                    conversation=conversation,
+                    saved_state=saved_state,
+                    config=config,
+                    operation_timezone=operation_timezone,
+                )
+                resumed_metadata = (
+                    resumed_response.get("metadata")
+                    if isinstance(resumed_response.get("metadata"), dict)
+                    else {}
+                )
+                resumed_metadata["reason"] = "resume_saved_step_inferred"
+                resumed_response["metadata"] = resumed_metadata
+                return resumed_response
+
+            # Texto livre fora de intenção de retomada/reinício deve ir para IA principal.
+            return None
 
         if latest_mode == "booking_wizard_service_select":
             services = latest_scheduling.get("services") if isinstance(latest_scheduling.get("services"), list) else []
