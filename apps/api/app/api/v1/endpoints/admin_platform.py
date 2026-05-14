@@ -23,6 +23,29 @@ from app.services.whatsapp_service import normalize_whatsapp_provider_name, what
 router = APIRouter(prefix="/admin/platform", tags=["admin_platform"])
 
 
+def _provider_validation_hint(provider_name: str) -> str:
+    if provider_name == "infobip":
+        return "Revise sender aprovado, base URL da conta e App key oficial da Infobip."
+    if provider_name == "twilio":
+        return "Revise sender WhatsApp, Account SID e Auth Token oficial da Twilio."
+    return "Revise Phone Number ID, Business Account ID e Access Token oficial da Meta."
+
+
+def _provider_validation_detail(exc: httpx.HTTPStatusError) -> str | None:
+    response = exc.response
+    if response is None:
+        return None
+    try:
+        payload = response.json()
+        detail = str(payload)
+    except ValueError:
+        detail = response.text or ""
+    detail = " ".join(detail.split()).strip()
+    if not detail:
+        return None
+    return detail[:280]
+
+
 def _system_whatsapp_tenant(db: Session):
     return sales.ensure_sales_outreach_sender_tenant(db)
 
@@ -333,18 +356,24 @@ def test_system_whatsapp_connection(
         )
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code if exc.response else 502
+        hint = _provider_validation_hint(provider_name)
+        detail = _provider_validation_detail(exc)
         raise ApiError(
             status_code=400,
             code="SYSTEM_WHATSAPP_TEST_FAILED",
-            message="Falha ao validar o WhatsApp do sistema no provedor configurado.",
-            details={"status_code": status_code, "error": str(exc)},
+            message=(
+                f"Falha ao validar o WhatsApp do sistema no provedor configurado. {hint}"
+                + (f" Detalhe do provedor: {detail}" if detail else "")
+            ),
+            details={"status_code": status_code, "error": str(exc), "provider_detail": detail, "provider_hint": hint},
         ) from exc
     except Exception as exc:
+        hint = _provider_validation_hint(provider_name)
         raise ApiError(
             status_code=400,
             code="SYSTEM_WHATSAPP_TEST_FAILED",
-            message="Falha inesperada ao validar o WhatsApp do sistema.",
-            details={"error": str(exc)},
+            message=f"Falha inesperada ao validar o WhatsApp do sistema. {hint}",
+            details={"error": str(exc), "provider_hint": hint},
         ) from exc
 
     phone_data = result.get("phone") if isinstance(result, dict) else {}

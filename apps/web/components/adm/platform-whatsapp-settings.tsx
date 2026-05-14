@@ -55,13 +55,21 @@ type WhatsAppTestResult = {
 };
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {
-  if (
-    typeof error === "object" &&
-    error &&
-    "response" in error &&
-    typeof (error as { response?: { data?: { error?: { message?: string } } } }).response?.data?.error?.message === "string"
-  ) {
-    return (error as { response?: { data?: { error?: { message?: string } } } }).response?.data?.error?.message ?? fallback;
+  const apiError =
+    typeof error === "object" && error && "response" in error
+      ? (error as { response?: { data?: { error?: { message?: string; details?: Record<string, unknown> } } } }).response?.data?.error
+      : undefined;
+
+  if (apiError && typeof apiError.message === "string") {
+    const providerDetail = typeof apiError.details?.provider_detail === "string" ? apiError.details.provider_detail : null;
+    const providerHint = typeof apiError.details?.provider_hint === "string" ? apiError.details.provider_hint : null;
+    const issues = Array.isArray(apiError.details?.issues)
+      ? (apiError.details.issues as unknown[]).filter((item): item is string => typeof item === "string")
+      : [];
+    const suffix = [providerHint, providerDetail, issues.length ? `Pendencias: ${issues.join("; ")}` : null]
+      .filter(Boolean)
+      .join(" ");
+    return suffix ? `${apiError.message} ${suffix}`.trim() : apiError.message;
   }
   return fallback;
 }
@@ -136,7 +144,7 @@ export default function PlatformWhatsAppSettings() {
       ).data,
     onSuccess: (data) => {
       setTestResult(data);
-      toast.success("WhatsApp do sistema validado com sucesso.");
+      toast.success("Credenciais validadas com sucesso. Agora salve para ativar o numero do sistema.");
       queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-health"] });
     },
     onError: (error) => {
@@ -325,9 +333,12 @@ export default function PlatformWhatsAppSettings() {
               {createAccountMutation.isPending ? "Salvando..." : "Salvar numero do sistema"}
             </Button>
             <Button variant="outline" onClick={() => testAccountMutation.mutate()} disabled={testAccountMutation.isPending}>
-              {testAccountMutation.isPending ? "Testando..." : "Testar conexao"}
+              {testAccountMutation.isPending ? "Testando..." : "Testar credenciais"}
             </Button>
           </div>
+          <p className="text-xs text-stone-500">
+            O teste apenas valida as credenciais atuais no provedor. Ele nao salva nem ativa o numero do sistema.
+          </p>
 
           {testResult ? (
             <p className="text-xs text-stone-600">
