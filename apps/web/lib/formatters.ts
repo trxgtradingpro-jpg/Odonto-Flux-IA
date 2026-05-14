@@ -47,6 +47,7 @@ export function formatPhoneBR(value?: string | null) {
   if (!value) return "-";
   const digits = value.replace(/\D/g, "");
   if (digits.length < 10) return value;
+  if (!digits.startsWith("55") && digits.length > 11) return `+${digits}`;
 
   const normalized = digits.startsWith("55") && digits.length >= 12 ? digits.slice(2) : digits;
   const ddd = normalized.slice(0, 2);

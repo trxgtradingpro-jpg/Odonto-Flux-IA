@@ -340,6 +340,36 @@ def test_redeem_demo_token_returns_test_phone_and_whatsapp_link(monkeypatch, see
     assert redeemed["demo_target_path"] == "/conversas"
 
 
+def test_redeem_demo_token_keeps_international_country_code(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    prospect.test_phone_number = "+44 7786 004289"
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    redeemed = sales_demo_service.redeem_demo_token(
+        db_session,
+        token=generated["access_token"],
+        session_id="demo-session-international",
+    )
+
+    assert redeemed["demo_test_phone_number"] == "+44 7786 004289"
+    assert redeemed["demo_whatsapp_link"] == "https://wa.me/447786004289"
+
+
 def test_generate_demo_populates_business_week_with_conversation_backed_appointments(monkeypatch, seeded_db, db_session):
     prospect = _create_prospect(db_session)
 

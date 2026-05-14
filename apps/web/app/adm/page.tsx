@@ -577,8 +577,8 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
               <Field label="Principal dor percebida" helper="Ex.: perde paciente no WhatsApp, agenda baguncada, retorno esquecido." className="lg:col-span-2">
                 <Input placeholder="WhatsApp desorganizado e perda de pacientes" value={mainPain} onChange={(event) => setMainPain(event.target.value)} />
               </Field>
-              <Field label="Numero de teste" helper="Numero que o dono pode usar para testar o fluxo.">
-                <Input placeholder="(11) 98888-7777" value={testPhoneNumber} onChange={(event) => setTestPhoneNumber(event.target.value)} />
+              <Field label="Numero de teste" helper="Numero que o dono pode usar para testar o fluxo. Se informar sem DDI, assumimos Brasil. Se for internacional, informe com + ou 00.">
+                <Input placeholder="(11) 98888-7777 ou +44 7786 004289" value={testPhoneNumber} onChange={(event) => setTestPhoneNumber(event.target.value)} />
               </Field>
               <Field label="Servicos da clinica" helper="Separe por virgula. A demo usa isso para equipe, agenda e IA." className="lg:col-span-4">
                 <textarea
