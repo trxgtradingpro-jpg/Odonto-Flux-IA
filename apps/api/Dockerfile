@@ -18,4 +18,4 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY apps/api /app
 COPY docs /app/docs
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "alembic upgrade head && if [ \"${BOOTSTRAP_SORRISO_SUL_ON_START:-false}\" = \"true\" ]; then python -m app.scripts.bootstrap_sorriso_sul_once; fi && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]

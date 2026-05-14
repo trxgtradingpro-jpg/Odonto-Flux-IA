@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     postgres_password: str = 'odontoflux'
     postgres_host: str = 'postgres'
     postgres_port: int = 5432
+    database_url_override: str | None = Field(default=None, validation_alias='DATABASE_URL')
 
     redis_host: str = 'redis'
     redis_port: int = 6379
@@ -88,6 +89,13 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.database_url_override:
+            database_url = self.database_url_override
+            if database_url.startswith('postgres://'):
+                return f'postgresql+psycopg2://{database_url.removeprefix("postgres://")}'
+            if database_url.startswith('postgresql://'):
+                return f'postgresql+psycopg2://{database_url.removeprefix("postgresql://")}'
+            return database_url
         return (
             f'postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}'
             f'@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}'
