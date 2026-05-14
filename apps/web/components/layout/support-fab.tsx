@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
 
 import { api } from "@/lib/api";
+import { BRAND_NAME, BRAND_SUPPORT_LABEL } from "@/lib/brand";
 
 type SupportMessage = {
   id: string;
@@ -39,7 +40,7 @@ export function SupportFab() {
       id: "welcome",
       role: "assistant",
       content:
-        "Oi. Sou o suporte IA do OdontoFlux. Tenho contexto do sistema, configuracoes da clinica e base tecnica versionada para responder duvidas operacionais com precisao. Se algo nao estiver documentado, eu aviso em vez de inventar.",
+        `Oi. Sou o suporte IA da ${BRAND_NAME}. Tenho contexto do sistema, configuracoes da clinica e base tecnica versionada para responder duvidas operacionais com precisao. Se algo nao estiver documentado, eu aviso em vez de inventar.`,
     },
   ]);
 
@@ -115,7 +116,7 @@ export function SupportFab() {
         <Card className={`fixed z-[80] w-[min(94vw,390px)] overflow-hidden border-emerald-300 shadow-2xl ${cardPositionClass}`}>
           <CardHeader className="space-y-2 bg-emerald-500 pb-3 text-white">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base text-white">Suporte IA OdontoFlux</CardTitle>
+              <CardTitle className="text-base text-white">{BRAND_SUPPORT_LABEL}</CardTitle>
               <button
                 type="button"
                 className="rounded-md p-1 text-white/90 transition hover:bg-white/20"
@@ -159,7 +160,7 @@ export function SupportFab() {
               ))}
               {loading ? (
                 <div className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-stone-700">
-                  Consultando base atualizada do OdontoFlux...
+                  Consultando base atualizada da {BRAND_NAME}...
                 </div>
               ) : null}
             </div>

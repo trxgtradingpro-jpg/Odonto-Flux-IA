@@ -14,6 +14,7 @@ import { DemoPreparationScreen } from "@/components/auth/demo-preparation-screen
 import { type DemoPreparationStep } from "@/components/auth/demo-progress";
 import { setAccessToken } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { BRAND_DESCRIPTION, BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import {
   clearDemoGuideSessionState,
   DEMO_GUIDE_AUTOSTART_KEY,
@@ -104,12 +105,13 @@ function LoginFormCard({
     <div className="mx-auto w-full max-w-md">
       <Card>
         <CardHeader>
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">OdontoFlux</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-primary">{BRAND_NAME}</p>
           <CardTitle className="text-2xl">Entrar na plataforma</CardTitle>
+          <p className="text-sm font-medium text-foreground">{BRAND_TAGLINE}</p>
           <p className="text-sm text-muted-foreground">
             Quer apresentar o sistema antes de entrar?{" "}
             <Link href="/apresentacao" className="font-semibold text-primary hover:underline">
-              Ver pagina comercial
+              Ver demonstracao
             </Link>
           </p>
         </CardHeader>
@@ -137,6 +139,7 @@ function LoginFormCard({
           </form>
 
           <div className="mt-4 rounded-md bg-stone-100 p-3 text-xs text-stone-700">
+            <p className="mb-2 font-semibold text-stone-900">{BRAND_DESCRIPTION}</p>
             Use credenciais demo: <strong>owner@sorrisosul.com</strong> /{" "}
             <strong>Odonto@123</strong>
           </div>
@@ -339,7 +342,7 @@ export default function LoginPage() {
       <div className="auth-demo-shell mx-auto flex min-h-[420px] w-full max-w-xl items-center justify-center overflow-hidden rounded-[32px] border border-[#cfe4e7] bg-[#f7fbfb] px-8 py-12 text-slate-900 shadow-[0_30px_120px_rgba(15,55,72,0.14)]">
         <div className="space-y-3 text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.32em] text-[#4d8f96]">
-            OdontoFlux
+            {BRAND_NAME}
           </p>
           <h1 className="text-2xl font-semibold text-[#12343a] sm:text-3xl">Preparando sua demo</h1>
           <p className="text-sm leading-7 text-slate-600 sm:text-base">Validando seu acesso.</p>

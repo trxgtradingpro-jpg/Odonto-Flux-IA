@@ -77,6 +77,7 @@ import {
   type DemoTourCommandDetail,
   type DemoTourTestActionDetail,
 } from "@/lib/demo-tour";
+import { BRAND_NAME } from "@/lib/brand";
 import { Badge, Button, Input, cn } from "@odontoflux/ui";
 
 type InboxDataset = {
@@ -1184,7 +1185,7 @@ export default function ConversasPage() {
         await navigator.share({
           files: [audioFile],
           title: fileName,
-          text: content && !isAudioPlaceholderBody(content) ? content : "Áudio recebido no OdontoFlux",
+          text: content && !isAudioPlaceholderBody(content) ? content : `Audio recebido no ${BRAND_NAME}`,
         });
         return;
       }

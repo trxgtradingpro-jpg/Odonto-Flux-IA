@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { BRAND_PLATFORM_LABEL } from "@/lib/brand";
 import { normalizePagePermissions, PagePermissionMap } from "@/lib/page-access";
 
 type SessionResponse = {
@@ -68,7 +69,7 @@ export function useSession() {
         return {
           ...me,
           assigned_unit_id: null,
-          tenant_name: me.tenant_trade_name ?? "Plataforma OdontoFlux",
+          tenant_name: me.tenant_trade_name ?? BRAND_PLATFORM_LABEL,
           unit_name: "Visao global",
           resolved_page_permissions: normalizePagePermissions(
             me.page_permissions as Record<string, { view?: boolean; create?: boolean; edit?: boolean; delete?: boolean }> | null | undefined,

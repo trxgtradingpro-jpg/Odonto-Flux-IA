@@ -634,7 +634,7 @@ const SORRISO_SUL_AI_KNOWLEDGE_PRESET: AIKnowledgeBaseConfig = {
   clinic_profile: {
     clinic_name: "Clinica Sorriso Sul",
     about:
-      "A Clinica Sorriso Sul e especializada em odontologia estetica e reabilitacao oral, com atendimento consultivo e foco em previsibilidade de resultado.",
+      "A Clinica Sorriso Sul atua com atendimentos clinicos e esteticos, com abordagem consultiva, acolhimento premium e foco em previsibilidade de resultado.",
     differentials: [
       "avaliacao detalhada com planejamento digital",
       "atendimento acolhedor e linguagem simples",
@@ -2108,7 +2108,7 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
                           Razão social
                         </label>
                         <Input
-                          placeholder="Ex.: Sorriso Sul Odontologia LTDA"
+                          placeholder="Ex.: Sorriso Sul Clinica Integrada LTDA"
                           value={clinicProfileDraft.legal_name}
                           onChange={(event) =>
                             setClinicProfileDraft((current) => ({ ...current, legal_name: event.target.value }))
@@ -4283,7 +4283,7 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
                 </label>
                 <textarea
                   className="min-h-[88px] w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-                  placeholder="Ex.: Clínica focada em odontologia estética com atendimento consultivo e acolhedor."
+                  placeholder="Ex.: Clinica premium com atendimento consultivo, acolhedor e foco em experiencia do paciente."
                   value={aiKnowledgeDraft.clinic_profile.about}
                   onChange={(event) =>
                     setAiKnowledgeDraft((current) => ({

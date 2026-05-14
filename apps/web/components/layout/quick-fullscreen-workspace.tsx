@@ -8,6 +8,7 @@ import ConversasPage from "@/app/(dashboard)/conversas/page";
 import PacientesPage from "@/app/(dashboard)/pacientes/page";
 import { SessionContext } from "@/hooks/use-session";
 import { api } from "@/lib/api";
+import { BRAND_NAME } from "@/lib/brand";
 import { canAccessPage } from "@/lib/page-access";
 import { Button, cn } from "@odontoflux/ui";
 
@@ -145,7 +146,7 @@ export function QuickFullscreenWorkspace({
       >
         <div className="hidden min-w-0 px-2 sm:block">
           <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/45">Acesso rapido</p>
-          <p className="truncate text-xs font-semibold text-white/80">{session?.tenant_name ?? "OdontoFlux"}</p>
+          <p className="truncate text-xs font-semibold text-white/80">{session?.tenant_name ?? BRAND_NAME}</p>
         </div>
 
         <nav className="flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto px-1">

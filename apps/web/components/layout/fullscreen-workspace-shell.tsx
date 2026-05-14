@@ -25,6 +25,7 @@ import SuportePage from "@/app/(dashboard)/suporte/page";
 import UsuariosPage from "@/app/(dashboard)/usuarios/page";
 import ConfiguracoesPanel from "@/components/settings/configuracoes-panel";
 import { SessionContext } from "@/hooks/use-session";
+import { BRAND_NAME } from "@/lib/brand";
 import {
   canAccessPage,
   getAccessiblePages,
@@ -201,7 +202,7 @@ export function FullscreenWorkspaceShell({
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">{session?.full_name ?? "Usuario"}</p>
-            <p className="truncate text-xs text-white/60">{session?.tenant_name ?? "OdontoFlux"}</p>
+            <p className="truncate text-xs text-white/60">{session?.tenant_name ?? BRAND_NAME}</p>
           </div>
         </div>
 

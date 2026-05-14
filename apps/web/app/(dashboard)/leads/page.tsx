@@ -17,6 +17,7 @@ import {
 import { ErrorState, LoadingState } from "@/components/page-state";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { api } from "@/lib/api";
+import { BRAND_NAME } from "@/lib/brand";
 import { ApiPage, ConversationItem, LeadItem, UserItem } from "@/lib/domain-types";
 import { formatDateBR, formatDateTimeBR, formatPhoneBR, numberFormatter, STAGE_LABELS } from "@/lib/formatters";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
@@ -167,7 +168,7 @@ export default function LeadsPage() {
 
       await api.post("/messages", {
         conversation_id: conversationId,
-        body: `Olá, ${lead.name.split(" ")[0]}! Passando para retomar seu interesse em ${lead.interest || "tratamento odontológico"}.`,
+        body: `Ola, ${lead.name.split(" ")[0]}! Aqui e a equipe ${BRAND_NAME}. Passando para retomar seu interesse em ${lead.interest || "consulta da clinica"}.`,
         message_type: "text",
       });
 

@@ -272,6 +272,44 @@ def test_platform_admin_endpoint_requires_role(client, auth_headers):
     assert 'total_tenants' in allowed.json()
 
 
+def test_platform_admin_whatsapp_settings_use_system_sender_tenant(client, auth_headers, monkeypatch):
+    from app.api.v1.endpoints import admin_platform
+    from app.services import sales_demo_service
+
+    monkeypatch.setattr(sales_demo_service.settings, 'sales_outreach_sender_tenant_slug', '')
+    monkeypatch.setattr(admin_platform.settings, 'sales_outreach_sender_tenant_slug', '')
+
+    context = client.get('/api/v1/admin/platform/whatsapp/context', headers=auth_headers['admin'])
+    assert context.status_code == 200
+    context_payload = context.json()
+    assert context_payload['tenant_slug'] == sales_demo_service.DEFAULT_SALES_OUTREACH_SENDER_TENANT_SLUG
+    assert context_payload['uses_default_sender_slug'] is True
+
+    created = client.post(
+        '/api/v1/admin/platform/whatsapp/accounts',
+        json={
+            'provider_name': 'meta_cloud',
+            'phone_number_id': '1101713436353674',
+            'business_account_id': '936994182588219',
+            'access_token': 'EAAa' + ('x' * 60),
+            'display_phone': '+55 11 4000-4000',
+        },
+        headers=auth_headers['admin'],
+    )
+    assert created.status_code == 200
+    assert created.json()['is_active'] is True
+
+    accounts = client.get('/api/v1/admin/platform/whatsapp/accounts', headers=auth_headers['admin'])
+    assert accounts.status_code == 200
+    assert len(accounts.json()['data']) == 1
+    assert accounts.json()['data'][0]['display_phone'] == '+55 11 4000-4000'
+
+    health = client.get('/api/v1/admin/platform/whatsapp/health', headers=auth_headers['admin'])
+    assert health.status_code == 200
+    assert health.json()['status'] == 'ok'
+    assert health.json()['active_account']['phone_number_id'] == '1101713436353674'
+
+
 def test_webhook_inbound_triggers_ai_decision_and_outbox_dispatch(
     client,
     auth_headers,

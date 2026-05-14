@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 
+import { BRAND_DESCRIPTION, BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 import { LandingPage } from "@/components/marketing/landing-page";
 
 export const metadata: Metadata = {
-  title: "OdontoFlux | Operacao odontologica em tempo real",
-  description: "Central operacional para clinicas odontologicas com WhatsApp, agenda, pacientes, equipe e implantacao assistida.",
+  title: `${BRAND_NAME} | ${BRAND_TAGLINE}`,
+  description: BRAND_DESCRIPTION,
 };
 
 export default function HomePage() {

@@ -27,10 +27,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import PlatformWhatsAppSettings from "@/components/adm/platform-whatsapp-settings";
 import { EmptyState } from "@/components/premium";
-import ConfiguracoesPanel from "@/components/settings/configuracoes-panel";
 import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
+import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
 import { formatDateTimeBR, numberFormatter } from "@/lib/formatters";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, cn } from "@odontoflux/ui";
 
@@ -205,7 +206,7 @@ const PLAYBOOKS = [
   },
   {
     title: "WhatsApp curto",
-    text: "Oi! Vi que a clinica atende bastante pelo WhatsApp. Eu consigo te mostrar uma demo personalizada do OdontoFlux com agenda, IA e retorno do paciente. Posso te enviar?",
+    text: `Oi! Vi que a clinica atende bastante pelo WhatsApp. Eu consigo te mostrar uma demo personalizada da ${BRAND_NAME} com IA, agenda e recuperacao de pacientes. Posso te enviar?`,
   },
   {
     title: "Follow-up apos acesso",
@@ -292,16 +293,16 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
     <main className="grid min-h-screen place-items-center bg-stone-950 px-4 py-10 text-white">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-lg bg-white text-sm font-black text-stone-950">OF</div>
+          <div className="grid h-11 w-11 place-items-center rounded-lg bg-white text-sm font-black text-stone-950">{BRAND_MONOGRAM}</div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-white/45">Admin comercial</p>
-            <h1 className="text-xl font-bold">OdontoFlux /adm</h1>
+            <h1 className="text-xl font-bold">{BRAND_NAME} /adm</h1>
           </div>
         </div>
         <Card className="border-white/10 bg-white text-stone-950">
           <CardHeader>
             <CardTitle>Entrar no CRM de demos</CardTitle>
-            <p className="text-sm text-stone-600">Area interna para prospeccao, demos personalizadas e tracking comercial.</p>
+            <p className="text-sm text-stone-600">{BRAND_TAGLINE}</p>
           </CardHeader>
           <CardContent>
             <form
@@ -409,7 +410,7 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
   const [mainPain, setMainPain] = useState("");
   const [leadSource, setLeadSource] = useState("Google/Maps manual");
   const [testPhoneNumber, setTestPhoneNumber] = useState("");
-  const [services, setServices] = useState("Avaliacao odontologica, Limpeza odontologica, Clareamento dental");
+  const [services, setServices] = useState("Consulta inicial, Avaliacao clinica, Retorno");
   const [notes, setNotes] = useState("");
 
   const mutation = useMutation({
@@ -511,7 +512,7 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
             </div>
             <CardTitle className="text-2xl">Cadastrar clinica prospectada</CardTitle>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
-              Preencha o suficiente para o OdontoFlux montar uma demo personalizada. Os campos principais ajudam o follow-up, o score comercial e o provisionamento da demo.
+              Preencha o suficiente para a {BRAND_NAME} montar uma demo personalizada. Os campos principais ajudam o follow-up, o score comercial e o provisionamento da demo.
             </p>
           </div>
           <Button type="button" variant="outline" onClick={() => setOpen(false)}>
@@ -877,7 +878,7 @@ export default function AdmPage() {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Admin comercial</p>
               <h1 className="text-lg font-bold">
-                {activeSection === "crm" ? "Prospeccao e demos personalizadas" : "Configuracoes da clinica e WhatsApp"}
+                {activeSection === "crm" ? "Prospeccao e demos personalizadas" : "WhatsApp oficial do sistema"}
               </h1>
             </div>
           </div>
@@ -902,7 +903,7 @@ export default function AdmPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</p>
               <h2 className="mt-1 text-xl font-black text-stone-950">Escolha a area que quer operar agora</h2>
               <p className="mt-1 text-sm text-stone-600">
-                Alterne entre o CRM comercial e a configuracao do WhatsApp sem sair da pagina administrativa.
+                Alterne entre o CRM comercial e a configuracao do WhatsApp oficial da plataforma sem sair da pagina administrativa.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -920,13 +921,13 @@ export default function AdmPage() {
                 onClick={() => setActiveSection("whatsapp")}
               >
                 <SlidersHorizontal size={16} />
-                Configuracoes WhatsApp
+                WhatsApp do sistema
               </Button>
             </div>
           </CardContent>
         </Card>
 
-        {activeSection === "whatsapp" ? <ConfiguracoesPanel fixedTab="WhatsApp" /> : null}
+        {activeSection === "whatsapp" ? <PlatformWhatsAppSettings /> : null}
 
         {activeSection === "crm" ? (
           <>
@@ -1240,7 +1241,7 @@ function ProspectDetail({
               <div>
                 <p className="font-semibold">Automacao comercial transparente</p>
                 <p className="mt-1 max-w-xl leading-6">
-                  Um clique inicia o contato da equipe OdontoFlux no WhatsApp. Quando a clinica responder, o sistema registra a resposta, envia o pitch curto com demo e depois o video automaticamente.
+                  Um clique inicia o contato da {BRAND_SALES_TEAM} no WhatsApp. Quando a clinica responder, o sistema registra a resposta, envia o pitch curto com demo e depois o video automaticamente.
                 </p>
               </div>
               <Badge className="bg-white text-emerald-800">{automationLabel}</Badge>
@@ -1266,7 +1267,7 @@ function ProspectDetail({
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
             <p className="font-semibold">Outreach transparente</p>
             <p className="mt-1 leading-6">
-              Este fluxo comercial se apresenta como equipe OdontoFlux, pede o decisor de forma honesta, envia demo rastreável e depois o vídeo. Não usa personificação de paciente ou urgência falsa.
+              Este fluxo comercial se apresenta como {BRAND_SALES_TEAM}, pede o decisor de forma honesta, envia demo rastreavel e depois o video. Nao usa personificacao de paciente ou urgencia falsa.
             </p>
           </div>
 
@@ -1512,7 +1513,7 @@ function buildProposalText(prospect: Prospect) {
   const lostRate = 0.18;
   const ticket = 350;
   const estimatedLoss = Math.round(volume * lostRate * ticket);
-  return `Proposta inicial OdontoFlux para ${prospect.clinic_name}
+  return `Proposta inicial ${BRAND_NAME} para ${prospect.clinic_name}
 
 Plano recomendado: Piloto Assistido
 Duracao: 30 dias

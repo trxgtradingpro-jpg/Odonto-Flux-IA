@@ -4,6 +4,7 @@ import { ArrowRight, BadgeCheck, Sparkles } from "lucide-react";
 import { Badge, Button } from "@odontoflux/ui";
 
 import { DemoProgress, type DemoPreparationStep } from "@/components/auth/demo-progress";
+import { BRAND_NAME, BRAND_TAGLINE } from "@/lib/brand";
 
 type DemoPreparationScreenProps = {
   activeStep: number;
@@ -38,7 +39,7 @@ function resolvePhaseCopy(
 
   return {
     eyebrow: "Preparando sua demo",
-    title: "IA para clinicas odontologicas.",
+    title: BRAND_TAGLINE,
     body: "Isso leva so alguns segundos.",
   };
 }
@@ -75,7 +76,7 @@ export function DemoPreparationScreen({
         <div className="mx-auto w-full max-w-2xl text-center">
           <div className="auth-reveal flex flex-wrap items-center justify-center gap-3">
             <Badge className="border-[#b8d8d7] bg-white/80 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-[#2b6f73]">
-              OdontoFlux
+              {BRAND_NAME}
             </Badge>
             <div className="inline-flex items-center gap-2 rounded-full border border-[#cfe4e7] bg-white/80 px-3 py-1 text-xs font-medium text-slate-700 shadow-[0_6px_24px_rgba(34,94,105,0.08)]">
               <Sparkles className="h-3.5 w-3.5 text-[#49a7b5]" />

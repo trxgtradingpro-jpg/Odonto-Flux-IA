@@ -264,6 +264,9 @@ SALES_OUTREACH_LAB_SCENARIOS = {
     "already_has_system": "Gerente diz que ja tem sistema",
     "reception_blocks": "Recepcao segura o acesso ao decisor",
 }
+DEFAULT_SALES_OUTREACH_SENDER_TENANT_SLUG = "clinicflux-ai-system"
+DEFAULT_SALES_OUTREACH_SENDER_TENANT_LEGAL_NAME = "ClinicFlux AI Comercial LTDA"
+DEFAULT_SALES_OUTREACH_SENDER_TENANT_TRADE_NAME = "ClinicFlux AI Comercial"
 
 
 def _now() -> datetime:
@@ -518,20 +521,38 @@ def _first_name(value: str | None) -> str:
 
 
 def _sales_outreach_sender_tenant(db: Session) -> Tenant:
-    slug = str(settings.sales_outreach_sender_tenant_slug or "").strip()
-    if not slug:
-        raise ApiError(
-            status_code=400,
-            code="SALES_OUTREACH_CONFIG_MISSING",
-            message="Configure SALES_OUTREACH_SENDER_TENANT_SLUG para habilitar envios comerciais pelo WhatsApp.",
-        )
-    tenant = db.scalar(select(Tenant).where(Tenant.slug == slug, Tenant.is_active.is_(True)))
-    if not tenant:
-        raise ApiError(
-            status_code=404,
-            code="SALES_OUTREACH_SENDER_TENANT_NOT_FOUND",
-            message="Tenant remetente do outreach comercial nao encontrado ou inativo.",
-        )
+    return ensure_sales_outreach_sender_tenant(db)
+
+
+def resolve_sales_outreach_sender_tenant_slug() -> str:
+    configured_slug = str(settings.sales_outreach_sender_tenant_slug or "").strip()
+    return configured_slug or DEFAULT_SALES_OUTREACH_SENDER_TENANT_SLUG
+
+
+def ensure_sales_outreach_sender_tenant(db: Session) -> Tenant:
+    slug = resolve_sales_outreach_sender_tenant_slug()
+    tenant = db.scalar(select(Tenant).where(Tenant.slug == slug))
+    if tenant:
+        if not tenant.is_active:
+            tenant.is_active = True
+            db.add(tenant)
+            db.commit()
+            db.refresh(tenant)
+        return tenant
+
+    tenant = Tenant(
+        legal_name=DEFAULT_SALES_OUTREACH_SENDER_TENANT_LEGAL_NAME,
+        trade_name=DEFAULT_SALES_OUTREACH_SENDER_TENANT_TRADE_NAME,
+        slug=slug,
+        timezone=settings.app_timezone or "America/Sao_Paulo",
+        locale=settings.default_locale or "pt-BR",
+        currency=settings.default_currency or "BRL",
+        subscription_status="active",
+        is_active=True,
+    )
+    db.add(tenant)
+    db.commit()
+    db.refresh(tenant)
     return tenant
 
 

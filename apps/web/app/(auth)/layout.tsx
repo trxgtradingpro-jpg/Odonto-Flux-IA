@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 
+import { BRAND_NAME } from "@/lib/brand";
+
 export const metadata: Metadata = {
   robots: {
     follow: false,
     index: false,
   },
-  title: "Entrar | OdontoFlux",
+  title: `Entrar | ${BRAND_NAME}`,
 };
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {

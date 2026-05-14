@@ -16,13 +16,13 @@ import {
   PlayCircle,
   ShieldCheck,
   Sparkles,
-  Stethoscope,
   TrendingUp,
   Users2,
   Workflow,
 } from "lucide-react";
 
 import { cn } from "@odontoflux/ui";
+import { BRAND_DESCRIPTION, BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
 
 const PAIN_POINTS = [
   "WhatsApp da clinica vira uma fila invisivel, sem dono e sem processo.",
@@ -33,39 +33,39 @@ const PAIN_POINTS = [
 
 const VALUE_PILLARS = [
   {
-    title: "Atendimento comercial organizado",
-    description: "Converse com contexto, responda melhor e conduza o paciente ate o agendamento com menos retrabalho.",
+    title: "Atendimento 24h com IA",
+    description: "Responda pacientes a qualquer hora com contexto, consistencia e uma experiencia premium no WhatsApp.",
     icon: MessageSquareText,
   },
   {
-    title: "Agenda viva e operacional",
-    description: "Acompanhe reagendamento, comparecimento, retorno e distribuicao por profissional em uma rotina unica.",
+    title: "Qualificacao automatica",
+    description: "A IA entende interesse, filtra intencao e prepara a equipe para agir com mais velocidade e conversao.",
     icon: CalendarDays,
   },
   {
-    title: "Equipe com processo",
-    description: "Recepcao, gestores e profissionais operam com mais padrao e menos improviso no dia a dia.",
+    title: "Agendamento inteligente",
+    description: "Organize disponibilidade, confirmacoes, comparecimento e retorno em um fluxo operacional unico.",
     icon: Users2,
   },
   {
-    title: "Decisao baseada em fluxo real",
-    description: "Visualize gargalos de atendimento, agenda e conversao antes que eles virem perda de faturamento.",
+    title: "Recuperacao de oportunidades",
+    description: "Reative pacientes e leads esquecidos sem depender de planilhas, memoria ou mensagens soltas.",
     icon: LayoutDashboard,
   },
 ];
 
 const RESULTS = [
   {
-    metric: "Menos atraso operacional",
-    text: "A recepcao para de correr atras de informacoes espalhadas em conversa, agenda e anotacao solta.",
+    metric: "Mais conversoes pelo WhatsApp",
+    text: "A clinica ganha processo para responder, qualificar e levar mais pacientes ate a consulta.",
   },
   {
-    metric: "Mais conversas virando consulta",
-    text: "A clinica ganha processo para atender, qualificar, agendar e confirmar sem depender so de memoria humana.",
+    metric: "Menos mensagens perdidas",
+    text: "A equipe deixa de operar no improviso e passa a enxergar o que precisa de resposta, confirmacao e retorno.",
   },
   {
-    metric: "Retorno e comparecimento mais claros",
-    text: "Voce registra o que aconteceu na consulta, se o paciente veio e se precisa agendar retorno.",
+    metric: "Controle em tempo real",
+    text: "Gestores acompanham agenda, atendimento e recuperacao de oportunidades em um painel unico.",
   },
 ];
 
@@ -77,18 +77,18 @@ const JOURNEY = [
   },
   {
     step: "02",
-    title: "Recepcao responde com contexto",
-    description: "A IA sugere respostas e o time mantem padrao sem perder o toque humano do atendimento.",
+    title: "A IA qualifica e direciona",
+    description: "A conversa recebe contexto, triagem e encaminhamento sem perder o tom humano do atendimento.",
   },
   {
     step: "03",
-    title: "Agenda, confirma e atende",
-    description: "O paciente sai do contato inicial para a agenda com menos ruido entre equipe, servico e profissional.",
+    title: "Agenda, confirma e acompanha",
+    description: "O paciente sai do contato inicial para o agendamento com menos ruido entre equipe, servico e profissional.",
   },
   {
     step: "04",
-    title: "Registra comparecimento e retorno",
-    description: "O atendimento vira dado operacional: o que aconteceu, se veio e qual e o proximo passo.",
+    title: "Recupera e reativa oportunidades",
+    description: "O sistema sinaliza faltas, retornos e leads antigos para a clinica vender melhor sem perder timing.",
   },
 ];
 
@@ -133,9 +133,9 @@ const OFFER_BLOCKS = [
 
 const FAQS = [
   {
-    question: "O OdontoFlux ja precisa ser vendido como software de prateleira?",
+    question: "A ClinicFlux AI deve ser posicionada como software barato de prateleira?",
     answer:
-      "Nao. Hoje o melhor posicionamento comercial e implantacao premium com piloto assistido, porque isso protege a promessa e aumenta sua taxa de fechamento.",
+      "Nao. O melhor posicionamento hoje e SaaS premium com implantacao consultiva, porque isso protege a promessa, acelera ativacao e aumenta taxa de fechamento.",
   },
   {
     question: "O que muda para a clinica na pratica?",
@@ -159,11 +159,11 @@ const FAQS = [
   },
 ];
 
-const SALES_CONTACT_NAME = process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_CONTACT_NAME?.trim() || "Time OdontoFlux";
+const SALES_CONTACT_NAME = process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_CONTACT_NAME?.trim() || BRAND_SALES_TEAM;
 const SALES_CONTACT_ROLE =
-  process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_ROLE?.trim() || "Implantacao consultiva para clinicas odontologicas";
+  process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_ROLE?.trim() || "Especialista em automacao, agenda e conversao para clinicas";
 const SALES_CONTACT_REGION =
-  process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_REGION?.trim() || "Atendimento remoto para clinicas em todo o Brasil";
+  process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_REGION?.trim() || "Atendimento consultivo para clinicas em todo o Brasil";
 const SALES_WHATSAPP_URL = process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_WHATSAPP_URL?.trim() || "#contato";
 const SALES_DEMO_URL = process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_DEMO_URL?.trim() || "#agendar-demo";
 const SALES_EMAIL = process.env.NEXT_PUBLIC_ODONTOFLUX_SALES_EMAIL?.trim() || "";
@@ -172,27 +172,27 @@ const SALES_EMAIL_LABEL = SALES_EMAIL || "Contato comercial por e-mail";
 
 const WHO_WE_ARE = [
   {
-    title: "Especializacao odontologica",
+    title: "SaaS premium para clinicas",
     description:
-      "O produto e a implantacao foram desenhados para a rotina de clinicas que dependem de WhatsApp, agenda e recepcao alinhados.",
-    icon: Stethoscope,
+      "A plataforma atende clinicas de diferentes especialidades que precisam automatizar atendimento, agendamento e recuperacao pelo WhatsApp.",
+    icon: Building2,
   },
   {
-    title: "Implantacao boutique",
+    title: "Implantacao consultiva",
     description:
-      "Entramos em poucas clinicas por vez para configurar com proximidade, acompanhar o uso real e corrigir o que precisa ser ajustado.",
+      "Entramos com proximidade para configurar a operacao, acompanhar o uso real e acelerar a adocao da equipe.",
     icon: Handshake,
   },
   {
-    title: "Fluxo completo",
+    title: "Fluxo completo de atendimento",
     description:
-      "A venda nao depende de uma tela isolada. O valor esta em ligar conversa, agenda, comparecimento, equipe e retorno no mesmo fluxo.",
+      "O valor esta em ligar conversa, qualificacao, agenda, comparecimento, retorno e reativacao no mesmo fluxo.",
     icon: Workflow,
   },
   {
-    title: "Promessa responsavel",
+    title: "IA aplicada com responsabilidade",
     description:
-      "Em vez de prometer software magico, a proposta comercial combina tecnologia, treinamento e implantacao assistida.",
+      "Em vez de prometer automacao vazia, a proposta combina tecnologia, processo, treinamento e controle operacional.",
     icon: ShieldCheck,
   },
 ];
@@ -315,11 +315,11 @@ export function LandingPage() {
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-[18px] bg-gradient-to-br from-emerald-300 via-teal-300 to-cyan-300 text-sm font-black text-stone-950 shadow-[0_10px_30px_rgba(16,185,129,0.25)]">
-              OF
+              {BRAND_MONOGRAM}
             </div>
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">OdontoFlux</p>
-              <p className="text-sm font-semibold text-white">Operacao odontologica em tempo real</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">{BRAND_NAME}</p>
+              <p className="text-sm font-semibold text-white">{BRAND_TAGLINE}</p>
             </div>
           </div>
 
@@ -343,19 +343,19 @@ export function LandingPage() {
               Contato
             </Link>
             <ActionLink href={SALES_DEMO_URL} className="px-4 py-2">
-              Agendar demo
+              Ver demonstracao
             </ActionLink>
             <Link
               href="/login"
               className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
             >
-              Entrar na demo
+              Ativar minha IA
             </Link>
           </nav>
 
           <div className="flex items-center gap-2 md:hidden">
             <ActionLink href={SALES_DEMO_URL} className="px-4 py-2 text-xs">
-              Demo
+              Ver demo
             </ActionLink>
           </div>
         </div>
@@ -367,32 +367,35 @@ export function LandingPage() {
             <div>
               <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-100">
                 <Sparkles className="h-4 w-4" />
-                Apresentacao comercial para clinicas odontologicas
+                Plataforma SaaS para clinicas em crescimento
               </div>
 
               <h1 className="mt-6 max-w-4xl font-heading text-4xl font-black leading-[1.02] text-white sm:text-5xl lg:text-7xl">
-                Organize a recepcao, o WhatsApp e a agenda da clinica em um unico fluxo operacional.
+                {BRAND_NAME}
               </h1>
 
               <p className="mt-6 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-                O OdontoFlux foi desenhado para clinicas odontologicas que precisam parar de operar no improviso.
-                Centralize atendimento, agenda, equipe, pacientes e retorno em uma plataforma com cara de operacao real.
+                {BRAND_TAGLINE}
+              </p>
+
+              <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
+                {BRAND_DESCRIPTION}
               </p>
 
               <div className="mt-8 flex flex-wrap gap-3">
                 <ActionLink href={SALES_DEMO_URL}>
-                  Agendar demonstracao
+                  Ver demonstracao
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </ActionLink>
                 <ActionLink href={SALES_WHATSAPP_URL} variant="outline">
-                  Falar no WhatsApp
+                  Falar com especialista
                   <ArrowUpRight className="ml-2 h-4 w-4" />
                 </ActionLink>
                 <Link
                   href="/login"
                   className="inline-flex items-center justify-center rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/5 hover:text-white"
                 >
-                  Ver ambiente real
+                  Testar atendimento com IA
                 </Link>
               </div>
 
@@ -412,13 +415,13 @@ export function LandingPage() {
 
               <div className="mt-8 flex flex-wrap gap-3">
                 <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  Piloto assistido em 30 dias
+                  Atendimento 24h
                 </div>
                 <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  1 unidade piloto por entrada
+                  Qualificacao automatica
                 </div>
                 <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  Treinamento da recepcao e agenda
+                  Recuperacao de leads antigos
                 </div>
               </div>
             </div>
@@ -513,11 +516,10 @@ export function LandingPage() {
             <div className="mt-4 grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
               <div>
                 <h2 className="text-3xl font-black text-stone-950 sm:text-4xl">
-                  O OdontoFlux conecta atendimento, agenda, equipe e retorno em uma experiencia unica.
+                  {BRAND_NAME} conecta atendimento, agenda, equipe e recuperacao em uma experiencia unica.
                 </h2>
                 <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                  Em vez de vender telas soltas, voce apresenta uma rotina completa de operacao odontologica. Isso
-                  deixa a proposta mais clara, mais forte e mais facil de justificar para a clinica.
+                  Em vez de vender telas soltas, voce apresenta uma rotina completa para clinicas que querem automatizar atendimento, agendamento e conversao no WhatsApp.
                 </p>
 
                 <div className="mt-8 space-y-4">
@@ -601,16 +603,13 @@ export function LandingPage() {
             <div className="rounded-[34px] border border-stone-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-8">
               <SectionTag>Quem somos</SectionTag>
               <h2 className="mt-4 text-3xl font-black text-stone-950 sm:text-4xl">
-                Um projeto comercialmente serio para clinicas que querem organizar a operacao, nao so trocar de tela.
+                Uma marca premium para clinicas que querem crescer com processo, IA e mais previsibilidade.
               </h2>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                O OdontoFlux nasce com um posicionamento claro: entrar em poucas clinicas por vez, implantar junto e
-                provar valor com fluxo operacional real. Isso deixa a promessa mais forte e a implantacao muito mais
-                confiavel para a recepcao e para a lideranca da clinica.
+                A {BRAND_NAME} nasce com um posicionamento claro: ser uma plataforma SaaS moderna para clinicas que precisam atender pacientes com mais velocidade, agendar melhor e recuperar oportunidades sem sobrecarregar a equipe.
               </p>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                Em vez de vender um software generico para todo mundo, a proposta aqui e especializada em clinicas
-                odontologicas que dependem de WhatsApp, agenda, equipe e retorno andando no mesmo ritmo.
+                Em vez de ficar presa a um unico nicho, a plataforma atende odontologia, estetica, dermatologia, fisioterapia, psicologia, clinicas populares e outras areas de saude com a mesma base operacional.
               </p>
 
               <div className="mt-8 rounded-[28px] border border-stone-200 bg-stone-950 p-5 text-white">
@@ -652,7 +651,7 @@ export function LandingPage() {
               <h2 className="text-3xl font-black sm:text-4xl">Uma narrativa simples para mostrar o sistema na demonstracao.</h2>
               <p className="mt-4 text-sm leading-7 text-white/72 sm:text-base">
                 A venda melhora quando a clinica enxerga o caminho completo do paciente. Use esta ordem para apresentar
-                o valor do OdontoFlux de um jeito que faca sentido comercial e operacional.
+                o valor da {BRAND_NAME} de um jeito que faca sentido comercial e operacional.
               </p>
             </div>
 
@@ -708,7 +707,7 @@ export function LandingPage() {
                   </p>
                 </div>
                 <div className="rounded-[24px] border border-stone-200 bg-[#eef3f8] p-5">
-                  <Stethoscope className="h-5 w-5 text-stone-950" />
+                  <Sparkles className="h-5 w-5 text-stone-950" />
                   <h3 className="mt-4 text-lg font-bold text-stone-950">Aprendizado acelerado</h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
                     Cada implantacao mostra onde melhorar o produto para a proxima venda.
@@ -770,7 +769,7 @@ export function LandingPage() {
 
               <div className="mt-6">
                 <ActionLink href={SALES_DEMO_URL} className="w-full sm:w-auto">
-                  Agendar demonstracao guiada
+                  Quero automatizar minha clinica
                   <ArrowRight className="ml-2 h-4 w-4" />
                 </ActionLink>
               </div>
@@ -854,7 +853,7 @@ export function LandingPage() {
                 Comece com uma oferta forte o suficiente para vender valor, e simples o suficiente para fechar.
               </h2>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                Neste estagio, o OdontoFlux faz mais sentido como implantacao premium com acompanhamento de uso do que
+                Neste estagio, a {BRAND_NAME} faz mais sentido como SaaS premium com implantacao consultiva do que
                 como software barato de prateleira. Isso te ajuda a vender melhor e aprender mais rapido com os
                 primeiros clientes.
               </p>
@@ -919,7 +918,7 @@ export function LandingPage() {
                           : "bg-stone-950 text-white hover:bg-stone-800",
                       )}
                     >
-                      {plan.highlight ? "Agendar demonstracao" : "Solicitar proposta"}
+                      {plan.highlight ? "Quero automatizar minha clinica" : "Falar com especialista"}
                     </ActionLink>
                   </div>
                 </div>
@@ -951,11 +950,11 @@ export function LandingPage() {
                   Proximo passo comercial
                 </p>
                 <h2 className="mt-4 max-w-3xl text-3xl font-black text-stone-950 sm:text-4xl">
-                  Agende uma demonstracao guiada e veja como o OdontoFlux organiza o fluxo real da sua clinica.
+                  Veja como a {BRAND_NAME} organiza o fluxo real da sua clinica e transforma WhatsApp em operacao.
                 </h2>
                 <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-600 sm:text-base">
-                  A demonstracao ideal nao mostra so tela. Ela parte do seu contexto, passa por conversas, agenda,
-                  comparecimento e retorno, e termina com uma proposta clara de piloto assistido.
+                  A demonstracao ideal nao mostra so tela. Ela parte do seu contexto, passa por atendimento, agenda,
+                  recuperacao e retorno, e termina com um plano claro para ativar a IA da sua clinica.
                 </p>
 
                 <div className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -963,13 +962,13 @@ export function LandingPage() {
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-stone-950 text-white">
                       <PlayCircle className="h-5 w-5" />
                     </div>
-                    <h3 className="mt-4 text-lg font-bold text-stone-950">Agendar demonstracao</h3>
+                    <h3 className="mt-4 text-lg font-bold text-stone-950">Ver demonstracao</h3>
                     <p className="mt-2 text-sm leading-6 text-stone-600">
-                      Demonstre o ambiente real, mapeie gargalos da recepcao e proponha um piloto com escopo fechado.
+                      Veja o ambiente real, mapeie gargalos do atendimento e entenda como a IA melhora a conversao.
                     </p>
                     <div className="mt-5">
                       <ActionLink href={SALES_DEMO_URL} className="w-full sm:w-auto">
-                        Agendar demonstracao guiada
+                        Ver demonstracao guiada
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </ActionLink>
                     </div>
@@ -979,14 +978,13 @@ export function LandingPage() {
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-stone-950 text-white">
                       <PhoneCall className="h-5 w-5" />
                     </div>
-                    <h3 className="mt-4 text-lg font-bold text-stone-950">Fale no WhatsApp</h3>
+                    <h3 className="mt-4 text-lg font-bold text-stone-950">Simular conversa no WhatsApp</h3>
                     <p className="mt-2 text-sm leading-6 text-stone-600">
-                      Se preferir, comece pelo canal comercial e envie unidade, volume de WhatsApp e maior gargalo da
-                      recepcao para acelerar a conversa.
+                      Se preferir, fale direto com um especialista e compartilhe volume, equipe e gargalos para acelerar o diagnostico.
                     </p>
                     <div className="mt-5">
                       <ActionLink href={SALES_WHATSAPP_URL} className="w-full sm:w-auto">
-                        Abrir conversa comercial
+                        Falar com especialista
                         <ArrowUpRight className="ml-2 h-4 w-4" />
                       </ActionLink>
                     </div>
@@ -1049,11 +1047,10 @@ export function LandingPage() {
           <footer className="rounded-[36px] border border-stone-200 bg-stone-950 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.18)] sm:p-8">
             <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr_0.8fr]">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">OdontoFlux</p>
-                <h2 className="mt-3 text-2xl font-black">Central operacional para clinicas odontologicas que precisam vender melhor e operar com menos caos.</h2>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">{BRAND_NAME}</p>
+                <h2 className="mt-3 text-2xl font-black">{BRAND_TAGLINE}</h2>
                 <p className="mt-4 max-w-xl text-sm leading-7 text-white/70">
-                  Agenda, conversas, recepcao, comparecimento, retorno e implantacao assistida em um mesmo fluxo de
-                  apresentacao comercial e operacao real.
+                  Atendimento, qualificacao, agenda, recuperacao e acompanhamento em um mesmo fluxo de operacao real.
                 </p>
               </div>
 
@@ -1077,7 +1074,7 @@ export function LandingPage() {
                   </p>
                   <p>
                     <Link href="/login" className="transition hover:text-white">
-                      Entrar na demonstracao
+                      Ativar minha IA
                     </Link>
                   </p>
                 </div>

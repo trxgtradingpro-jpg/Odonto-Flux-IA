@@ -37,6 +37,7 @@ import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
+import { BRAND_PLATFORM_LABEL } from "@/lib/brand";
 import { clinicInitials, initials, ROLE_LABELS } from "@/lib/formatters";
 import { PageKey } from "@/lib/page-access";
 
@@ -258,7 +259,7 @@ export function Sidebar({
             {!useCollapsed ? (
               <div>
                 <h1 className="text-lg font-bold text-foreground">{clinicDisplayName}</h1>
-                <p className="text-xs text-muted-foreground">Plataforma OdontoFlux</p>
+                <p className="text-xs text-muted-foreground">{BRAND_PLATFORM_LABEL}</p>
               </div>
             ) : null}
           </div>

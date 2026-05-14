@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { BRAND_NAME } from "@/lib/brand";
 
 type SettingItem = {
   id: string;
@@ -48,7 +49,7 @@ const DEFAULT_BRANDING: BrandingTheme = {
   fullscreenForegroundColor: "#ffffff",
   surfaceStyle: "soft",
   logoDataUrl: null,
-  clinicName: "OdontoFlux",
+  clinicName: BRAND_NAME,
 };
 
 function readString(value: unknown): string | null {
