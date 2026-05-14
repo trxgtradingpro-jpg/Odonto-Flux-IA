@@ -2022,7 +2022,7 @@ export default function ConversasPage() {
 
     const popup = window.open(demoWhatsAppEntryLink, "_blank", "noopener,noreferrer");
     if (!popup) {
-      window.location.assign(demoWhatsAppEntryLink);
+      toast.error("Nao foi possivel abrir uma nova aba do WhatsApp. Libere pop-ups para esta demo.");
     }
   }
 

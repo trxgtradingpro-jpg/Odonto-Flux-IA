@@ -113,6 +113,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
   const bootstrapKeyRef = useRef<string | null>(null);
   const launchTimerIdsRef = useRef<number[]>([]);
   const launchIntervalIdRef = useRef<number | null>(null);
+  const whatsappPopupRef = useRef<Window | null>(null);
 
   const clearLaunchTimers = () => {
     for (const timerId of launchTimerIdsRef.current) {
@@ -439,6 +440,18 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     if (progress.step === "spotlight_whatsapp") {
       if (whatsappLaunchState !== "idle") return;
 
+      if (!whatsappPopupRef.current || whatsappPopupRef.current.closed) {
+        whatsappPopupRef.current = window.open("", "_blank");
+      }
+      if (whatsappPopupRef.current && !whatsappPopupRef.current.closed) {
+        whatsappPopupRef.current.document.title = "Abrindo WhatsApp da demo";
+        whatsappPopupRef.current.document.body.innerHTML =
+          "<div style=\"font-family:Arial,sans-serif;padding:24px;line-height:1.5;color:#0f172a;\">" +
+          "<h1 style=\"font-size:20px;margin-bottom:12px;\">Abrindo WhatsApp da demo...</h1>" +
+          "<p>Voce sera redirecionado em instantes. Deixe esta aba aberta.</p>" +
+          "</div>";
+      }
+
       clearLaunchTimers();
       setWhatsappLaunchState("loading");
       setWhatsappLaunchCountdown(WHATSAPP_PREOPEN_COUNTDOWN_SECONDS);
@@ -455,7 +468,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
 
             setWhatsappLaunchState("exiting");
             const exitTimerId = window.setTimeout(() => {
-              dispatchDemoTourCommand({ type: "open_whatsapp" });
+              dispatchDemoTourCommand({ type: "open_whatsapp", popup: whatsappPopupRef.current });
               goToStep("waiting_external_message", "active", {
                 waitingStartedAt: new Date().toISOString(),
               });
