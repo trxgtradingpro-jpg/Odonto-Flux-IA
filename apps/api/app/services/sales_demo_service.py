@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -551,7 +552,22 @@ def ensure_sales_outreach_sender_tenant(db: Session) -> Tenant:
         is_active=True,
     )
     db.add(tenant)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Multiple admin requests can hit /admin/platform/whatsapp/* in parallel.
+        # If another request created the technical tenant first, reuse it instead
+        # of surfacing a 500 for duplicate slug creation.
+        db.rollback()
+        tenant = db.scalar(select(Tenant).where(Tenant.slug == slug))
+        if tenant:
+            if not tenant.is_active:
+                tenant.is_active = True
+                db.add(tenant)
+                db.commit()
+                db.refresh(tenant)
+            return tenant
+        raise
     db.refresh(tenant)
     return tenant
 
