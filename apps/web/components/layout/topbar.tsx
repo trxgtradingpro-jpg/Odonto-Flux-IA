@@ -9,8 +9,11 @@ import { Badge, Button } from "@odontoflux/ui";
 
 import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
-import { formatDateBR, initials, ROLE_LABELS } from "@/lib/formatters";
+import { clinicInitials, formatDateBR, initials, ROLE_LABELS } from "@/lib/formatters";
+import { QuickFocusPageKey } from "./quick-focus-pages";
+import { QuickAccessPill } from "./quick-access-pill";
 
 export function Topbar({
   onLogout,
@@ -18,23 +21,32 @@ export function Topbar({
   onToggleSidebar,
   session,
   branding,
+  quickAccessPages = [],
+  onOpenQuickAccess,
 }: {
   onLogout: () => void;
   collapsed: boolean;
   onToggleSidebar: () => void;
   session?: SessionContext;
   branding?: BrandingTheme;
+  quickAccessPages?: QuickFocusPageKey[];
+  onOpenQuickAccess?: (pageKey: QuickFocusPageKey) => void;
 }) {
   const [openNotifications, setOpenNotifications] = useState(false);
   const notificationsQuery = useLiveNotifications();
+  const ownerUnitScope = useOwnerUnitScope();
   const notifications = notificationsQuery.data?.notifications ?? [];
   const badges = notificationsQuery.data?.badges;
   const totalAlerts = (badges?.pendingConfirmations ?? 0) + (badges?.conversations ?? 0);
   const today = formatDateBR(new Date());
+  const clinicDisplayName = session?.tenant_name ?? branding?.clinicName ?? "Clinica atual";
+  const activeWorkspaceLabel = ownerUnitScope.canSwitchUnits
+    ? ownerUnitScope.selectedUnitName || "Todas as unidades"
+    : session?.unit_name ?? "Unidade principal";
 
   return (
     <header
-      className="sticky top-0 z-20 flex min-h-16 min-w-0 items-center justify-between gap-2 border-b border-border bg-white/92 px-3 py-2 backdrop-blur-md sm:px-4 md:px-6 lg:px-8"
+      className="flex min-h-16 shrink-0 min-w-0 items-center justify-between gap-2 border-b border-border bg-card/90 px-3 py-2 backdrop-blur-md sm:px-4 md:px-6 lg:px-8"
       style={{
         boxShadow: "0 8px 24px rgba(0,0,0,0.05)",
       }}
@@ -43,7 +55,7 @@ export function Topbar({
         <Button variant="outline" className="h-9 w-9 shrink-0 px-0" onClick={onToggleSidebar} title="Alternar menu">
           <Menu size={16} />
         </Button>
-        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-white px-2.5 py-1.5 md:flex">
+        <div className="hidden items-center gap-2 rounded-xl border border-border bg-card px-2.5 py-1.5 md:flex">
           {branding?.logoDataUrl ? (
             <Image
               src={branding.logoDataUrl}
@@ -58,32 +70,55 @@ export function Topbar({
               className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-bold text-white"
               style={{ backgroundColor: "var(--tenant-primary)" }}
             >
-              OF
+              {clinicInitials(clinicDisplayName)}
             </div>
           )}
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-stone-500">
-              SaaS OdontoFlux {collapsed ? "- compacto" : ""}
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Clinica ativa {collapsed ? "- compacto" : ""}
             </p>
-            <h2 className="text-sm font-bold text-stone-800 md:text-base">
-              Gestao da clinica em tempo real
+            <h2 className="text-sm font-bold text-foreground md:text-base">
+              {clinicDisplayName}
             </h2>
+            <p className="text-[11px] text-muted-foreground">{activeWorkspaceLabel}</p>
           </div>
         </div>
       </div>
 
       <div className="flex min-w-0 items-center gap-1 sm:gap-2">
-        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-1.5 lg:flex">
-          <CalendarDays size={14} className="text-stone-500" />
-          <span className="text-xs text-stone-600">{today}</span>
+        <div className="hidden items-center gap-2 rounded-xl border border-border bg-muted/70 px-3 py-1.5 lg:flex">
+          <CalendarDays size={14} className="text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">{today}</span>
         </div>
 
-        <Badge className="hidden bg-amber-100 text-amber-800 lg:inline-flex">{session?.unit_name ?? "Unidade"}</Badge>
+        {quickAccessPages.length && onOpenQuickAccess ? (
+          <QuickAccessPill pages={quickAccessPages} onOpen={onOpenQuickAccess} className="hidden md:flex" />
+        ) : null}
+
+        {ownerUnitScope.canSwitchUnits ? (
+          <select
+            className="hidden h-9 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground md:inline-flex"
+            value={ownerUnitScope.selectedUnitId}
+            onChange={(event) => ownerUnitScope.setSelectedUnitId(event.target.value)}
+            aria-label="Selecionar unidade global"
+          >
+            <option value="all">Todas as unidades</option>
+            {ownerUnitScope.units.map((unit) => (
+              <option key={unit.id} value={unit.id}>
+                {unit.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Badge className="hidden border-primary/20 bg-primary/10 text-primary md:inline-flex">
+            {session?.unit_name ?? "Unidade"}
+          </Badge>
+        )}
 
         <div className="relative">
           <button
             type="button"
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={() => setOpenNotifications((current) => !current)}
             aria-label="Abrir notificacoes"
           >
@@ -95,10 +130,10 @@ export function Topbar({
             ) : null}
           </button>
           {openNotifications ? (
-            <div className="absolute right-0 top-11 z-30 w-[min(92vw,340px)] rounded-2xl border border-stone-200 bg-white p-2 shadow-2xl">
+            <div className="absolute right-0 top-11 z-30 w-[min(92vw,340px)] rounded-2xl border border-border bg-card p-2 shadow-2xl">
               <div className="flex items-center justify-between px-2 py-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Notificacoes</p>
-                <span className="text-[11px] text-stone-500">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Notificacoes</p>
+                <span className="text-[11px] text-muted-foreground">
                   {notificationsQuery.data?.updatedAt
                     ? new Date(notificationsQuery.data.updatedAt).toLocaleTimeString("pt-BR")
                     : "--:--"}
@@ -110,15 +145,15 @@ export function Topbar({
                     <Link
                       href={item.href ?? "/dashboard"}
                       key={item.id}
-                      className="block rounded-md border border-stone-200 p-2 text-sm transition hover:bg-stone-50"
+                      className="block rounded-md border border-border p-2 text-sm transition hover:bg-muted/60"
                       onClick={() => setOpenNotifications(false)}
                     >
-                      <p className="font-semibold text-stone-800">{item.title}</p>
-                      <p className="text-xs text-stone-600">{item.description}</p>
+                      <p className="font-semibold text-foreground">{item.title}</p>
+                      <p className="text-xs text-muted-foreground">{item.description}</p>
                     </Link>
                   ))
                 ) : (
-                  <p className="rounded-md border border-stone-200 p-2 text-xs text-stone-500">
+                  <p className="rounded-md border border-border p-2 text-xs text-muted-foreground">
                     Nenhuma notificacao no momento.
                   </p>
                 )}
@@ -127,13 +162,13 @@ export function Topbar({
           ) : null}
         </div>
 
-        <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-white px-2 py-1 md:flex">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-200 text-xs font-semibold text-stone-700">
+        <div className="hidden items-center gap-2 rounded-xl border border-border bg-card px-2 py-1 md:flex">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
             {initials(session?.full_name)}
           </div>
           <div className="pr-1">
-            <p className="text-xs font-semibold text-stone-800">{session?.full_name ?? "Usuario"}</p>
-            <p className="text-[11px] text-stone-500">{ROLE_LABELS[session?.roles?.[0] ?? ""] ?? "Perfil"}</p>
+            <p className="text-xs font-semibold text-foreground">{session?.full_name ?? "Usuario"}</p>
+            <p className="text-[11px] text-muted-foreground">{ROLE_LABELS[session?.roles?.[0] ?? ""] ?? "Perfil"}</p>
           </div>
         </div>
 

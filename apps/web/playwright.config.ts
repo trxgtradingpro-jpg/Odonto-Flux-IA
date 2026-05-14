@@ -9,26 +9,36 @@ const chromiumExecutablePath = (() => {
 
 const e2ePort = Number(process.env.PLAYWRIGHT_WEB_PORT || 3100);
 const webBaseUrl = process.env.WEB_BASE_URL || `http://127.0.0.1:${e2ePort}`;
+const skipWebServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER === '1';
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === '1';
 
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 120_000,
   expect: { timeout: 20_000 },
-  fullyParallel: false,
+  fullyParallel: true,
   retries: 0,
   use: {
     baseURL: webBaseUrl,
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: `pnpm dev --port ${e2ePort}`,
-    port: e2ePort,
-    reuseExistingServer: false,
-    timeout: 180_000,
-  },
+  webServer: skipWebServer
+    ? undefined
+    : {
+        command: `pnpm dev --port ${e2ePort}`,
+        port: e2ePort,
+        reuseExistingServer,
+        timeout: 180_000,
+      },
   projects: [
     {
+      name: 'setup',
+      testMatch: /.*auth\.setup\.ts/,
+    },
+    {
       name: 'chromium',
+      dependencies: ['setup'],
+      testIgnore: /.*auth\.setup\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: chromiumExecutablePath

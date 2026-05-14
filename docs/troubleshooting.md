@@ -18,6 +18,7 @@
 - Verificar `outbox_messages` com `failed/dead_letter`
 - Conferir token WhatsApp e conectividade externa
 - Conferir worker Celery em execucao
+- Em ambiente sem worker/scheduler, habilitar `WHATSAPP_INLINE_DISPATCH_ON_QUEUE=true` para dispatch imediato no enqueue
 
 ## Dados cruzados entre tenants
 - Revisar token JWT (tenant_id)

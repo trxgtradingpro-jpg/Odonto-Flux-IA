@@ -169,11 +169,14 @@ def create_user_with_roles(
     db: Session,
     *,
     tenant_id: UUID | None,
+    unit_id: UUID | None,
     email: str,
     full_name: str,
     password: str,
     phone: str | None,
     roles: list[str],
+    page_permissions: dict | None = None,
+    force_fullscreen_mode: bool = False,
 ) -> User:
     validate_password_strength(password)
 
@@ -183,11 +186,14 @@ def create_user_with_roles(
 
     user = User(
         tenant_id=tenant_id,
+        unit_id=unit_id,
         email=email.lower().strip(),
         full_name=full_name,
         phone=phone,
         hashed_password=hash_password(password),
         is_active=True,
+        page_permissions=page_permissions or {},
+        force_fullscreen_mode=force_fullscreen_mode,
     )
     db.add(user)
     db.flush()

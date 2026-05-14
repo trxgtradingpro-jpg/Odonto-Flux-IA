@@ -1,6 +1,15 @@
 import axios from 'axios';
 
-import { clearAccessToken, getAccessToken } from './auth';
+import {
+  clearAccessToken,
+  clearAdminAccessToken,
+  getAccessToken,
+  getAdminAccessToken,
+  getAdminRefreshToken,
+  getRefreshToken,
+  setAccessToken,
+  setAdminAccessToken,
+} from './auth';
 
 function resolveApiBase(): string {
   const configuredBase = process.env.NEXT_PUBLIC_API_URL;
@@ -24,8 +33,48 @@ export const api = axios.create({
   timeout: 20_000,
 });
 
+const refreshApi = axios.create({
+  baseURL: apiBase,
+  timeout: 20_000,
+});
+
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshCurrentSession(isAdmRoute: boolean) {
+  const currentRefreshToken = isAdmRoute ? getAdminRefreshToken() : getRefreshToken();
+  if (!currentRefreshToken) return null;
+
+  if (!refreshPromise) {
+    refreshPromise = refreshApi
+      .post('/auth/refresh', { refresh_token: currentRefreshToken })
+      .then((response) => {
+        const data = response.data as { access_token: string; refresh_token: string };
+        if (isAdmRoute) {
+          setAdminAccessToken(data.access_token, data.refresh_token);
+        } else {
+          setAccessToken(data.access_token, data.refresh_token);
+        }
+        return data.access_token;
+      })
+      .catch(() => {
+        if (isAdmRoute) {
+          clearAdminAccessToken();
+        } else {
+          clearAccessToken();
+        }
+        return null;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+}
+
 api.interceptors.request.use((config) => {
-  const token = getAccessToken();
+  const isAdmRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/adm');
+  const token = isAdmRoute ? getAdminAccessToken() : getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -34,10 +83,38 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
-      clearAccessToken();
-      if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+      const isAdmRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/adm');
+      const requestUrl = String(error.config?.url || '');
+      const isAdmLoginRequest = requestUrl.includes('/admin/auth/login');
+      const isRefreshRequest = requestUrl.includes('/auth/refresh');
+      const code = error.response?.data?.error?.code;
+      const tokenIsInvalid = ['AUTH_INVALID_TOKEN', 'AUTH_INVALID_TOKEN_TYPE', 'AUTH_INVALID_USER'].includes(code);
+
+      if (!error.config?._retry && !isAdmLoginRequest && !isRefreshRequest) {
+        error.config._retry = true;
+        const newAccessToken = await refreshCurrentSession(isAdmRoute);
+        if (newAccessToken) {
+          error.config.headers = error.config.headers ?? {};
+          error.config.headers.Authorization = `Bearer ${newAccessToken}`;
+          return api.request(error.config);
+        }
+      }
+
+      if (isAdmRoute && !isAdmLoginRequest) {
+        clearAdminAccessToken();
+        if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/adm')) {
+          window.location.href = '/adm';
+        }
+      } else if (!isAdmRoute || tokenIsInvalid || isRefreshRequest) {
+        clearAccessToken();
+      }
+      if (
+        typeof window !== 'undefined' &&
+        !window.location.pathname.includes('/login') &&
+        !window.location.pathname.startsWith('/adm')
+      ) {
         window.location.href = '/login';
       }
     }

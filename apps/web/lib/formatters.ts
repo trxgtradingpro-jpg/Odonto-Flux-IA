@@ -8,6 +8,13 @@ export const percentFormatter = new Intl.NumberFormat("pt-BR", {
   maximumFractionDigits: 1,
 });
 
+function parseDateOnly(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T|\s)/.exec(value.trim());
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day));
+}
+
 export function formatDateTimeBR(value?: string | Date | null) {
   if (!value) return "-";
   const date = value instanceof Date ? value : new Date(value);
@@ -17,7 +24,10 @@ export function formatDateTimeBR(value?: string | Date | null) {
 
 export function formatDateBR(value?: string | Date | null) {
   if (!value) return "-";
-  const date = value instanceof Date ? value : new Date(value);
+  const date =
+    value instanceof Date
+      ? value
+      : parseDateOnly(value) ?? new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 }
@@ -45,6 +55,13 @@ export function formatPhoneBR(value?: string | null) {
   return `(${ddd}) ${first}-${second}`;
 }
 
+export function formatCpfBR(value?: string | null) {
+  if (!value) return "-";
+  const digits = value.replace(/\D/g, "");
+  if (digits.length !== 11) return value;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+}
+
 export function formatRelativeTime(value?: string | Date | null) {
   if (!value) return "Sem atividade";
   const target = value instanceof Date ? value : new Date(value);
@@ -69,6 +86,54 @@ export function initials(name?: string | null) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+const CLINIC_INITIALS_IGNORED_WORDS = new Set([
+  "clinica",
+  "clinic",
+  "consultorio",
+  "odontologia",
+  "odontologica",
+  "odontologico",
+  "odonto",
+  "dental",
+  "dentista",
+  "saude",
+  "unidade",
+  "centro",
+  "grupo",
+  "instituto",
+  "hospital",
+]);
+
+function normalizeInitialsWord(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
+}
+
+export function clinicInitials(name?: string | null) {
+  if (!name) return "??";
+
+  const words = name.split(/\s+/).filter(Boolean);
+  const meaningfulWords = words.filter((word) => {
+    const normalized = normalizeInitialsWord(word);
+    return normalized && !CLINIC_INITIALS_IGNORED_WORDS.has(normalized);
+  });
+
+  const sourceWords = meaningfulWords.length ? meaningfulWords : words;
+  const result = sourceWords
+    .slice(0, 2)
+    .map((part) => normalizeInitialsWord(part)[0]?.toUpperCase())
+    .filter(Boolean)
+    .join("");
+
+  if (result.length >= 2) return result;
+
+  const compactName = normalizeInitialsWord(name).toUpperCase();
+  return compactName.slice(0, 2) || "??";
 }
 
 export function toTitleCase(value?: string | null) {

@@ -9,11 +9,14 @@ export type ApiPage<T> = {
 
 export type UserItem = {
   id: string;
+  unit_id?: string | null;
   full_name: string;
   email: string;
   phone?: string | null;
   roles: string[];
   is_active: boolean;
+  page_permissions?: Record<string, { view?: boolean; create?: boolean; edit?: boolean; delete?: boolean }> | null;
+  force_fullscreen_mode?: boolean;
   last_login_at?: string | null;
   created_at: string;
 };
@@ -24,6 +27,19 @@ export type UnitItem = {
   name: string;
   phone?: string | null;
   email?: string | null;
+  is_active?: boolean;
+  address?: Record<string, unknown>;
+  working_hours?: Record<string, unknown>;
+  services?: string[];
+};
+
+export type ServiceCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  duration_minutes?: number | null;
+  price_note?: string | null;
+  is_active: boolean;
 };
 
 export type ProfessionalItem = {
@@ -43,10 +59,14 @@ export type PatientItem = {
   id: string;
   full_name: string;
   phone: string;
+  cpf?: string | null;
   email?: string | null;
+  birth_date?: string | null;
+  operational_notes?: string | null;
   status: string;
   origin?: string | null;
   tags_cache: string[];
+  lgpd_consent?: boolean;
   marketing_opt_in: boolean;
   unit_id?: string | null;
   created_at: string;
@@ -54,6 +74,7 @@ export type PatientItem = {
 
 export type LeadItem = {
   id: string;
+  unit_id?: string | null;
   patient_id?: string | null;
   name: string;
   phone?: string | null;
@@ -90,11 +111,15 @@ export type MessageItem = {
   id: string;
   conversation_id: string;
   direction: string;
+  provider_message_id?: string | null;
   status: string;
   body: string;
   message_type: string;
   sender_type: string;
+  payload?: Record<string, unknown>;
   sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
   created_at: string;
 };
 
@@ -110,10 +135,14 @@ export type AppointmentItem = {
   confirmation_status: string;
   origin: string;
   notes: string;
+  attendance_status?: string;
+  attendance_notes?: string;
+  next_appointment_status?: string;
 };
 
 export type CampaignItem = {
   id: string;
+  unit_id?: string | null;
   name: string;
   objective: string;
   status: string;
@@ -130,7 +159,9 @@ export type AutomationItem = {
   trigger_key: string;
   conditions: Record<string, unknown>;
   actions: Array<Record<string, unknown>>;
+  retry_policy?: Record<string, unknown>;
   is_active: boolean;
+  paused_at?: string | null;
   created_at: string;
 };
 
@@ -143,6 +174,51 @@ export type AutomationRunItem = {
   error_message?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  retries?: number;
+  created_at?: string;
+};
+
+export type AutomationConditionEvaluation = {
+  field: string;
+  operator: string;
+  expected: unknown;
+  actual: unknown;
+  matched: boolean;
+};
+
+export type AutomationSimulationAction = {
+  action?: string | null;
+  label?: string;
+  will_execute?: boolean;
+  ignored?: boolean;
+  reason?: string | null;
+  human_reason?: string | null;
+  preview?: Record<string, unknown>;
+};
+
+export type AutomationSimulationResult = {
+  will_run: boolean;
+  reason: string;
+  summary: string;
+  conditions_match: boolean;
+  condition_evaluations: AutomationConditionEvaluation[];
+  actions: AutomationSimulationAction[];
+  message_preview?: string | null;
+  trigger_payload: Record<string, unknown>;
+};
+
+export type AutomationManualExecutionResult = {
+  run_created: boolean;
+  run_id?: string | null;
+  simulation: AutomationSimulationResult;
+};
+
+export type AutomationHistoryItem = {
+  id: string;
+  action: string;
+  user_id?: string | null;
+  metadata: Record<string, unknown>;
+  occurred_at: string;
 };
 
 export type DocumentItem = {

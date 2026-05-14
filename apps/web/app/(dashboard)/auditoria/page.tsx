@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { DataTable, FilterBar, PageHeader, RightDrawer, StatusBadge } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { api } from "@/lib/api";
+import { triggerBlobDownload } from "@/lib/download";
 import { ApiPage, AuditItem, UnitItem, UserItem } from "@/lib/domain-types";
 import { formatDateTimeBR } from "@/lib/formatters";
 import { Button, Card, CardContent } from "@odontoflux/ui";
@@ -47,6 +49,7 @@ function actionLabel(action: string) {
 }
 
 export default function AuditoriaPage() {
+  const ownerUnitScope = useOwnerUnitScope();
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [entityFilter, setEntityFilter] = useState("all");
@@ -71,17 +74,33 @@ export default function AuditoriaPage() {
     },
   });
 
+  const dataset = auditQuery.data ?? { logs: [], users: [], units: [] };
+  const visibleUnitNames =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? dataset.units.filter((unit) => unit.id === ownerUnitScope.selectedUnitId).map((unit) => unit.name)
+      : dataset.units.map((unit) => unit.name);
+
+  useEffect(() => {
+    if (!ownerUnitScope.canSwitchUnits) return;
+    if (ownerUnitScope.selectedUnitId === "all") {
+      setUnitFilter("all");
+      return;
+    }
+    const selectedUnit = dataset.units.find((unit) => unit.id === ownerUnitScope.selectedUnitId);
+    setUnitFilter(selectedUnit?.name ?? "all");
+  }, [dataset.units, ownerUnitScope.canSwitchUnits, ownerUnitScope.selectedUnitId]);
+
   if (auditQuery.isLoading) return <LoadingState message="Carregando auditoria..." />;
   if (auditQuery.isError || !auditQuery.data) return <ErrorState message="Não foi possível carregar a trilha de auditoria." />;
 
-  const usersById = new Map(auditQuery.data.users.map((item) => [item.id, item.full_name]));
-  const unitsByName = auditQuery.data.units.map((unit) => unit.name);
+  const usersById = new Map(dataset.users.map((item) => [item.id, item.full_name]));
+  const unitsByName = visibleUnitNames;
 
   const periodDays = periodFilter === "7d" ? 7 : periodFilter === "30d" ? 30 : 90;
   const periodStart = new Date();
   periodStart.setDate(periodStart.getDate() - periodDays);
 
-  const rows = auditQuery.data.logs
+  const rows = dataset.logs
     .filter((log) => {
       const term = search.toLowerCase().trim();
       const userName = log.user_id ? usersById.get(log.user_id) ?? "Usuário não identificado" : "Sistema";
@@ -101,8 +120,8 @@ export default function AuditoriaPage() {
       entity_human: log.entity_type,
     }));
 
-  const uniqueActions = Array.from(new Set(auditQuery.data.logs.map((item) => item.action)));
-  const uniqueEntities = Array.from(new Set(auditQuery.data.logs.map((item) => item.entity_type)));
+  const uniqueActions = Array.from(new Set(dataset.logs.map((item) => item.action)));
+  const uniqueEntities = Array.from(new Set(dataset.logs.map((item) => item.entity_type)));
 
   return (
     <div className="space-y-4">
@@ -129,12 +148,7 @@ export default function AuditoriaPage() {
               );
               const csv = [header.join(";"), ...lines].join("\n");
               const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-              const url = URL.createObjectURL(blob);
-              const anchor = document.createElement("a");
-              anchor.href = url;
-              anchor.download = "auditoria_odontoflux.csv";
-              anchor.click();
-              URL.revokeObjectURL(url);
+              triggerBlobDownload(blob, "auditoria_odontoflux.csv");
               toast.success("CSV exportado com sucesso.");
             }}
           >
@@ -183,7 +197,14 @@ export default function AuditoriaPage() {
         <select
           className="h-9 rounded-md border border-stone-300 bg-white px-2 text-sm"
           value={unitFilter}
-          onChange={(event) => setUnitFilter(event.target.value)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            setUnitFilter(nextValue);
+            if (ownerUnitScope.canSwitchUnits) {
+              const nextUnit = dataset.units.find((unit) => unit.name === nextValue);
+              ownerUnitScope.setSelectedUnitId(nextUnit?.id ?? "all");
+            }
+          }}
         >
           <option value="all">Todas as unidades</option>
           {unitsByName.map((unitName) => (

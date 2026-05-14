@@ -12,11 +12,11 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       default:
         'bg-primary text-primary-foreground shadow-sm hover:opacity-95 focus-visible:ring-4 focus-visible:ring-primary/25',
       outline:
-        'bg-white text-foreground border border-border hover:bg-stone-50 hover:border-stone-400 focus-visible:ring-4 focus-visible:ring-primary/15',
+        'bg-card text-foreground border border-border hover:bg-muted/70 hover:border-border focus-visible:ring-4 focus-visible:ring-primary/15',
       destructive:
         'bg-red-600 text-white shadow-sm hover:bg-red-700 focus-visible:ring-4 focus-visible:ring-red-300',
       ghost:
-        'bg-transparent text-foreground hover:bg-stone-100 focus-visible:ring-4 focus-visible:ring-primary/15',
+        'bg-transparent text-foreground hover:bg-muted/70 focus-visible:ring-4 focus-visible:ring-primary/15',
     };
 
     return (

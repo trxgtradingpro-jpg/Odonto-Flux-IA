@@ -3,6 +3,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,8 @@ from app.db.session import get_db
 from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
 from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
 from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
-from app.models import Setting, WhatsAppAccount, WhatsAppTemplate
+from app.models import OutboxMessage, Setting, WhatsAppAccount, WhatsAppTemplate
+from app.models.enums import OutboxStatus
 from app.models import Unit
 from app.services.ai_autoresponder_service import (
     get_knowledge_base_global_config as get_ai_knowledge_base_global_config,
@@ -23,9 +25,69 @@ from app.services.ai_autoresponder_service import (
     set_unit_override as set_ai_autoresponder_unit_override,
 )
 from app.services.audit_service import record_audit
+from app.services.appointment_validation_service import (
+    sync_future_appointments_with_service_catalog,
+)
+from app.services.service_catalog_service import get_service_catalog_items, set_service_catalog_items
 from app.services.whatsapp_service import normalize_whatsapp_provider_name, whatsapp_account_issues
 
 router = APIRouter(prefix='/settings', tags=['settings'])
+
+
+class BrandingThemeInput(BaseModel):
+    primary_color: str = Field(default="#0f766e")
+    secondary_color: str = Field(default="#0ea5a4")
+    accent_color: str = Field(default="#f59e0b")
+    background_color: str = Field(default="#f2f4f7")
+    surface_color: str = Field(default="#eef2f6")
+    card_color: str = Field(default="#ffffff")
+    text_color: str = Field(default="#1c1917")
+    muted_text_color: str = Field(default="#475569")
+    border_color: str = Field(default="#d6d3d1")
+    fullscreen_background_color: str = Field(default="#0c0a09")
+    fullscreen_header_color: str = Field(default="#111111")
+    fullscreen_accent_color: str = Field(default="#10b981")
+    fullscreen_foreground_color: str = Field(default="#ffffff")
+    surface_style: str = Field(default="soft")
+    logo_data_url: str | None = None
+
+    @field_validator(
+        "primary_color",
+        "secondary_color",
+        "accent_color",
+        "background_color",
+        "surface_color",
+        "card_color",
+        "text_color",
+        "muted_text_color",
+        "border_color",
+        "fullscreen_background_color",
+        "fullscreen_header_color",
+        "fullscreen_accent_color",
+        "fullscreen_foreground_color",
+    )
+    @classmethod
+    def _validate_hex(cls, value: str) -> str:
+        if not isinstance(value, str) or not value.startswith("#") or len(value) != 7:
+            raise ValueError("Cor precisa estar em formato hexadecimal #RRGGBB")
+        int(value[1:], 16)
+        return value.lower()
+
+    @field_validator("surface_style")
+    @classmethod
+    def _validate_surface_style(cls, value: str) -> str:
+        return value if value in {"soft", "flat", "glass"} else "soft"
+
+
+def _upsert_setting_record(db: Session, *, tenant_id, key: str, value, is_secret: bool = False) -> Setting:
+    item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == key))
+    if not item:
+        item = Setting(tenant_id=tenant_id, key=key, value=value, is_secret=is_secret)
+    else:
+        item.value = value
+        item.is_secret = is_secret
+    db.add(item)
+    return item
 
 
 @router.get('')
@@ -63,6 +125,50 @@ def upsert_setting(
         metadata={'key': key, 'is_secret': item.is_secret},
     )
     return {'id': str(item.id), 'key': item.key, 'value': item.value, 'is_secret': item.is_secret}
+
+
+@router.put('/branding/theme')
+def upsert_branding_theme(
+    payload: BrandingThemeInput,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    theme_value = payload.model_dump()
+    logo_value = theme_value.get("logo_data_url")
+
+    theme_item = _upsert_setting_record(
+        db,
+        tenant_id=tenant_id,
+        key="branding.theme",
+        value=theme_value,
+        is_secret=False,
+    )
+    _upsert_setting_record(
+        db,
+        tenant_id=tenant_id,
+        key="branding.logo_data_url",
+        value=logo_value,
+        is_secret=False,
+    )
+    db.commit()
+    db.refresh(theme_item)
+
+    record_audit(
+        db,
+        action='branding.theme.update',
+        entity_type='setting',
+        entity_id=str(theme_item.id),
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={
+            'surface_style': theme_value.get('surface_style'),
+            'primary_color': theme_value.get('primary_color'),
+            'fullscreen_accent_color': theme_value.get('fullscreen_accent_color'),
+            'has_logo': bool(logo_value),
+        },
+    )
+    return {'id': str(theme_item.id), 'key': theme_item.key, 'value': theme_item.value, 'is_secret': theme_item.is_secret}
 
 
 @router.get('/ai-autoresponder/config')
@@ -175,6 +281,48 @@ def upsert_ai_knowledge_base_config(
     return config
 
 
+@router.get('/service-catalog/config')
+def get_service_catalog_config(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
+    return {
+        'items': get_service_catalog_items(db, tenant_id=tenant_id),
+    }
+
+
+@router.put('/service-catalog/config')
+def upsert_service_catalog_config(
+    payload: dict,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    items = set_service_catalog_items(
+        db,
+        tenant_id=tenant_id,
+        payload=payload if isinstance(payload, dict) else {"items": []},
+    )
+    sync_summary = sync_future_appointments_with_service_catalog(
+        db,
+        tenant_id=tenant_id,
+        dry_run=False,
+    )
+    record_audit(
+        db,
+        action='service_catalog.update',
+        entity_type='setting',
+        entity_id=None,
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={
+            'items_count': len(items),
+            'active_items_count': len([item for item in items if item.get('is_active', True)]),
+            'future_end_times_updated': sync_summary.get('backfill', {}).get('updated', 0),
+            'future_appointments_rebalanced': sync_summary.get('rebalance', {}).get('totals', {}).get('appointments_moved', 0),
+            'future_rebalance_unresolved': sync_summary.get('rebalance', {}).get('totals', {}).get('appointments_unresolved', 0),
+        },
+    )
+    return {'items': items, 'sync_summary': sync_summary}
+
+
 @router.get('/whatsapp/accounts')
 def list_whatsapp_accounts(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
     rows = db.execute(
@@ -192,6 +340,85 @@ def list_whatsapp_accounts(db: Session = Depends(get_db), tenant_id=Depends(get_
             }
             for item in rows
         ]
+    }
+
+
+@router.get('/whatsapp/health')
+def get_whatsapp_health(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
+    active_account = db.scalar(
+        select(WhatsAppAccount)
+        .where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+
+    account_issues = []
+    if not active_account:
+        account_issues.append('Conta WhatsApp ativa não configurada')
+    else:
+        account_issues = whatsapp_account_issues(
+            provider_name=active_account.provider_name,
+            phone_number_id=active_account.phone_number_id,
+            business_account_id=active_account.business_account_id,
+            access_token=active_account.access_token_encrypted,
+        )
+
+    recent_failure = db.scalar(
+        select(OutboxMessage)
+        .where(
+            OutboxMessage.tenant_id == tenant_id,
+            OutboxMessage.channel == 'whatsapp',
+            OutboxMessage.status.in_([OutboxStatus.FAILED.value, OutboxStatus.DEAD_LETTER.value]),
+        )
+        .order_by(OutboxMessage.updated_at.desc(), OutboxMessage.created_at.desc())
+        .limit(1)
+    )
+    recent_error = str(recent_failure.last_error or '') if recent_failure else ''
+    normalized_error = recent_error.lower()
+    credit_issue = any(marker in normalized_error for marker in ['not enough credits', 'insufficient credit', 'credito', 'crédito'])
+
+    if account_issues or credit_issue:
+        status = 'blocked'
+    elif recent_failure:
+        status = 'warning'
+    else:
+        status = 'ok'
+
+    return {
+        'status': status,
+        'active_account': (
+            {
+                'id': str(active_account.id),
+                'provider_name': active_account.provider_name,
+                'phone_number_id': active_account.phone_number_id,
+                'display_phone': active_account.display_phone,
+            }
+            if active_account
+            else None
+        ),
+        'issues': account_issues,
+        'recent_failure': (
+            {
+                'id': str(recent_failure.id),
+                'status': recent_failure.status,
+                'last_error': recent_error,
+                'created_at': recent_failure.created_at.isoformat(),
+                'updated_at': recent_failure.updated_at.isoformat(),
+                'is_credit_issue': credit_issue,
+            }
+            if recent_failure
+            else None
+        ),
+        'message': (
+            'WhatsApp bloqueado por configuração/creditos. Revise a conta antes de validar produção.'
+            if status == 'blocked'
+            else 'WhatsApp com falhas recentes de envio. Verifique o provedor e a outbox.'
+            if status == 'warning'
+            else 'WhatsApp pronto para envio.'
+        ),
     }
 
 
@@ -226,6 +453,16 @@ def create_whatsapp_account(
             message='Dados da conta WhatsApp invalidos para envio real.',
             details={'issues': issues},
         )
+
+    current_active_accounts = db.execute(
+        select(WhatsAppAccount).where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+    ).scalars().all()
+    for current in current_active_accounts:
+        current.is_active = False
+        db.add(current)
 
     item = WhatsAppAccount(
         tenant_id=tenant_id,

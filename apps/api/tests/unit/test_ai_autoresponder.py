@@ -9,12 +9,20 @@ from app.models import (
     Message,
     OutboxMessage,
     Patient,
+    PatientContact,
     Professional,
     Setting,
     Unit,
     WhatsAppAccount,
 )
-from app.services.ai_autoresponder_service import process_inbound_message
+from app.services.ai_autoresponder_service import (
+    CPF_CONTACT_CHANNEL,
+    _capture_patient_registration_from_inbound,
+    _list_available_slots,
+    _patient_saved_cpf,
+    build_official_visit_guidance_response,
+    process_inbound_message,
+)
 
 
 def _base_ai_config():
@@ -160,6 +168,267 @@ def _ensure_professional(db_session, *, tenant_id, unit_id, full_name: str = "Dr
     return professional
 
 
+def _ensure_unit(db_session, *, tenant_id, name: str = "Unidade Wizard"):
+    unit = db_session.scalar(select(Unit).where(Unit.tenant_id == tenant_id, Unit.name == name))
+    if unit:
+        return unit
+    unit = Unit(
+        tenant_id=tenant_id,
+        code=name[:8].upper().replace(" ", "-"),
+        name=name,
+        address={},
+        is_active=True,
+    )
+    db_session.add(unit)
+    db_session.commit()
+    db_session.refresh(unit)
+    return unit
+
+
+def _ensure_patient(db_session, *, tenant_id, unit_id, suffix: str):
+    phone = f"5511999{suffix}"
+    patient = Patient(
+        tenant_id=tenant_id,
+        unit_id=unit_id,
+        full_name=f"Paciente Slots {suffix}",
+        phone=phone,
+        normalized_phone=phone,
+        status="ativo",
+        origin="manual",
+        lgpd_consent=True,
+        marketing_opt_in=True,
+        tags_cache=[],
+    )
+    db_session.add(patient)
+    db_session.flush()
+    return patient
+
+
+def test_list_available_slots_keeps_time_when_another_professional_is_free(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    patient = _ensure_patient(db_session, tenant_id=tenant_id, unit_id=unit.id, suffix="10001")
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "services": [
+                {
+                    "name": "Implante",
+                    "description": "",
+                    "duration_note": "2h",
+                    "price_note": "",
+                }
+            ]
+        },
+    )
+    occupied = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Ocupada",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Implante"],
+        is_active=True,
+    )
+    available = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Disponivel",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Implante"],
+        is_active=True,
+    )
+    db_session.add_all([occupied, available])
+    db_session.flush()
+
+    tomorrow = datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    db_session.add(
+        Appointment(
+            tenant_id=tenant_id,
+            patient_id=patient.id,
+            unit_id=unit.id,
+            professional_id=occupied.id,
+            procedure_type="Implante",
+            starts_at=tomorrow,
+            ends_at=None,
+            origin="manual",
+            notes="",
+            status="agendada",
+            confirmation_status="pendente",
+        )
+    )
+    db_session.commit()
+
+    slots = _list_available_slots(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        config=_base_ai_config(),
+        procedure_type="Implante",
+        period="morning",
+        requested_date=tomorrow.date(),
+        max_slots=4,
+    )
+
+    assert slots
+    assert slots[0]["starts_at_local"].strftime("%H:%M") == "09:00"
+    assert slots[0]["professional_name"] == "Dr Disponivel"
+
+
+def test_list_available_slots_hides_hour_when_all_professionals_are_busy_for_service_duration(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Duracao")
+    patient = _ensure_patient(db_session, tenant_id=tenant_id, unit_id=unit.id, suffix="10002")
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "services": [
+                {
+                    "name": "Implante",
+                    "description": "",
+                    "duration_note": "2h",
+                    "price_note": "",
+                }
+            ]
+        },
+    )
+    first_professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Implante A",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Implante"],
+        is_active=True,
+    )
+    second_professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Implante B",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Implante"],
+        is_active=True,
+    )
+    db_session.add_all([first_professional, second_professional])
+    db_session.flush()
+
+    tomorrow = datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=2)
+    db_session.add_all(
+        [
+            Appointment(
+                tenant_id=tenant_id,
+                patient_id=patient.id,
+                unit_id=unit.id,
+                professional_id=first_professional.id,
+                procedure_type="Implante",
+                starts_at=tomorrow,
+                ends_at=None,
+                origin="manual",
+                notes="",
+                status="agendada",
+                confirmation_status="pendente",
+            ),
+            Appointment(
+                tenant_id=tenant_id,
+                patient_id=patient.id,
+                unit_id=unit.id,
+                professional_id=second_professional.id,
+                procedure_type="Implante",
+                starts_at=tomorrow,
+                ends_at=None,
+                origin="manual",
+                notes="",
+                status="agendada",
+                confirmation_status="pendente",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    slots = _list_available_slots(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        config=_base_ai_config(),
+        procedure_type="Implante",
+        period="morning",
+        requested_date=tomorrow.date(),
+        max_slots=4,
+    )
+
+    assert slots
+    first_visible_time = slots[0]["starts_at_local"].strftime("%H:%M")
+    assert first_visible_time == "11:00"
+    assert all(slot["starts_at_local"].strftime("%H:%M") not in {"09:00", "09:30", "10:00", "10:30"} for slot in slots)
+
+
+def test_list_available_slots_deduplicates_same_time_and_keeps_best_professional(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Slots Unicos")
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "services": [
+                {
+                    "name": "Avaliação odontológica",
+                    "description": "",
+                    "duration_note": "30 min",
+                    "price_note": "",
+                }
+            ]
+        },
+    )
+    specialist = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Especialista",
+        specialty="Avaliação odontológica",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Avaliação odontológica"],
+        is_active=True,
+    )
+    support = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Apoio",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="09:00",
+        shift_end="18:00",
+        procedures=["Avaliação odontológica"],
+        is_active=True,
+    )
+    db_session.add_all([specialist, support])
+    db_session.commit()
+
+    tomorrow = datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=3)
+    slots = _list_available_slots(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        config=_base_ai_config(),
+        procedure_type="Avaliação odontológica",
+        period="morning",
+        requested_date=tomorrow.date(),
+        max_slots=4,
+    )
+
+    assert [slot["starts_at_local"].strftime("%H:%M") for slot in slots] == ["09:00", "09:30", "10:00", "10:30"]
+    assert slots[0]["professional_name"] == "Dra Especialista"
+    assert slots[0]["available_professionals_count"] == 2
+    assert slots[0]["available_professionals"] == ["Dra Especialista", "Dr Apoio"]
+
+
 def test_handoff_when_patient_requests_human(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
@@ -295,6 +564,173 @@ def test_inbound_contact_data_updates_patient_profile(seeded_db, db_session):
     assert refreshed_patient.full_name == "Guilherme Alves"
     assert refreshed_patient.email == "guilherme.alves@example.com"
     assert "dados_cadastrais_capturados" in (refreshed_conversation.tags or [])
+
+
+def test_capture_patient_registration_persists_cpf_on_patient_when_unique(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Meu nome completo e Rafael Santos Nogueira, CPF 123.456.096-16, nascimento 15/08/1985.",
+    )
+
+    patient = db_session.get(Patient, conversation.patient_id)
+    patient.full_name = "Contato WhatsApp 1111"
+    patient.birth_date = None
+    patient.cpf = None
+    patient.normalized_cpf = None
+    db_session.add(patient)
+    db_session.commit()
+
+    changes = _capture_patient_registration_from_inbound(
+        db_session,
+        conversation=conversation,
+        inbound_text="Meu nome completo e Rafael Santos Nogueira, CPF 123.456.096-16, nascimento 15/08/1985.",
+        allow_loose_name=True,
+        allow_unlabeled_birth_date=True,
+    )
+    db_session.commit()
+
+    refreshed_patient = db_session.get(Patient, patient.id)
+    refreshed_conversation = db_session.get(Conversation, conversation.id)
+    cpf_contact = db_session.scalar(
+        select(PatientContact).where(
+            PatientContact.tenant_id == tenant_id,
+            PatientContact.patient_id == patient.id,
+            PatientContact.channel == CPF_CONTACT_CHANNEL,
+        )
+    )
+
+    assert changes["patient_full_name"] == "Rafael Santos Nogueira"
+    assert changes["patient_birth_date"] == "1985-08-15"
+    assert changes["patient_cpf"] == "12345609616"
+    assert refreshed_patient.full_name == "Rafael Santos Nogueira"
+    assert refreshed_patient.birth_date.isoformat() == "1985-08-15"
+    assert refreshed_patient.cpf == "12345609616"
+    assert refreshed_patient.normalized_cpf == "12345609616"
+    assert cpf_contact is not None
+    assert cpf_contact.normalized_value == "12345609616"
+    assert _patient_saved_cpf(db_session, conversation=conversation) == "12345609616"
+    assert "dados_cadastrais_capturados" in (refreshed_conversation.tags or [])
+
+
+def test_capture_patient_registration_keeps_contact_cpf_when_patient_conflicts(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    existing_patient = Patient(
+        tenant_id=tenant_id,
+        full_name="Paciente Existente",
+        phone="5511999000001",
+        normalized_phone="5511999000001",
+        cpf="12345609616",
+        normalized_cpf="12345609616",
+        status="ativo",
+        origin="manual",
+        lgpd_consent=True,
+        marketing_opt_in=True,
+        tags_cache=[],
+    )
+    db_session.add(existing_patient)
+    db_session.commit()
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Meu nome completo e Rafael Santos Nogueira, CPF 123.456.096-16, nascimento 15/08/1985.",
+    )
+
+    patient = db_session.get(Patient, conversation.patient_id)
+    patient.full_name = "Contato WhatsApp 2222"
+    patient.birth_date = None
+    patient.cpf = None
+    patient.normalized_cpf = None
+    db_session.add(patient)
+    db_session.commit()
+
+    changes = _capture_patient_registration_from_inbound(
+        db_session,
+        conversation=conversation,
+        inbound_text="Meu nome completo e Rafael Santos Nogueira, CPF 123.456.096-16, nascimento 15/08/1985.",
+        allow_loose_name=True,
+        allow_unlabeled_birth_date=True,
+    )
+    db_session.commit()
+
+    refreshed_patient = db_session.get(Patient, patient.id)
+    cpf_contact = db_session.scalar(
+        select(PatientContact).where(
+            PatientContact.tenant_id == tenant_id,
+            PatientContact.patient_id == patient.id,
+            PatientContact.channel == CPF_CONTACT_CHANNEL,
+        )
+    )
+
+    assert changes["patient_cpf"] == "12345609616"
+    assert refreshed_patient.cpf is None
+    assert refreshed_patient.normalized_cpf is None
+    assert cpf_contact is not None
+    assert cpf_contact.normalized_value == "12345609616"
+    assert _patient_saved_cpf(db_session, conversation=conversation) == "12345609616"
+
+
+def test_official_visit_guidance_response_uses_real_unit_address_professional_and_documents(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Paulista")
+    unit.address = {
+        "street": "Rua Ramondetti Giacomo",
+        "number": "24",
+        "neighborhood": "Vila Dalva",
+        "city": "Sao Paulo",
+        "state": "SP",
+        "zip_code": "05387-110",
+        "formatted": "Rua Ramondetti Giacomo, 24, Vila Dalva, Sao Paulo - SP, 05387-110",
+    }
+    db_session.add(unit)
+    professional = _ensure_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Marcos Antonio Lopes",
+    )
+    patient = _ensure_patient(db_session, tenant_id=tenant_id, unit_id=unit.id, suffix="20001")
+    conversation = Conversation(
+        tenant_id=tenant_id,
+        patient_id=patient.id,
+        channel="whatsapp",
+        status="aberta",
+        tags=[],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    appointment = Appointment(
+        tenant_id=tenant_id,
+        patient_id=patient.id,
+        unit_id=unit.id,
+        professional_id=professional.id,
+        procedure_type="Avaliação odontológica",
+        starts_at=datetime(2030, 4, 29, 12, 0, tzinfo=UTC),
+        ends_at=datetime(2030, 4, 29, 12, 30, tzinfo=UTC),
+        origin="ai_autoresponder",
+        notes="",
+        status="agendada",
+        confirmation_status="confirmada",
+    )
+    db_session.add(appointment)
+    db_session.commit()
+
+    response = build_official_visit_guidance_response(
+        db_session,
+        conversation=conversation,
+        inbound_text="Qual o endereço da unidade paulista e quem vai me atender? Também preciso saber que documento levar.",
+        config=_base_ai_config(),
+    )
+
+    assert response is not None
+    assert response["mode"] == "official_visit_guidance"
+    assert "Rua Ramondetti Giacomo, 24, Vila Dalva, Sao Paulo - SP, 05387-110" in response["response_text"]
+    assert "Marcos Antonio Lopes" in response["response_text"]
+    assert "documento com foto e CPF" in response["response_text"]
+    assert response["metadata"]["unit_name"] == "Unidade Paulista"
+    assert response["metadata"]["professional_name"] == "Marcos Antonio Lopes"
 
 
 def test_period_reply_suggests_slots_without_auto_booking(seeded_db, db_session):
@@ -496,7 +932,10 @@ def test_prompt_includes_knowledge_base_when_configured(monkeypatch, seeded_db, 
     def _fake_run_llm_task(*args, **kwargs):
         captured_prompt["value"] = kwargs.get("prompt", "")
         return {
-            "output": "Claro! A avaliaÃ§Ã£o ortodÃ´ntica estÃ¡ disponÃ­vel e posso te ajudar a agendar.",
+            "output": (
+                '{"reply_text":"Claro! A avaliação ortodôntica está disponível e posso te ajudar a agendar.",'
+                '"next_action":"none","action_payload":{"context":"knowledge_test"},"confidence":0.91}'
+            ),
             "metadata": {"provider": "mock", "model": "mock"},
         }
 
@@ -519,6 +958,73 @@ def test_prompt_includes_knowledge_base_when_configured(monkeypatch, seeded_db, 
     assert "Base de conhecimento operacional da clÃ­nica" in prompt
     assert "ClÃ­nica Sorriso Sul Premium" in prompt
     assert "AvaliaÃ§Ã£o ortodÃ´ntica" in prompt
+
+
+def test_prompt_includes_ai_lab_training_examples(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    db_session.add(
+        Setting(
+            tenant_id=tenant_id,
+            key="ai_lab.history",
+            value={
+                "entries": [
+                    {
+                        "id": "lab-1",
+                        "created_at": "2026-04-21T10:00:00+00:00",
+                        "input_text": "Quanto custa clareamento?",
+                        "edited_response_text": "Posso te orientar. O valor depende da avaliacao, mas ja te explico os proximos passos.",
+                        "note": "Ser consultivo e chamar para avaliacao sem prometer preco fechado.",
+                        "contract_valid": True,
+                    }
+                ]
+            },
+            is_secret=False,
+        )
+    )
+    db_session.commit()
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quanto custa clareamento?",
+    )
+
+    from app.services import ai_autoresponder_service
+
+    captured_prompt: dict[str, str] = {}
+
+    def _fake_run_llm_task(*args, **kwargs):
+        captured_prompt["value"] = kwargs.get("prompt", "")
+        return {
+            "output": (
+                '{"reply_text":"Posso te orientar. O valor depende da avaliacao, mas ja te explico os proximos passos.",'
+                '"next_action":"show_services","action_payload":{"context":"price_question"},"confidence":0.9}'
+            ),
+            "metadata": {"provider": "mock", "model": "mock"},
+        }
+
+    monkeypatch.setattr(ai_autoresponder_service, "run_llm_task", _fake_run_llm_task)
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "classify_intent",
+        lambda *args, **kwargs: {"output": '{"intent":"orcamento","confidence":0.89}'},
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    prompt = captured_prompt.get("value", "")
+    assert "Treino aprovado no IA Lab" in prompt
+    assert "Quanto custa clareamento?" in prompt
+    assert "Ser consultivo" in prompt
 
 def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
@@ -670,6 +1176,107 @@ def test_booking_wizard_button_flow_creates_appointment(seeded_db, db_session):
     )
     assert fourth_result["status"] == "responded"
     assert fourth_result.get("scheduling_mode") == "booking_wizard_time_select"
+
+
+def test_booking_wizard_reuses_service_and_unit_from_first_message(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Paulista")
+    professional = db_session.scalar(
+        select(Professional).where(
+            Professional.tenant_id == tenant_id,
+            Professional.unit_id == unit.id,
+            Professional.full_name == "Dra Limpeza Paulista",
+        )
+    )
+    if not professional:
+        professional = Professional(
+            tenant_id=tenant_id,
+            unit_id=unit.id,
+            full_name="Dra Limpeza Paulista",
+            working_days=[0, 1, 2, 3, 4, 5, 6],
+            shift_start="08:00",
+            shift_end="18:00",
+            procedures=["Limpeza odontológica"],
+            is_active=True,
+        )
+        db_session.add(professional)
+        db_session.commit()
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi! Quero agendar uma consulta nova de limpeza na Unidade Paulista.",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_day_select"
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert outbound is not None
+    assert "dias disponíveis para Limpeza odontológica na Unidade Paulista" in (outbound.body or "")
+    assert "qual atendimento" not in (outbound.body or "").lower()
+    assert "qual unidade" not in (outbound.body or "").lower()
+    assert (outbound.payload or {}).get("mode") == "booking_wizard_day_select"
+    assert (outbound.payload or {}).get("procedure_type") == "Limpeza odontológica"
+    assert (outbound.payload or {}).get("unit_name") == "Unidade Paulista"
+
+
+def test_booking_wizard_no_slots_general_keeps_interactive_options(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Paulista")
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar um implante dentário na Unidade Paulista.",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "no_slots_general"
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert outbound is not None
+    assert outbound.message_type == "interactive_list"
+    rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    row_ids = {str(item.get("id") or "") for item in rows}
+    assert "day_change_service" in row_ids
+    assert "menu_human" in row_ids
 
     latest_outbound = db_session.scalar(
         select(Message)
@@ -1743,7 +2350,8 @@ def test_greeting_boa_noite_does_not_trigger_period_scheduling(seeded_db, db_ses
     assert outbound is not None
     assert outbound.message_type == "interactive_list"
     normalized = (outbound.body or "").lower()
-    assert "que bom te ver por aqui" in normalized
+    assert "sou luiza" in normalized
+    assert "bem-vindo à clínica" in normalized or "bem-vindo a clínica" in normalized
     assert "encontrei estes horÃ¡rios" not in normalized
     assert "encontrei estes horarios" not in normalized
     rows = (((outbound.payload or {}).get("interactive") or {}).get("rows") or [])
@@ -1774,8 +2382,20 @@ def test_greeting_with_intent_does_not_use_welcome_start_message(seeded_db, db_s
         inbound_message_id=inbound.id,
     )
 
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
     assert result["status"] == "responded"
     assert result.get("scheduling_mode") != "welcome_message_start"
+    assert outbound is not None
+    assert outbound.body.startswith("Olá! 😊")
 
 
 def test_idle_conversation_over_twenty_minutes_restarts_with_welcome_menu(seeded_db, db_session):

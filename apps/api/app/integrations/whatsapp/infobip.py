@@ -64,6 +64,30 @@ class InfobipWhatsAppProvider(WhatsAppProvider):
             )
         return response.json() if response.content else {'reachable': True}
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    def _get_bytes(self, *, url: str, api_key: str) -> tuple[bytes, dict]:
+        target = url if url.startswith('http://') or url.startswith('https://') else f'{self.base_url}{url}'
+        response = httpx.get(
+            target,
+            headers={
+                'Authorization': f'App {api_key}',
+                'Accept': '*/*',
+            },
+            timeout=30,
+        )
+        if response.is_error:
+            detail = self._extract_error_detail(response)
+            raise httpx.HTTPStatusError(
+                f'Infobip WhatsApp request failed ({response.status_code}): {detail}',
+                request=response.request,
+                response=response,
+            )
+        return response.content, {
+            'content_type': response.headers.get('content-type'),
+            'content_length': response.headers.get('content-length'),
+            'resolved_url': str(response.url),
+        }
+
     def send_text_message(self, *, phone_number_id: str, access_token: str, to: str, body: str) -> dict:
         payload = {
             'from': phone_number_id,
@@ -262,3 +286,15 @@ class InfobipWhatsAppProvider(WhatsAppProvider):
             'base_url': self.base_url,
             'details': result,
         }
+
+    def download_media(
+        self,
+        *,
+        access_token: str,
+        media_id: str | None = None,
+        media_url: str | None = None,
+    ) -> tuple[bytes, dict]:
+        resolved_url = (media_url or '').strip()
+        if not resolved_url:
+            raise ValueError('media_url obrigatoria para download de media da Infobip')
+        return self._get_bytes(url=resolved_url, api_key=access_token)

@@ -15,9 +15,10 @@ import {
   TemperatureBadge,
 } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { api } from "@/lib/api";
 import { ApiPage, ConversationItem, LeadItem, UserItem } from "@/lib/domain-types";
-import { formatDateTimeBR, formatPhoneBR, numberFormatter, STAGE_LABELS } from "@/lib/formatters";
+import { formatDateBR, formatDateTimeBR, formatPhoneBR, numberFormatter, STAGE_LABELS } from "@/lib/formatters";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
 
 const FUNNEL_STAGES = [
@@ -38,6 +39,11 @@ type LeadsDataset = {
 export default function LeadsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const ownerUnitScope = useOwnerUnitScope();
+  const selectedOwnerUnitId =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? ownerUnitScope.selectedUnitId
+      : null;
 
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
@@ -50,12 +56,16 @@ export default function LeadsPage() {
   const [origin, setOrigin] = useState("whatsapp");
 
   const leadsQuery = useQuery<LeadsDataset>({
-    queryKey: ["leads-dataset"],
+    queryKey: ["leads-dataset", selectedOwnerUnitId ?? "all"],
     queryFn: async () => {
       const [leadsResponse, usersResponse, conversationsResponse] = await Promise.all([
-        api.get<ApiPage<LeadItem>>("/leads", { params: { limit: 200, offset: 0 } }),
+        api.get<ApiPage<LeadItem>>("/leads", {
+          params: { limit: 200, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
+        }),
         api.get<ApiPage<UserItem>>("/users", { params: { limit: 100, offset: 0 } }),
-        api.get<ApiPage<ConversationItem>>("/conversations", { params: { limit: 200, offset: 0 } }),
+        api.get<ApiPage<ConversationItem>>("/conversations", {
+          params: { limit: 200, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
+        }),
       ]);
 
       return {
@@ -72,6 +82,7 @@ export default function LeadsPage() {
         name,
         phone: phone || null,
         interest: interest || null,
+        unit_id: selectedOwnerUnitId ?? null,
         origin,
         stage: "novo",
         score: 50,
@@ -112,6 +123,7 @@ export default function LeadsPage() {
         status: "ativo",
         origin: lead.origin || "whatsapp",
         tags: ["lead_convertido"],
+        unit_id: selectedOwnerUnitId ?? lead.unit_id ?? null,
       });
 
       await api.patch(`/leads/${lead.id}`, {
@@ -146,6 +158,7 @@ export default function LeadsPage() {
           await api.post<ConversationItem>("/conversations", {
             lead_id: lead.id,
             patient_id: lead.patient_id,
+            unit_id: selectedOwnerUnitId ?? lead.unit_id ?? null,
             channel: "whatsapp",
             assigned_user_id: lead.owner_user_id || null,
             tags: ["follow_up"],
@@ -172,6 +185,11 @@ export default function LeadsPage() {
 
   if (leadsQuery.isLoading) return <LoadingState message="Carregando funil comercial..." />;
   if (leadsQuery.isError || !leadsQuery.data) return <ErrorState message="Não foi possível carregar os leads." />;
+
+  const visibleUsers =
+    selectedOwnerUnitId
+      ? leadsQuery.data.users.filter((user) => !user.unit_id || user.unit_id === selectedOwnerUnitId)
+      : leadsQuery.data.users;
 
   const usersById = new Map(leadsQuery.data.users.map((item) => [item.id, item.full_name]));
 
@@ -216,6 +234,7 @@ export default function LeadsPage() {
         await api.post<ConversationItem>("/conversations", {
           lead_id: lead.id,
           patient_id: lead.patient_id || null,
+          unit_id: selectedOwnerUnitId ?? lead.unit_id ?? null,
           channel: "whatsapp",
           assigned_user_id: lead.owner_user_id || null,
           tags: ["lead"],
@@ -342,77 +361,116 @@ export default function LeadsPage() {
           rows={filteredLeads}
           getRowId={(item) => item.id}
           searchBy={(item) => `${item.name} ${item.phone ?? ""} ${item.interest ?? ""}`}
+          tableClassName="min-w-[1360px] table-fixed"
+          bodyWrapperClassName="max-h-[min(74vh,720px)] overflow-y-auto"
           columns={[
             {
-              key: "nome",
-              label: "Lead",
+              key: "lead_contato",
+              label: "Lead e contato",
+              className: "min-w-[250px] w-[250px]",
+              cellClassName: "min-w-[250px] w-[250px] break-normal",
               render: (item) => (
-                <div>
-                  <p className="font-semibold text-stone-800">{item.name}</p>
-                  <p className="text-xs text-stone-500">{item.origin ?? "Origem não informada"}</p>
+                <div className="space-y-2">
+                  <div>
+                    <p className="font-semibold text-stone-800">{item.name}</p>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <Badge className="bg-stone-100 text-stone-700">{item.origin ?? "Origem nao informada"}</Badge>
+                      {item.patient_id ? <Badge className="bg-emerald-100 text-emerald-700">Paciente vinculado</Badge> : null}
+                    </div>
+                  </div>
+                  <div className="space-y-1 text-xs text-stone-500">
+                    <p>{formatPhoneBR(item.phone)}</p>
+                    <p>{item.email?.trim() || "Sem e-mail"}</p>
+                  </div>
                 </div>
               ),
             },
             {
-              key: "telefone",
-              label: "Telefone",
-              render: (item) => formatPhoneBR(item.phone),
-            },
-            {
               key: "interesse",
-              label: "Interesse",
-              render: (item) => item.interest ?? "-",
+              label: "Interesse e entrada",
+              className: "min-w-[220px] w-[220px]",
+              cellClassName: "min-w-[220px] w-[220px] break-normal",
+              render: (item) => (
+                <div className="space-y-1">
+                  <p className="font-medium text-stone-800">{item.interest ?? "Interesse a definir"}</p>
+                  <p className="text-xs text-stone-500">Criado em {formatDateBR(item.created_at)}</p>
+                </div>
+              ),
             },
             {
-              key: "etapa",
-              label: "Etapa",
-              render: (item) => <StatusBadge value={STAGE_LABELS[item.stage] ?? item.stage} />,
+              key: "pipeline",
+              label: "Pipeline",
+              className: "min-w-[210px] w-[210px]",
+              cellClassName: "min-w-[210px] w-[210px] break-normal",
+              render: (item) => (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge value={STAGE_LABELS[item.stage] ?? item.stage} />
+                    <TemperatureBadge value={item.temperature} />
+                  </div>
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+                    <span className="font-semibold text-stone-800">Score {numberFormatter.format(item.score)}</span>
+                    <span className="ml-2">{item.status || "Sem status"}</span>
+                  </div>
+                </div>
+              ),
             },
             {
-              key: "score",
-              label: "Score",
-              render: (item) => numberFormatter.format(item.score),
-            },
-            {
-              key: "temperatura",
-              label: "Temperatura",
-              render: (item) => <TemperatureBadge value={item.temperature} />,
-            },
-            {
-              key: "ultima_interacao",
-              label: "Última interação",
-              render: (item) => formatDateTimeBR(lastInteractionByLead.get(item.id) ?? null),
+              key: "atividade",
+              label: "Atividade",
+              className: "min-w-[180px] w-[180px]",
+              cellClassName: "min-w-[180px] w-[180px] break-normal",
+              render: (item) => {
+                const lastInteraction = lastInteractionByLead.get(item.id) ?? null;
+                return (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-stone-800">
+                      {lastInteraction ? "Ultima mensagem" : "Sem interacao recente"}
+                    </p>
+                    <p className="text-xs text-stone-500">{formatDateTimeBR(lastInteraction)}</p>
+                  </div>
+                );
+              },
             },
             {
               key: "responsavel",
-              label: "Responsável",
+              label: "Responsavel",
+              className: "min-w-[240px] w-[240px]",
+              cellClassName: "min-w-[240px] w-[240px] break-normal",
               render: (item) => (
-                <select
-                  className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs"
-                  value={item.owner_user_id ?? ""}
-                  onChange={(event) =>
-                    updateLeadMutation.mutate({
-                      leadId: item.id,
-                      payload: { owner_user_id: event.target.value || null },
-                    })
-                  }
-                >
-                  <option value="">Não atribuído</option>
-                  {leadsQuery.data.users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.full_name}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-stone-600">
+                    {item.owner_user_id ? usersById.get(item.owner_user_id) ?? "Responsavel removido" : "Nao atribuido"}
+                  </p>
+                  <select
+                    className="h-9 w-full rounded-md border border-stone-300 bg-white px-2 text-xs"
+                    value={item.owner_user_id ?? ""}
+                    onChange={(event) =>
+                      updateLeadMutation.mutate({
+                        leadId: item.id,
+                        payload: { owner_user_id: event.target.value || null },
+                      })
+                    }
+                  >
+                    <option value="">Nao atribuido</option>
+                    {visibleUsers.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.full_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               ),
             },
             {
               key: "acoes",
-              label: "Ações",
+              label: "Acoes",
+              className: "min-w-[260px] w-[260px]",
+              cellClassName: "min-w-[260px] w-[260px] break-normal",
               render: (item) => (
-                <div className="flex flex-wrap gap-1">
+                <div className="space-y-2">
                   <select
-                    className="h-8 rounded-md border border-stone-300 bg-white px-2 text-xs"
+                    className="h-9 w-full rounded-md border border-stone-300 bg-white px-2 text-xs"
                     value={item.stage}
                     onChange={(event) => {
                       updateLeadMutation.mutate({
@@ -427,25 +485,27 @@ export default function LeadsPage() {
                       </option>
                     ))}
                   </select>
-                  <Button variant="outline" className="h-8 px-2 text-xs" onClick={() => openConversation(item)}>
-                    Conversa
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-8 px-2 text-xs"
-                    onClick={() => followUpMutation.mutate(item)}
-                    disabled={followUpMutation.isPending}
-                  >
-                    Follow-up
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-8 px-2 text-xs"
-                    onClick={() => convertLeadMutation.mutate(item)}
-                    disabled={convertLeadMutation.isPending}
-                  >
-                    Converter
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="outline" className="h-8 px-2 text-xs" onClick={() => openConversation(item)}>
+                      Conversa
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-8 px-2 text-xs"
+                      onClick={() => followUpMutation.mutate(item)}
+                      disabled={followUpMutation.isPending}
+                    >
+                      Follow-up
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="col-span-2 h-8 px-2 text-xs"
+                      onClick={() => convertLeadMutation.mutate(item)}
+                      disabled={convertLeadMutation.isPending}
+                    >
+                      Converter em paciente
+                    </Button>
+                  </div>
                 </div>
               ),
             },

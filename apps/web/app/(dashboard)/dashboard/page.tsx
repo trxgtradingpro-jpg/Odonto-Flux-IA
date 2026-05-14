@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -32,9 +32,13 @@ import {
 } from "@odontoflux/ui";
 
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
+import { useSession } from "@/hooks/use-session";
 import { api } from "@/lib/api";
+import { DEMO_TOUR_TARGETS, dispatchDemoTourEvent } from "@/lib/demo-tour";
 
 type PeriodPreset = "today" | "7d" | "30d" | "custom";
+type DashboardViewMode = "compact" | "full";
 
 type DateRange = {
   start: Date;
@@ -168,6 +172,17 @@ const PERIOD_OPTIONS: { id: PeriodPreset; label: string; days?: number }[] = [
   { id: "custom", label: "Personalizado" },
 ];
 
+const COMPACT_KPI_ORDER = [
+  "consultations-day",
+  "patients-waiting-return",
+  "confirmation-rate",
+  "cancellation-rate",
+  "avg-first-response",
+  "avg-resolution",
+  "budget-conversion",
+  "reactivated-patients",
+] as const;
+
 const numberFormatter = new Intl.NumberFormat("pt-BR");
 const percentFormatter = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 1,
@@ -201,6 +216,9 @@ const emptyDashboardData: DashboardDataset = {
     ai_handoff_rate: 0,
     avg_first_response_ai_minutes: 0,
     ai_send_failure_rate: 0,
+    ai_contract_valid_rate: 100,
+    ai_handoff_reasons: [],
+    ai_outbox_failure_reasons: [],
   },
   appointments: [],
   conversations: [],
@@ -371,6 +389,44 @@ function KpiCard({ item }: { item: KpiCardData }) {
           Comparação com período anterior: {formatMetricValue(item.previous, item.format)}
         </p>
         <p className="text-xs text-stone-500">{item.description}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CompactKpiCard({ item }: { item: KpiCardData }) {
+  const delta = comparisonDelta(item.current, item.previous);
+  const positive = delta >= 0;
+  const directionIsGood = item.higherIsBetter ? positive : !positive;
+  const signal = positive ? "+" : "";
+  const deltaLabel = `${signal}${percentFormatter.format(delta)}%`;
+
+  return (
+    <Card className="border-stone-200 bg-white shadow-sm shadow-stone-950/5">
+      <CardHeader className="space-y-2 pb-1">
+        <div className="h-1 w-12 rounded-full bg-gradient-to-r from-primary to-accent" />
+        <CardDescription className="line-clamp-2 text-xs font-semibold leading-5 text-stone-600">
+          {item.title}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 pt-0">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-2xl font-extrabold tracking-tight text-stone-950">
+            {formatMetricValue(item.current, item.format)}
+          </p>
+          <div
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
+              directionIsGood ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+            }`}
+          >
+            {positive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+            {deltaLabel}
+          </div>
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs text-stone-500">Comparacao com periodo anterior: {formatMetricValue(item.previous, item.format)}</p>
+          <p className="line-clamp-2 text-xs text-stone-500">{item.description}</p>
+        </div>
       </CardContent>
     </Card>
   );
@@ -561,12 +617,25 @@ function ColumnVolumeChart({ data, emptyMessage }: { data: DailyVolumePoint[]; e
 }
 
 export default function DashboardPage() {
+  const sessionQuery = useSession();
+  const ownerUnitScope = useOwnerUnitScope();
+  const isDemoUser = (sessionQuery.data?.roles ?? []).includes("demo_client");
+  const selectedOwnerUnitId =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? ownerUnitScope.selectedUnitId
+      : null;
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>("30d");
+  const [dashboardMode, setDashboardMode] = useState<DashboardViewMode>("compact");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
 
+  useEffect(() => {
+    if (!isDemoUser) return;
+    dispatchDemoTourEvent({ type: "dashboard_ready" });
+  }, [isDemoUser]);
+
   const { data, isLoading, isError } = useQuery<DashboardDataset>({
-    queryKey: ["dashboard-premium"],
+    queryKey: ["dashboard-premium", selectedOwnerUnitId ?? "all"],
     queryFn: async () => {
       const [
         kpisResponse,
@@ -578,18 +647,20 @@ export default function DashboardPage() {
         unitsResponse,
         campaignsResponse,
       ] = await Promise.all([
-        api.get<DashboardKPI>("/dashboards/kpis"),
+        api.get<DashboardKPI>("/dashboards/kpis", {
+          params: { unit_id: selectedOwnerUnitId ?? undefined },
+        }),
         api.get<ApiPage<AppointmentItem>>("/appointments", {
-          params: { limit: 100, offset: 0 },
+          params: { limit: 100, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
         }),
         api.get<ApiPage<ConversationItem>>("/conversations", {
-          params: { limit: 100, offset: 0 },
+          params: { limit: 100, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
         }),
         api.get<ApiPage<LeadItem>>("/leads", {
-          params: { limit: 100, offset: 0 },
+          params: { limit: 100, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
         }),
         api.get<ApiPage<PatientItem>>("/patients", {
-          params: { limit: 100, offset: 0 },
+          params: { limit: 100, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
         }),
         api.get<ApiPage<UserItem>>("/users", {
           params: { limit: 100, offset: 0 },
@@ -598,7 +669,7 @@ export default function DashboardPage() {
           params: { limit: 100, offset: 0 },
         }),
         api.get<ApiPage<CampaignItem>>("/campaigns", {
-          params: { limit: 100, offset: 0 },
+          params: { limit: 100, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
         }),
       ]);
 
@@ -842,7 +913,7 @@ export default function DashboardPage() {
     {
       key: "patients-waiting-return",
       title: "Pacientes aguardando retorno",
-      description: "Conversas aguardando ação da equipe.",
+      description: "Atendimentos do WhatsApp aguardando acao da equipe.",
       current: waitingConversationsCurrent,
       previous: waitingConversationsPrevious,
       format: "number",
@@ -858,6 +929,12 @@ export default function DashboardPage() {
       higherIsBetter: true,
     },
   ];
+
+  const compactKpiCards = (() => {
+    const byKey = new Map(kpiCards.map((item) => [item.key, item]));
+    return COMPACT_KPI_ORDER.map((key) => byKey.get(key)).filter((item): item is KpiCardData => Boolean(item));
+  })();
+  const compactHiddenKpiCount = Math.max(0, kpiCards.length - compactKpiCards.length);
 
   const leadsByOrigin = useMemo(() => {
     const grouped = new Map<string, number>();
@@ -1164,7 +1241,219 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <Card className="border-primary/20 bg-white">
+      {dashboardMode === "compact" ? (
+        <>
+          <Card className="border-primary/15 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+            <CardContent className="space-y-4 p-5 sm:p-6">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="bg-emerald-100 text-emerald-700">Painel rapido</Badge>
+                    <Badge className="bg-stone-100 text-stone-700">{activeRange.label}</Badge>
+                    {compactHiddenKpiCount > 0 ? (
+                      <Badge className="bg-sky-100 text-sky-700">+{compactHiddenKpiCount} indicadores no completo</Badge>
+                    ) : null}
+                  </div>
+                  <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-stone-950 sm:text-3xl">Dashboard operacional</h1>
+                    <p className="mt-1 max-w-3xl text-sm text-stone-600">
+                      Esta abertura mostra so o que ajuda a agir rapido. Graficos amplos, IA e distribuicoes ficam na versao completa.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:min-w-[320px]">
+                  <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-500">Periodo analisado</p>
+                    <p className="mt-1 text-sm font-semibold text-stone-900">{activeRange.label}</p>
+                    <p className="mt-1 text-xs text-stone-500">Comparacao automatica com o periodo anterior equivalente.</p>
+                  </div>
+                  <Button className="h-10" onClick={() => setDashboardMode("full")}>
+                    Abrir versao completa
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {PERIOD_OPTIONS.map((option) => (
+                  <Button
+                    key={option.id}
+                    variant={periodPreset === option.id ? "default" : "outline"}
+                    onClick={() => setPeriodPreset(option.id)}
+                    className="h-9"
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+
+              {periodPreset === "custom" ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:max-w-xl">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Data inicial</label>
+                    <Input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Data final</label>
+                    <Input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} />
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <div data-tour-id={DEMO_TOUR_TARGETS.dashboardMetrics} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {compactKpiCards.map((item) => (
+              <CompactKpiCard key={item.key} item={item} />
+            ))}
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[1.3fr_0.95fr]">
+            <Card className="border-stone-200 bg-white/95">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarClock size={18} className="text-primary" />
+                  Fila do dia
+                </CardTitle>
+                <CardDescription>Prioridades que pedem acao imediata da equipe hoje.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {queueOfDay.slice(0, 5).length ? (
+                  queueOfDay.slice(0, 5).map((item, index) => (
+                    <div key={`${item.type}-${item.person}-${index}`} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge className="bg-white text-stone-700">{item.type}</Badge>
+                            <Badge
+                              className={
+                                item.priority === "Alta"
+                                  ? "bg-red-100 text-red-700"
+                                  : item.priority === "Baixa"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-amber-100 text-amber-800"
+                              }
+                            >
+                              {item.priority}
+                            </Badge>
+                            <span className="text-xs font-medium text-stone-500">{item.time}</span>
+                          </div>
+                          <p className="text-sm font-semibold text-stone-900">{item.person}</p>
+                          <p className="text-xs text-stone-500">
+                            {item.unit} - {item.owner}
+                          </p>
+                        </div>
+                        <p className="max-w-[240px] text-right text-xs font-medium text-primary">{item.action}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
+                    <CheckCircle2 size={16} />
+                    Nenhuma pendencia critica na fila de hoje.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-3">
+              <Card className="border-stone-200 bg-white/95">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2">
+                    <Siren size={18} className="text-amber-600" />
+                    Alertas operacionais
+                  </CardTitle>
+                  <CardDescription>Leitura rapida dos desvios mais relevantes.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {alerts.slice(0, 3).map((alert) => (
+                    <div key={alert.title} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm font-semibold text-stone-800">{alert.title}</p>
+                        <Badge className={severityStyle(alert.severity)}>
+                          {alert.severity === "critical" ? "Critico" : alert.severity === "warning" ? "Atencao" : "Estavel"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-stone-600">{alert.description}</p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="border-stone-200 bg-white/95">
+                <CardHeader className="pb-3">
+                  <CardTitle>Resumo rapido da recepcao</CardTitle>
+                  <CardDescription>Status essencial do atendimento de hoje.</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Consultas do dia</p>
+                    <p className="mt-1 text-2xl font-bold text-stone-800">{numberFormatter.format(receptionSummary.total)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Confirmadas</p>
+                    <p className="mt-1 text-2xl font-bold text-emerald-700">{numberFormatter.format(receptionSummary.confirmed)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Pendentes</p>
+                    <p className="mt-1 text-2xl font-bold text-amber-700">{numberFormatter.format(receptionSummary.pending)}</p>
+                  </div>
+                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-stone-500">Canceladas e faltas</p>
+                    <p className="mt-1 text-2xl font-bold text-rose-700">
+                      {numberFormatter.format(receptionSummary.canceled + receptionSummary.noShow)}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
+            <Card className="border-stone-200 bg-white/95">
+              <CardHeader className="pb-3">
+                <CardTitle>Oportunidades de recuperacao</CardTitle>
+                <CardDescription>Ganhos rapidos que valem atencao ainda hoje.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {recoveryOpportunities.slice(0, 3).map((item) => (
+                  <div key={item.title} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                    <p className="text-sm font-semibold text-stone-800">{item.title}</p>
+                    <p className="mt-1 text-xs text-stone-600">{item.detail}</p>
+                    <p className="mt-1 text-xs font-medium text-primary">{item.action}</p>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-primary/15 bg-gradient-to-br from-white to-emerald-50">
+              <CardHeader className="pb-3">
+                <CardTitle>Analise completa</CardTitle>
+                <CardDescription>
+                  Abra a visao completa para ver saude da IA, graficos de tendencia, distribuicao por unidade, fila detalhada e SLA.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <Badge className="bg-white text-stone-700">Graficos</Badge>
+                  <Badge className="bg-white text-stone-700">IA</Badge>
+                  <Badge className="bg-white text-stone-700">Distribuicao</Badge>
+                  <Badge className="bg-white text-stone-700">SLA</Badge>
+                </div>
+                <Button className="w-full" onClick={() => setDashboardMode("full")}>
+                  Abrir painel completo
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex justify-end">
+            <Button variant="outline" className="h-9" onClick={() => setDashboardMode("compact")}>
+              Voltar para a versao compacta
+            </Button>
+          </div>
+          <Card className="border-primary/20 bg-white">
         <CardHeader className="gap-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-1">
@@ -1221,6 +1510,71 @@ export default function DashboardPage() {
           <KpiCard key={item.key} item={item} />
         ))}
       </div>
+
+      <Card className="border-blue-200 bg-blue-50">
+        <CardHeader>
+          <CardTitle>Saude da IA de conversa</CardTitle>
+          <CardDescription>
+            Qualidade do contrato, handoffs e falhas de envio do auto-responder.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-4">
+          <div className="rounded-lg border border-blue-100 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Contrato valido</p>
+            <p className="mt-1 text-2xl font-bold text-blue-900">
+              {percentFormatter.format(dataset.kpis.ai_contract_valid_rate)}%
+            </p>
+          </div>
+          <div className="rounded-lg border border-blue-100 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Automacao IA</p>
+            <p className="mt-1 text-2xl font-bold text-blue-900">
+              {percentFormatter.format(dataset.kpis.ai_automation_rate)}%
+            </p>
+          </div>
+          <div className="rounded-lg border border-blue-100 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Handoff IA</p>
+            <p className="mt-1 text-2xl font-bold text-blue-900">
+              {percentFormatter.format(dataset.kpis.ai_handoff_rate)}%
+            </p>
+          </div>
+          <div className="rounded-lg border border-blue-100 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Falha de envio</p>
+            <p className="mt-1 text-2xl font-bold text-blue-900">
+              {percentFormatter.format(dataset.kpis.ai_send_failure_rate)}%
+            </p>
+          </div>
+          <div className="rounded-lg border border-blue-100 bg-white p-3 lg:col-span-2">
+            <p className="text-sm font-semibold text-stone-800">Principais motivos de handoff</p>
+            <div className="mt-2 space-y-1 text-xs text-stone-600">
+              {dataset.kpis.ai_handoff_reasons.length ? (
+                dataset.kpis.ai_handoff_reasons.map((item) => (
+                  <p key={item.reason} className="flex justify-between gap-3">
+                    <span>{item.reason}</span>
+                    <span className="font-semibold">{numberFormatter.format(item.count)}</span>
+                  </p>
+                ))
+              ) : (
+                <p>Sem handoffs registrados.</p>
+              )}
+            </div>
+          </div>
+          <div className="rounded-lg border border-blue-100 bg-white p-3 lg:col-span-2">
+            <p className="text-sm font-semibold text-stone-800">Falhas recentes de outbox</p>
+            <div className="mt-2 space-y-1 text-xs text-stone-600">
+              {dataset.kpis.ai_outbox_failure_reasons.length ? (
+                dataset.kpis.ai_outbox_failure_reasons.map((item) => (
+                  <p key={item.reason} className="flex justify-between gap-3">
+                    <span>{item.reason}</span>
+                    <span className="font-semibold">{numberFormatter.format(item.count)}</span>
+                  </p>
+                ))
+              ) : (
+                <p>Sem falhas de envio da IA.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
@@ -1435,13 +1789,13 @@ export default function DashboardPage() {
               Distribuição por responsável
             </CardTitle>
             <CardDescription>
-              Conversas ativas distribuídas por usuário para balanceamento de carga.
+              Atendimentos do WhatsApp distribuidos por usuario para balanceamento de carga.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <HorizontalBars
               data={conversationsByOwner}
-              emptyMessage="Sem conversas ativas no período para distribuição da equipe."
+              emptyMessage="Sem atendimentos de WhatsApp ativos no periodo para distribuicao da equipe."
             />
           </CardContent>
         </Card>
@@ -1491,6 +1845,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+        </>
+      )}
     </div>
   );
 }

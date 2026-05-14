@@ -108,6 +108,83 @@ def test_meta_webhook_interactive_list_reply_creates_inbound_message(client, aut
     assert (message.payload or {}).get('interactive_reply', {}).get('id') == 'slot_3'
 
 
+def test_meta_audio_webhook_transcribes_inbound_message(client, auth_headers, seeded_db, db_session, monkeypatch):
+    from app.services import whatsapp_service
+
+    def _fake_download_whatsapp_audio_bytes(*, account, media):
+        return (
+            b'fake-audio-meta',
+            {
+                'content_type': 'audio/ogg',
+                'content_length': '15',
+                'resolved_url': 'https://media.example/meta-audio.ogg',
+            },
+        )
+
+    def _fake_transcribe_audio_bytes(content, *, mime_type=None, file_name=None):
+        assert content == b'fake-audio-meta'
+        assert mime_type == 'audio/ogg'
+        return {
+            'text': 'Preciso remarcar minha consulta para amanha cedo.',
+            'language': 'pt',
+            'language_probability': 0.99,
+            'duration_seconds': 6.4,
+            'model': 'base',
+        }
+
+    monkeypatch.setattr(whatsapp_service, '_download_whatsapp_audio_bytes', _fake_download_whatsapp_audio_bytes)
+    monkeypatch.setattr(whatsapp_service, 'transcribe_audio_bytes', _fake_transcribe_audio_bytes)
+
+    payload = {
+        'entry': [
+            {
+                'changes': [
+                    {
+                        'value': {
+                            'metadata': {'phone_number_id': 'phone_tenant_a'},
+                            'messages': [
+                                {
+                                    'id': 'wamid.audio.001',
+                                    'from': '11999995555',
+                                    'timestamp': '1712518004',
+                                    'type': 'audio',
+                                    'audio': {
+                                        'id': 'media.audio.001',
+                                        'mime_type': 'audio/ogg',
+                                        'sha256': 'abc123',
+                                        'voice': True,
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511999995555'))
+    assert patient is not None
+
+    message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == seeded_db['tenant_a'].id,
+            Message.direction == 'inbound',
+            Message.provider_message_id == 'wamid.audio.001',
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert message is not None
+    assert message.message_type == 'audio'
+    assert message.body == 'Preciso remarcar minha consulta para amanha cedo.'
+    assert (message.payload or {}).get('audio_transcription', {}).get('status') == 'completed'
+    assert (message.payload or {}).get('media', {}).get('media_id') == 'media.audio.001'
+
+
 def test_messages_endpoint_returns_most_recent_page(client, auth_headers, seeded_db, db_session):
     payload = {
         'entry': [
@@ -563,3 +640,73 @@ def test_twilio_webhook_creates_inbound_message(client, auth_headers, seeded_db,
     message = db_session.scalar(select(Message).where(Message.conversation_id == conversation.id))
     assert message is not None
     assert 'Twilio' in message.body
+
+
+def test_twilio_audio_webhook_transcribes_inbound_message(client, auth_headers, seeded_db, db_session, monkeypatch):
+    from app.services import whatsapp_service
+
+    tenant_id = seeded_db['tenant_a'].id
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    account.provider_name = 'twilio'
+    account.phone_number_id = 'whatsapp:+447860088970'
+    account.business_account_id = 'AC' + ('3' * 32)
+    account.access_token_encrypted = 'twilio-token-' + ('x' * 24)
+    db_session.add(account)
+    db_session.commit()
+
+    def _fake_download_whatsapp_audio_bytes(*, account, media):
+        assert media.get('media_url') == 'https://api.twilio.com/2010-04-01/Accounts/ACtest/Messages/MMtest/Media/MEaudio001'
+        return (
+            b'fake-audio-twilio',
+            {
+                'content_type': 'audio/ogg',
+                'content_length': '17',
+                'resolved_url': media.get('media_url'),
+            },
+        )
+
+    def _fake_transcribe_audio_bytes(content, *, mime_type=None, file_name=None):
+        assert content == b'fake-audio-twilio'
+        assert mime_type == 'audio/ogg'
+        return {
+            'text': 'Quero confirmar o horario das nove horas.',
+            'language': 'pt',
+            'language_probability': 0.98,
+            'duration_seconds': 4.2,
+            'model': 'base',
+        }
+
+    monkeypatch.setattr(whatsapp_service, '_download_whatsapp_audio_bytes', _fake_download_whatsapp_audio_bytes)
+    monkeypatch.setattr(whatsapp_service, 'transcribe_audio_bytes', _fake_transcribe_audio_bytes)
+
+    payload = {
+        'MessageSid': 'SMtwilio-audio-001',
+        'From': 'whatsapp:+5511999991212',
+        'To': 'whatsapp:+447860088970',
+        'Body': '',
+        'MessageStatus': 'received',
+        'SmsStatus': 'received',
+        'NumMedia': '1',
+        'MediaUrl0': 'https://api.twilio.com/2010-04-01/Accounts/ACtest/Messages/MMtest/Media/MEaudio001',
+        'MediaContentType0': 'audio/ogg',
+    }
+
+    response = client.post('/api/v1/webhooks/whatsapp', json=payload)
+    assert response.status_code == 200
+
+    patient = db_session.scalar(select(Patient).where(Patient.normalized_phone == '5511999991212'))
+    assert patient is not None
+
+    message = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.direction == 'inbound',
+            Message.provider_message_id == 'SMtwilio-audio-001',
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert message is not None
+    assert message.message_type == 'audio'
+    assert message.body == 'Quero confirmar o horario das nove horas.'
+    assert (message.payload or {}).get('audio_transcription', {}).get('status') == 'completed'

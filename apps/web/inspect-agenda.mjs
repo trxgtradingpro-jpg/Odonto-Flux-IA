@@ -1,0 +1,13 @@
+import { chromium, request } from '@playwright/test';
+const api = await request.newContext();
+const login = await api.post('http://nginx/api/v1/auth/login', { data: { email: 'owner@sorrisosul.com', password: 'Odonto@123' } });
+const payload = await login.json();
+const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true });
+const page = await browser.newPage();
+await page.goto('http://nginx/login', { waitUntil: 'domcontentloaded' });
+await page.evaluate((token) => window.localStorage.setItem('odontoflux_access_token', token), payload.access_token);
+await page.goto('http://nginx/agenda', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(12000);
+console.log((await page.textContent('body'))?.slice(0, 2500));
+await browser.close();
+await api.dispose();

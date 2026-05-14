@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class PatientCreate(BaseModel):
     full_name: str = Field(min_length=3)
     phone: str
+    cpf: str | None = None
     email: str | None = None
     birth_date: date | None = None
     operational_notes: str = ''
@@ -20,10 +21,14 @@ class PatientCreate(BaseModel):
 
 class PatientUpdate(BaseModel):
     full_name: str | None = None
+    phone: str | None = None
+    cpf: str | None = None
     email: str | None = None
     birth_date: date | None = None
     operational_notes: str | None = None
     status: str | None = None
+    origin: str | None = None
+    unit_id: UUID | None = None
     tags: list[str] | None = None
     lgpd_consent: bool | None = None
     marketing_opt_in: bool | None = None
@@ -35,8 +40,10 @@ class PatientOutput(BaseModel):
     unit_id: UUID | None
     full_name: str
     phone: str
+    cpf: str | None
     email: str | None
     birth_date: date | None
+    operational_notes: str
     status: str
     origin: str | None
     tags_cache: list[str]

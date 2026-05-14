@@ -24,7 +24,11 @@ def run_llm_task(
     raw_output = response['output']
     # O auto-responder ja possui guardrails proprios no fluxo de decisao.
     # Evitamos sobrescrever a resposta com fallback global aqui.
-    safe_output = raw_output if task == 'auto_responder' else apply_guardrails(raw_output)
+    safe_output = (
+        raw_output
+        if task in {'auto_responder', 'auto_responder_structured_extract', 'auto_responder_structured_reply'}
+        else apply_guardrails(raw_output)
+    )
 
     interaction = LLMInteraction(
         tenant_id=tenant_id,
@@ -69,11 +73,16 @@ def summarize_conversation(
     tenant_id: UUID,
     conversation_id: UUID,
     transcript: str,
+    additional_context: str | None = None,
 ) -> dict:
-    prompt = (
-        'Resuma em portugues foco operacional: status, proximo passo, pendencias e riscos. '
-        f'Historico: {transcript}'
-    )
+    additional_context_text = str(additional_context or "").strip()
+    prompt_parts = [
+        "Resuma em portugues foco operacional: status, proximo passo, pendencias e riscos.",
+    ]
+    if additional_context_text:
+        prompt_parts.append(f"Considere tambem este contexto adicional do atendente: {additional_context_text}")
+    prompt_parts.append(f"Historico: {transcript}")
+    prompt = " ".join(prompt_parts)
     return run_llm_task(
         db,
         tenant_id=tenant_id,

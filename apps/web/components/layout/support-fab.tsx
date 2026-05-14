@@ -1,168 +1,121 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { MessageCircle, Send, X } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
 
 import { api } from "@/lib/api";
-import { useLiveNotifications } from "@/hooks/use-live-notifications";
-import { useSession } from "@/hooks/use-session";
 
 type SupportMessage = {
   id: string;
   role: "assistant" | "user";
   content: string;
-};
-
-type AIKnowledgeBaseSettings = {
-  global?: {
-    clinic_profile?: {
-      clinic_name?: string;
-      about?: string;
-      differentials?: string[];
-    };
-    services?: Array<{ name?: string; description?: string }>;
-    operational_policies?: {
-      booking_rules?: string;
-      cancellation_policy?: string;
-      reschedule_policy?: string;
-      payment_policy?: string;
-      documents_required?: string;
-    };
-    faq?: Array<{ question?: string; answer?: string }>;
+  meta?: {
+    mode?: string;
+    confidence?: number;
+    knowledgeVersion?: string;
+    sources?: Array<{ id: string; title: string }>;
   };
 };
 
-function normalizedText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
+type SupportAIAnswer = {
+  answer: string;
+  confidence?: number;
+  mode?: string;
+  knowledge_version?: string;
+  sources?: Array<{ id: string; title: string }>;
+};
 
 export function SupportFab() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
   const [messages, setMessages] = useState<SupportMessage[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "Oi. Sou o suporte IA do OdontoFlux. Posso te ajudar com agenda, WhatsApp, IA, automacoes, tema e configuracoes.",
+        "Oi. Sou o suporte IA do OdontoFlux. Tenho contexto do sistema, configuracoes da clinica e base tecnica versionada para responder duvidas operacionais com precisao. Se algo nao estiver documentado, eu aviso em vez de inventar.",
     },
   ]);
 
-  const sessionQuery = useSession();
-  const notificationsQuery = useLiveNotifications();
-  const knowledgeQuery = useQuery<AIKnowledgeBaseSettings>({
-    queryKey: ["support-knowledge"],
-    queryFn: async () => (await api.get("/settings/ai-knowledge-base/config")).data,
-    staleTime: 60_000,
-  });
+  useEffect(() => {
+    if (!open) return;
+    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading, open]);
 
-  const servicesSummary = useMemo(() => {
-    const services = knowledgeQuery.data?.global?.services ?? [];
-    return services
-      .map((item) => item.name?.trim())
-      .filter(Boolean)
-      .slice(0, 6) as string[];
-  }, [knowledgeQuery.data?.global?.services]);
+  const isConversationPage = pathname === "/conversas";
+  const cardPositionClass = isConversationPage
+    ? "bottom-44 right-3 sm:bottom-40 sm:right-4 md:bottom-36 md:right-6"
+    : "bottom-32 right-3 sm:bottom-28 sm:right-4 md:bottom-24 md:right-6";
+  const fabPositionClass = isConversationPage
+    ? "bottom-28 right-3 sm:bottom-24 sm:right-4 md:bottom-20 md:right-6"
+    : "bottom-12 right-3 sm:bottom-10 sm:right-4 md:bottom-8 md:right-6";
 
-  function buildReply(question: string): string {
-    const q = normalizedText(question);
-    const tenantName = sessionQuery.data?.tenant_name ?? "sua clinica";
-    const badges = notificationsQuery.data?.badges;
-    const operationalPolicies = knowledgeQuery.data?.global?.operational_policies;
-    const faq = knowledgeQuery.data?.global?.faq ?? [];
-
-    const faqMatch = faq.find((item) => {
-      const source = normalizedText(`${item.question ?? ""} ${item.answer ?? ""}`);
-      return source && q && (source.includes(q) || q.includes(normalizedText(item.question ?? "")));
-    });
-    if (faqMatch?.answer) return faqMatch.answer;
-
-    if (q.includes("agenda") || q.includes("agendamento") || q.includes("horario")) {
-      const today = badges?.appointmentsToday ?? 0;
-      const pending = badges?.pendingConfirmations ?? 0;
-      return `Agenda ao vivo: ${today} consultas hoje e ${pending} pendentes de confirmacao. Abra Agenda para ver grade semanal, filtros por profissional, cores e tela cheia.`;
-    }
-
-    if (q.includes("whatsapp") || q.includes("infobip") || q.includes("meta") || q.includes("twilio")) {
-      return "Para WhatsApp: Configuracoes > WhatsApp. Cadastre conta, teste conexao, confirme webhook e mantenha o worker ativo para processamento automatico.";
-    }
-
-    if (q.includes("ia") || q.includes("autoresponder") || q.includes("auto responder")) {
-      return "Para IA: Configuracoes > IA Auto-Responder e Conhecimento IA. Ative no tenant/canal, ajuste horario, limite de respostas e base de conhecimento oficial.";
-    }
-
-    if (q.includes("tema") || q.includes("logo") || q.includes("cor")) {
-      return "Tema e marca: Configuracoes > Tema e Marca. Voce pode mudar cores principais, estilo da interface e subir logo da clinica.";
-    }
-
-    if (q.includes("servico") || q.includes("tratamento")) {
-      if (servicesSummary.length) {
-        return `Servicos cadastrados hoje em ${tenantName}: ${servicesSummary.join(", ")}.`;
-      }
-      return "Nao encontrei servicos cadastrados na base da IA. Preencha Configuracoes > Conhecimento IA para melhorar respostas.";
-    }
-
-    if (q.includes("cancel") || q.includes("remarc")) {
-      return (
-        operationalPolicies?.cancellation_policy ||
-        operationalPolicies?.reschedule_policy ||
-        "Configure politicas de cancelamento/remarcacao em Configuracoes > Conhecimento IA."
-      );
-    }
-
-    if (q.includes("pagamento") || q.includes("parcel")) {
-      return operationalPolicies?.payment_policy || "Defina politica de pagamento em Configuracoes > Conhecimento IA.";
-    }
-
-    if (q.includes("documento")) {
-      return (
-        operationalPolicies?.documents_required ||
-        "Defina documentos obrigatorios em Configuracoes > Conhecimento IA."
-      );
-    }
-
-    if (q.includes("menu") || q.includes("notificacao")) {
-      const conversations = badges?.conversations ?? 0;
-      const leads = badges?.leads ?? 0;
-      return `Menu com atualizacao automatica: ${conversations} conversas abertas e ${leads} leads ativos agora.`;
-    }
-
-    return "Posso te guiar por modulo. Tente: agenda, WhatsApp, IA, tema/logo, notificacoes, politicas de agendamento.";
-  }
-
-  function onSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const value = text.trim();
-    if (!value) return;
+    if (!value || loading) return;
 
     const userMessage: SupportMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: value,
     };
-    const assistantMessage: SupportMessage = {
-      id: `assistant-${Date.now()}`,
-      role: "assistant",
-      content: buildReply(value),
-    };
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setText("");
+    setLoading(true);
+
+    try {
+      const response = await api.post<SupportAIAnswer>("/support/ai-answer", {
+        question: value,
+        history: nextMessages.slice(-10).map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      });
+      const data = response.data;
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: data.answer,
+          meta: {
+            mode: data.mode,
+            confidence: data.confidence,
+            knowledgeVersion: data.knowledge_version,
+            sources: data.sources ?? [],
+          },
+        },
+      ]);
+    } catch {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          content:
+            "Nao consegui consultar a base de suporte IA agora. Tente novamente em alguns segundos ou abra a Central de Suporte para registrar um incidente com print e descricao do modulo.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <>
       {open ? (
-        <Card className="fixed bottom-24 right-3 z-[80] w-[min(94vw,360px)] border-emerald-300 shadow-2xl sm:bottom-24 sm:right-4 md:right-6">
+        <Card className={`fixed z-[80] w-[min(94vw,390px)] overflow-hidden border-emerald-300 shadow-2xl ${cardPositionClass}`}>
           <CardHeader className="space-y-2 bg-emerald-500 pb-3 text-white">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base text-white">Suporte IA</CardTitle>
+              <CardTitle className="text-base text-white">Suporte IA OdontoFlux</CardTitle>
               <button
                 type="button"
                 className="rounded-md p-1 text-white/90 transition hover:bg-white/20"
@@ -173,11 +126,14 @@ export function SupportFab() {
               </button>
             </div>
             <p className="text-xs text-emerald-50">
-              Respostas automaticas para duvidas operacionais do sistema.
+              Respostas sobre o sistema, WhatsApp, agenda, IA, configuracoes e implantacoes.
             </p>
           </CardHeader>
           <CardContent className="space-y-3 p-3">
-            <div className="max-h-[340px] space-y-2 overflow-y-auto rounded-md border border-stone-200 bg-stone-50 p-2">
+            <div
+              ref={messagesRef}
+              className="max-h-[360px] space-y-2 overflow-y-auto rounded-md border border-stone-200 bg-stone-50 p-2"
+            >
               {messages.map((message) => (
                 <div
                   key={message.id}
@@ -187,20 +143,38 @@ export function SupportFab() {
                       : "ml-8 bg-emerald-500 text-white"
                   }`}
                 >
-                  {message.content}
+                  <p className="whitespace-pre-wrap">{message.content}</p>
+                  {message.role === "assistant" && message.meta?.sources?.length ? (
+                    <div className="mt-2 rounded-md bg-emerald-50 px-2 py-1 text-[11px] text-emerald-900">
+                      <p className="font-semibold">
+                        Base: {message.meta.knowledgeVersion ?? "atual"} -{" "}
+                        {message.meta.mode === "llm" ? "IA conectada" : "fallback seguro"}
+                      </p>
+                      <p className="mt-0.5">
+                        Fontes: {message.meta.sources.map((source) => source.title).join(", ")}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               ))}
+              {loading ? (
+                <div className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm text-stone-700">
+                  Consultando base atualizada do OdontoFlux...
+                </div>
+              ) : null}
             </div>
             <form className="flex items-center gap-2" onSubmit={onSubmit}>
               <Input
-                placeholder="Digite sua duvida..."
+                placeholder="Digite sua duvida sobre o sistema..."
                 value={text}
                 onChange={(event) => setText(event.target.value)}
+                disabled={loading}
               />
               <Button
                 type="submit"
                 className="h-10 w-10 rounded-full bg-emerald-500 px-0 text-white hover:bg-emerald-600"
                 aria-label="Enviar pergunta"
+                disabled={loading || !text.trim()}
               >
                 <Send size={16} />
               </Button>
@@ -212,7 +186,7 @@ export function SupportFab() {
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="fixed bottom-4 right-3 z-[70] inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300 sm:bottom-5 sm:right-4 sm:h-14 sm:w-14 md:right-6"
+        className={`fixed z-[70] inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300 sm:h-14 sm:w-14 ${fabPositionClass}`}
         aria-label="Abrir suporte IA"
       >
         <MessageCircle size={22} />

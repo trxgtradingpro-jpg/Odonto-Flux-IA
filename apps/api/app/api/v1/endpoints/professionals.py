@@ -10,9 +10,24 @@ from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Appointment, Professional, Unit
 from app.schemas.professional import ProfessionalCreate, ProfessionalOutput, ProfessionalUpdate
+from app.services.appointment_validation_service import (
+    backfill_missing_appointment_professionals,
+    rebalance_future_unit_appointments,
+)
 from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/professionals", tags=["professionals"])
+
+
+def _normalize_professional_payload(raw_payload: dict) -> dict:
+    data = dict(raw_payload)
+    specialty = str(data.get("specialty") or "").strip() or None
+    procedures = [str(item or "").strip() for item in (data.get("procedures") or []) if str(item or "").strip()]
+    if specialty and specialty not in procedures:
+        procedures.append(specialty)
+    data["specialty"] = specialty
+    data["procedures"] = procedures
+    return data
 
 
 @router.get("")
@@ -55,10 +70,28 @@ def create_professional(
         if not unit:
             raise ApiError(status_code=404, code="UNIT_NOT_FOUND", message="Unidade nao encontrada")
 
-    item = Professional(tenant_id=tenant_id, **payload.model_dump())
+    item = Professional(tenant_id=tenant_id, **_normalize_professional_payload(payload.model_dump()))
     db.add(item)
     db.commit()
     db.refresh(item)
+    backfill_summary = (
+        backfill_missing_appointment_professionals(
+            db,
+            tenant_id=tenant_id,
+            unit_id=item.unit_id,
+        )
+        if item.is_active
+        else {"assigned": 0, "unresolved": 0}
+    )
+    rebalance_summary = (
+        rebalance_future_unit_appointments(
+            db,
+            tenant_id=tenant_id,
+            unit_id=item.unit_id,
+        )
+        if item.is_active and item.unit_id
+        else {"moved": 0, "unchanged": 0, "unresolved": 0}
+    )
 
     record_audit(
         db,
@@ -67,7 +100,14 @@ def create_professional(
         entity_id=str(item.id),
         tenant_id=tenant_id,
         user_id=principal.user.id,
-        metadata={"unit_id": str(item.unit_id) if item.unit_id else None},
+        metadata={
+            "unit_id": str(item.unit_id) if item.unit_id else None,
+            "backfill_assigned": int(backfill_summary.get("assigned", 0)),
+            "backfill_unresolved": int(backfill_summary.get("unresolved", 0)),
+            "rebalance_moved": int(rebalance_summary.get("moved", 0)),
+            "rebalance_unchanged": int(rebalance_summary.get("unchanged", 0)),
+            "rebalance_unresolved": int(rebalance_summary.get("unresolved", 0)),
+        },
     )
     return ProfessionalOutput.model_validate(item, from_attributes=True)
 
@@ -89,7 +129,7 @@ def update_professional(
     if not item:
         raise ApiError(status_code=404, code="PROFESSIONAL_NOT_FOUND", message="Profissional nao encontrado")
 
-    updates = payload.model_dump(exclude_unset=True)
+    updates = _normalize_professional_payload(payload.model_dump(exclude_unset=True))
     unit_id = updates.get("unit_id")
     if unit_id:
         unit = db.scalar(select(Unit).where(Unit.id == unit_id, Unit.tenant_id == tenant_id))
@@ -101,6 +141,24 @@ def update_professional(
     db.add(item)
     db.commit()
     db.refresh(item)
+    backfill_summary = (
+        backfill_missing_appointment_professionals(
+            db,
+            tenant_id=tenant_id,
+            unit_id=item.unit_id,
+        )
+        if item.is_active
+        else {"assigned": 0, "unresolved": 0}
+    )
+    rebalance_summary = (
+        rebalance_future_unit_appointments(
+            db,
+            tenant_id=tenant_id,
+            unit_id=item.unit_id,
+        )
+        if item.is_active and item.unit_id
+        else {"moved": 0, "unchanged": 0, "unresolved": 0}
+    )
 
     record_audit(
         db,
@@ -109,7 +167,14 @@ def update_professional(
         entity_id=str(item.id),
         tenant_id=tenant_id,
         user_id=principal.user.id,
-        metadata=updates,
+        metadata={
+            **updates,
+            "backfill_assigned": int(backfill_summary.get("assigned", 0)),
+            "backfill_unresolved": int(backfill_summary.get("unresolved", 0)),
+            "rebalance_moved": int(rebalance_summary.get("moved", 0)),
+            "rebalance_unchanged": int(rebalance_summary.get("unchanged", 0)),
+            "rebalance_unresolved": int(rebalance_summary.get("unresolved", 0)),
+        },
     )
     return ProfessionalOutput.model_validate(item, from_attributes=True)
 
@@ -140,8 +205,23 @@ def delete_professional(
     ).rowcount or 0
 
     professional_name = item.full_name
+    professional_unit_id = item.unit_id
     db.delete(item)
     db.commit()
+    backfill_summary = backfill_missing_appointment_professionals(
+        db,
+        tenant_id=tenant_id,
+        unit_id=professional_unit_id,
+    )
+    rebalance_summary = (
+        rebalance_future_unit_appointments(
+            db,
+            tenant_id=tenant_id,
+            unit_id=professional_unit_id,
+        )
+        if professional_unit_id
+        else {"moved": 0, "unchanged": 0, "unresolved": 0}
+    )
 
     record_audit(
         db,
@@ -153,6 +233,11 @@ def delete_professional(
         metadata={
             "full_name": professional_name,
             "reassigned_appointments": int(reassigned_appointments),
+            "backfill_assigned": int(backfill_summary.get("assigned", 0)),
+            "backfill_unresolved": int(backfill_summary.get("unresolved", 0)),
+            "rebalance_moved": int(rebalance_summary.get("moved", 0)),
+            "rebalance_unchanged": int(rebalance_summary.get("unchanged", 0)),
+            "rebalance_unresolved": int(rebalance_summary.get("unresolved", 0)),
         },
     )
 

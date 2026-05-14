@@ -8,6 +8,7 @@ class LeadCreate(BaseModel):
     name: str
     phone: str | None = None
     email: str | None = None
+    unit_id: UUID | None = None
     origin: str | None = None
     interest: str | None = None
     stage: str = 'novo'
@@ -19,6 +20,7 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
+    unit_id: UUID | None = None
     stage: str | None = None
     score: int | None = None
     temperature: str | None = None
@@ -31,6 +33,7 @@ class LeadUpdate(BaseModel):
 class LeadOutput(BaseModel):
     id: UUID
     tenant_id: UUID
+    unit_id: UUID | None = None
     patient_id: UUID | None
     owner_user_id: UUID | None
     name: str

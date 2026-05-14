@@ -58,3 +58,12 @@ class WhatsAppProvider(ABC):
             to=to,
             body=body,
         )
+
+    def download_media(
+        self,
+        *,
+        access_token: str,
+        media_id: str | None = None,
+        media_url: str | None = None,
+    ) -> tuple[bytes, dict]:
+        raise NotImplementedError

@@ -1,8 +1,10 @@
 import os
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.security import hash_password
@@ -14,17 +16,34 @@ from app.models import Role, Tenant, TenantPlan, User, UserRole, WhatsAppAccount
 @pytest.fixture(scope='session')
 def test_engine():
     database_url = os.getenv('TEST_DATABASE_URL', os.getenv('DATABASE_URL', 'postgresql+psycopg2://odontoflux:odontoflux@localhost:5432/odontoflux'))
-    engine = create_engine(database_url)
+    base_url = make_url(database_url)
+    temp_database_name = f'odontoflux_test_{uuid4().hex[:10]}'
+    admin_url = base_url.set(database='postgres')
+    admin_engine = create_engine(admin_url, isolation_level='AUTOCOMMIT')
+
     try:
-        with engine.connect() as conn:
+        with admin_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-            conn.commit()
+            conn.execute(text(f'CREATE DATABASE "{temp_database_name}"'))
     except Exception as exc:
+        admin_engine.dispose()
         pytest.skip(f'Database indisponivel para testes de integracao: {exc}')
 
+    engine = create_engine(base_url.set(database=temp_database_name))
     Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+    with admin_engine.connect() as conn:
+        conn.execute(
+            text(
+                "SELECT pg_terminate_backend(pid) "
+                "FROM pg_stat_activity "
+                "WHERE datname = :database_name AND pid <> pg_backend_pid()"
+            ),
+            {'database_name': temp_database_name},
+        )
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{temp_database_name}"'))
+    admin_engine.dispose()
 
 
 @pytest.fixture()

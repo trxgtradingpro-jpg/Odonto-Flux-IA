@@ -43,7 +43,8 @@ make migrate
 make seed
 ```
 5. Acesse:
-- Web: http://localhost:3000
+- Web (via Nginx): http://localhost:8080
+- Web (direto no Next.js): http://localhost:3000
 - API: http://localhost:8000
 - OpenAPI: http://localhost:8000/api/v1/docs
 

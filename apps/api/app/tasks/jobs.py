@@ -8,9 +8,82 @@ from app.core.logging import logger
 from app.db.session import SessionLocal
 from app.models import Job
 from app.services.automation_service import execute_automation_run, run_time_triggers
+from app.services.backup_service import run_due_automatic_backups
 from app.services.billing_gateway_service import run_delinquency_check
+from app.services.demo_whatsapp_simulation_service import process_demo_whatsapp_reply_simulation
 from app.services.monitoring_service import monitoring_snapshot
-from app.services.whatsapp_service import process_outbox_batch
+from app.services.whatsapp_service import process_inbound_audio_message, process_outbox_batch
+
+
+@shared_task(name='app.tasks.jobs.process_ai_autoresponder_inbound_task', bind=True, max_retries=2)
+def process_ai_autoresponder_inbound_task(self, tenant_id: str, conversation_id: str, inbound_message_id: str):
+    db = SessionLocal()
+    try:
+        from app.services.ai_autoresponder_service import process_inbound_message
+
+        return process_inbound_message(
+            db,
+            tenant_id=UUID(tenant_id),
+            conversation_id=UUID(conversation_id),
+            inbound_message_id=UUID(inbound_message_id),
+        )
+    except Exception as exc:
+        logger.exception(
+            'ai_autoresponder.inbound_task_failed',
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            message_id=inbound_message_id,
+            error=str(exc),
+        )
+        raise self.retry(exc=exc, countdown=2**self.request.retries)
+    finally:
+        db.close()
+
+
+@shared_task(name='app.tasks.jobs.process_whatsapp_audio_inbound_task', bind=True, max_retries=2)
+def process_whatsapp_audio_inbound_task(self, tenant_id: str, conversation_id: str, inbound_message_id: str):
+    db = SessionLocal()
+    try:
+        return process_inbound_audio_message(
+            db,
+            tenant_id=UUID(tenant_id),
+            conversation_id=UUID(conversation_id),
+            inbound_message_id=UUID(inbound_message_id),
+        )
+    except Exception as exc:
+        logger.exception(
+            'whatsapp_audio.inbound_task_failed',
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            message_id=inbound_message_id,
+            error=str(exc),
+        )
+        raise self.retry(exc=exc, countdown=2**self.request.retries)
+    finally:
+        db.close()
+
+
+@shared_task(name='app.tasks.jobs.process_demo_whatsapp_reply_simulation_task', bind=True, max_retries=1)
+def process_demo_whatsapp_reply_simulation_task(self, tenant_id: str, conversation_id: str, outbound_message_id: str):
+    db = SessionLocal()
+    try:
+        return process_demo_whatsapp_reply_simulation(
+            db,
+            tenant_id=UUID(tenant_id),
+            conversation_id=UUID(conversation_id),
+            outbound_message_id=UUID(outbound_message_id),
+        )
+    except Exception as exc:
+        logger.exception(
+            'demo_whatsapp_simulation.task_failed',
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            outbound_message_id=outbound_message_id,
+            error=str(exc),
+        )
+        raise self.retry(exc=exc, countdown=2**self.request.retries)
+    finally:
+        db.close()
 
 
 @shared_task(name='app.tasks.jobs.execute_automation_run_task', bind=True, max_retries=3)
@@ -117,5 +190,14 @@ def monitor_platform_health_task():
             'failed_jobs_last_hour': snapshot['errors']['failed_jobs_last_hour'],
             'critical_incidents': snapshot['incidents']['critical_open'],
         }
+    finally:
+        db.close()
+
+
+@shared_task(name='app.tasks.jobs.run_automatic_backups_task')
+def run_automatic_backups_task():
+    db = SessionLocal()
+    try:
+        return run_due_automatic_backups(db)
     finally:
         db.close()

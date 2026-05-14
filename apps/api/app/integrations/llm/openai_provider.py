@@ -77,7 +77,13 @@ class OpenAILLMProvider(LLMProvider):
             'temperature': 0.2,
         }
 
-        if task in {'classify_intent', 'lead_temperature'}:
+        if task in {
+            'classify_intent',
+            'lead_temperature',
+            'auto_responder',
+            'auto_responder_structured_extract',
+            'auto_responder_structured_reply',
+        }:
             payload['response_format'] = {'type': 'json_object'}
 
         data, request_id = self._post(payload)

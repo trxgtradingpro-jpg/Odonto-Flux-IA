@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DashboardKPIOutput(BaseModel):
@@ -18,3 +18,6 @@ class DashboardKPIOutput(BaseModel):
     ai_handoff_rate: float = 0.0
     avg_first_response_ai_minutes: float = 0.0
     ai_send_failure_rate: float = 0.0
+    ai_contract_valid_rate: float = 100.0
+    ai_handoff_reasons: list[dict] = Field(default_factory=list)
+    ai_outbox_failure_reasons: list[dict] = Field(default_factory=list)

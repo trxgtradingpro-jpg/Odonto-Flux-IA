@@ -23,6 +23,8 @@ export type PremiumColumn<T> = {
   label: string;
   render: (row: T) => ReactNode;
   className?: string;
+  headerClassName?: string;
+  cellClassName?: string;
 };
 
 export function DataTable<T>({
@@ -35,6 +37,8 @@ export function DataTable<T>({
   rightHeader,
   emptyTitle = "Sem resultados",
   emptyDescription = "Ajuste os filtros para visualizar os dados.",
+  tableClassName,
+  bodyWrapperClassName,
 }: {
   title: string;
   rows: T[];
@@ -45,6 +49,8 @@ export function DataTable<T>({
   rightHeader?: ReactNode;
   emptyTitle?: string;
   emptyDescription?: string;
+  tableClassName?: string;
+  bodyWrapperClassName?: string;
 }) {
   const [search, setSearch] = useState("");
 
@@ -77,12 +83,12 @@ export function DataTable<T>({
       <CardContent className="space-y-3">
         {filteredRows.length ? (
           <div className="overflow-x-auto rounded-xl border border-stone-200">
-            <div className="max-h-[min(72vh,680px)] overflow-y-auto">
-              <Table className="min-w-[700px]">
+            <div className={bodyWrapperClassName ?? "max-h-[min(72vh,680px)] overflow-y-auto"}>
+              <Table className={tableClassName ?? "min-w-[700px]"}>
                 <THead>
                   <TR>
                     {columns.map((column) => (
-                      <TH key={column.key} className={column.className}>
+                      <TH key={column.key} className={column.headerClassName ?? column.className}>
                         {column.label}
                       </TH>
                     ))}
@@ -95,7 +101,7 @@ export function DataTable<T>({
                       className={index % 2 ? "bg-white" : "bg-stone-50/40"}
                     >
                       {columns.map((column) => (
-                        <TD key={column.key} className={column.className}>
+                        <TD key={column.key} className={column.cellClassName ?? column.className}>
                           {column.render(row)}
                         </TD>
                       ))}

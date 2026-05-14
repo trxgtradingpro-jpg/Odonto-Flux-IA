@@ -47,6 +47,10 @@ class ConversationAIAutoresponderUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class ConversationSummaryRequest(BaseModel):
+    additional_context: str | None = None
+
+
 class MessageCreate(BaseModel):
     conversation_id: UUID
     body: str
@@ -58,9 +62,13 @@ class MessageOutput(BaseModel):
     tenant_id: UUID
     conversation_id: UUID
     direction: str
+    provider_message_id: str | None = None
     status: str
     body: str
     message_type: str
     sender_type: str
+    payload: dict = {}
     sent_at: datetime | None
+    delivered_at: datetime | None
+    read_at: datetime | None
     created_at: datetime

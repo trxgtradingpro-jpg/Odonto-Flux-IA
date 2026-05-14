@@ -9,10 +9,13 @@ node_modules/
 .next/
 out/
 dist/
+.turbo/
+*.tsbuildinfo
 coverage/
 htmlcov/
 .pytest_cache/
 .playwright/
+apps/web/playwright/.auth/
 .DS_Store
 .vscode/
 .idea/

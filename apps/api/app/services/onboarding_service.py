@@ -113,8 +113,8 @@ def onboarding_status(db: Session, tenant_id) -> dict:
         },
         {
             'id': 'tour_conversas',
-            'title': 'Operacao de atendimento',
-            'description': 'Aprenda triagem de conversas e acompanhamento por responsavel.',
+            'title': 'Operacao no WhatsApp',
+            'description': 'Aprenda triagem do WhatsApp e acompanhamento por responsavel.',
             'href': '/conversas',
             'duration_minutes': 6,
         },

@@ -18,6 +18,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDTimestampMixin
 from app.models.enums import (
+    AppointmentAttendanceStatus,
+    AppointmentNextAppointmentStatus,
     AppointmentStatus,
     AutomationTriggerType,
     CampaignStatus,
@@ -92,11 +94,14 @@ class User(UUIDTimestampMixin, Base):
     __tablename__ = "users"
 
     tenant_id: Mapped[UUID | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    unit_id: Mapped[UUID | None] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"), index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(180))
     hashed_password: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(30))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    page_permissions: Mapped[dict] = mapped_column(JSONB, default=dict)
+    force_fullscreen_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -109,6 +114,128 @@ class UserRole(UUIDTimestampMixin, Base):
     role_id: Mapped[UUID] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), index=True)
 
     __table_args__ = (UniqueConstraint("tenant_id", "user_id", "role_id", name="uq_tenant_user_role"),)
+
+
+class ProspectAccount(UUIDTimestampMixin, Base):
+    __tablename__ = "prospect_accounts"
+
+    tenant_seed_key: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
+    clinic_name: Mapped[str] = mapped_column(String(255), index=True)
+    owner_name: Mapped[str | None] = mapped_column(String(180))
+    manager_name: Mapped[str | None] = mapped_column(String(180))
+    phone: Mapped[str | None] = mapped_column(String(30), index=True)
+    whatsapp_phone: Mapped[str | None] = mapped_column(String(30), index=True)
+    email: Mapped[str | None] = mapped_column(String(255), index=True)
+    website: Mapped[str | None] = mapped_column(String(255), index=True)
+    city: Mapped[str | None] = mapped_column(String(120), index=True)
+    state: Mapped[str | None] = mapped_column(String(80), index=True)
+    main_address: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    lead_source: Mapped[str | None] = mapped_column(String(120), index=True)
+    first_contact_channel: Mapped[str | None] = mapped_column(String(40), index=True)
+    first_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    uses_whatsapp_heavily: Mapped[bool] = mapped_column(Boolean, default=False)
+    estimated_volume: Mapped[int | None] = mapped_column(Integer)
+    main_pain: Mapped[str | None] = mapped_column(String(255))
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    temperature: Mapped[str] = mapped_column(String(30), default="frio", index=True)
+    status: Mapped[str] = mapped_column(String(60), default="novo", index=True)
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    test_phone_number: Mapped[str | None] = mapped_column(String(30))
+    do_not_contact: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    opt_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    legal_basis: Mapped[str] = mapped_column(String(80), default="interesse_legitimo_b2b")
+    demo_tenant_id: Mapped[UUID | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"), index=True)
+    demo_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    demo_login_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    demo_access_token_hash: Mapped[str | None] = mapped_column(String(255), index=True)
+    demo_access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_access_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_first_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_status: Mapped[str] = mapped_column(String(40), default="rascunho", index=True)
+    demo_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    demo_checklist: Mapped[dict] = mapped_column(JSONB, default=dict)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    score_explanation: Mapped[dict] = mapped_column(JSONB, default=dict)
+    proposal_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
+    roi_inputs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    updated_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+    __table_args__ = (
+        Index("ix_prospect_accounts_contact_dedupe", "whatsapp_phone", "phone", "website"),
+    )
+
+
+class ProspectUnit(UUIDTimestampMixin, Base):
+    __tablename__ = "prospect_units"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    unit_name: Mapped[str] = mapped_column(String(180))
+    address: Mapped[str] = mapped_column(Text, default="")
+    phone: Mapped[str | None] = mapped_column(String(30))
+    email: Mapped[str | None] = mapped_column(String(255))
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ProspectService(UUIDTimestampMixin, Base):
+    __tablename__ = "prospect_services"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    service_name: Mapped[str] = mapped_column(String(180), index=True)
+    category: Mapped[str | None] = mapped_column(String(120))
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    price_range: Mapped[str | None] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
+class ProspectNote(UUIDTimestampMixin, Base):
+    __tablename__ = "prospect_notes"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    author_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    note_type: Mapped[str] = mapped_column(String(40), default="nota")
+
+
+class ProspectTimelineEvent(UUIDTimestampMixin, Base):
+    __tablename__ = "prospect_timeline_events"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    actor_type: Mapped[str] = mapped_column(String(40), default="system")
+    actor_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    event_label: Mapped[str] = mapped_column(String(180))
+    payload_json: Mapped[dict] = mapped_column("payload", JSONB, default=dict)
+
+
+class DemoActivityEvent(UUIDTimestampMixin, Base):
+    __tablename__ = "demo_activity_events"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    demo_tenant_id: Mapped[UUID | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    demo_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    event_name: Mapped[str] = mapped_column(String(80), index=True)
+    page_path: Mapped[str | None] = mapped_column(String(255), index=True)
+    payload_json: Mapped[dict] = mapped_column("payload", JSONB, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+
+
+class AIProvisioningRun(UUIDTimestampMixin, Base):
+    __tablename__ = "ai_provisioning_runs"
+
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    input_json: Mapped[dict] = mapped_column("input", JSONB, default=dict)
+    output_json: Mapped[dict] = mapped_column("output", JSONB, default=dict)
+    model_name: Mapped[str | None] = mapped_column(String(120))
+    tokens_in: Mapped[int | None] = mapped_column(Integer)
+    tokens_out: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class RefreshToken(UUIDTimestampMixin, Base):
@@ -152,7 +279,7 @@ class Professional(UUIDTimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(180))
     cro_number: Mapped[str | None] = mapped_column(String(80))
     specialty: Mapped[str | None] = mapped_column(String(120))
-    working_days: Mapped[list[int]] = mapped_column(JSONB, default=lambda: [0, 1, 2, 3, 4])
+    working_days: Mapped[list[int]] = mapped_column(JSONB, default=lambda: [1, 2, 3, 4, 5])
     shift_start: Mapped[str] = mapped_column(String(5), default="08:00")
     shift_end: Mapped[str] = mapped_column(String(5), default="18:00")
     procedures: Mapped[list[str]] = mapped_column(JSONB, default=list)
@@ -179,6 +306,8 @@ class Patient(UUIDTimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(180), index=True)
     phone: Mapped[str] = mapped_column(String(30), index=True)
     normalized_phone: Mapped[str] = mapped_column(String(30), index=True)
+    cpf: Mapped[str | None] = mapped_column(String(20))
+    normalized_cpf: Mapped[str | None] = mapped_column(String(20), index=True)
     email: Mapped[str | None] = mapped_column(String(255))
     birth_date: Mapped[date | None] = mapped_column(Date)
     operational_notes: Mapped[str] = mapped_column(Text, default="")
@@ -190,7 +319,10 @@ class Patient(UUIDTimestampMixin, Base):
     tags_cache: Mapped[list[str]] = mapped_column(JSONB, default=list)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (UniqueConstraint("tenant_id", "normalized_phone", name="uq_patient_tenant_phone"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "normalized_phone", name="uq_patient_tenant_phone"),
+        UniqueConstraint("tenant_id", "normalized_cpf", name="uq_patient_tenant_cpf"),
+    )
 
 
 class PatientContact(UUIDTimestampMixin, Base):
@@ -351,6 +483,12 @@ class Appointment(UUIDTimestampMixin, Base):
     )
     origin: Mapped[str] = mapped_column(String(80), default="manual")
     notes: Mapped[str] = mapped_column(Text, default="")
+    attendance_status: Mapped[AppointmentAttendanceStatus] = mapped_column(String(40), default=AppointmentAttendanceStatus.PENDING.value)
+    attendance_notes: Mapped[str] = mapped_column(Text, default="")
+    next_appointment_status: Mapped[AppointmentNextAppointmentStatus] = mapped_column(
+        String(40),
+        default=AppointmentNextAppointmentStatus.UNDEFINED.value,
+    )
     confirmation_status: Mapped[str] = mapped_column(String(40), default="pendente")
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     canceled_reason: Mapped[str | None] = mapped_column(String(255))

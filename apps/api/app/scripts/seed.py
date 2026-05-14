@@ -77,6 +77,16 @@ ROLE_PERMISSIONS = {
 }
 
 
+def _add_business_days(base: datetime, business_days: int) -> datetime:
+    current = base
+    remaining = business_days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
 def upsert_roles(db):
     role_map = {}
     for role_name, permissions in ROLE_PERMISSIONS.items():
@@ -142,7 +152,7 @@ def create_unit_if_missing(db, tenant_id, code, name, phone):
             phone=phone,
             email=f"{code.lower()}@clinic.com",
             address={"city": "Sao Paulo", "state": "SP"},
-            working_hours={"seg-sex": "08:00-18:00", "sab": "08:00-12:00"},
+            working_hours={"seg-sex": "08:00-18:00"},
         )
         db.add(item)
         db.flush()
@@ -388,7 +398,10 @@ def create_sample_data_for_tenant(db, tenant, unit_a, unit_b, owner_user):
         ("agendada", "pendente", 6),
     ]
     for idx, patient in enumerate(patients, start=1):
-        starts = datetime.now(UTC) + timedelta(days=idx)
+        starts = _add_business_days(
+            datetime.now(UTC).replace(hour=9, minute=0, second=0, microsecond=0),
+            idx,
+        )
         status, confirmation_status, _ = appointment_profiles[idx - 1]
 
         appointment = Appointment(

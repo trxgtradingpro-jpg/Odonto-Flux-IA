@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_principal, get_request_meta
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import Tenant
+from app.models import Tenant, Unit
 from app.schemas.auth import (
     LoginInput,
     PasswordResetConfirmInput,
@@ -92,17 +92,24 @@ def reset_password_confirm(payload: PasswordResetConfirmInput, db: Session = Dep
 @router.get('/me')
 def me(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     tenant = None
+    unit = None
     if principal.user.tenant_id:
         tenant = db.scalar(select(Tenant).where(Tenant.id == principal.user.tenant_id))
+    if principal.user.unit_id:
+        unit = db.scalar(select(Unit).where(Unit.id == principal.user.unit_id))
 
     return {
         'id': principal.user.id,
         'email': principal.user.email,
         'full_name': principal.user.full_name,
         'tenant_id': principal.user.tenant_id,
+        'unit_id': principal.user.unit_id,
+        'unit_name': unit.name if unit else None,
         'tenant_trade_name': tenant.trade_name if tenant else None,
         'tenant_timezone': tenant.timezone if tenant else 'America/Sao_Paulo',
         'roles': principal.roles,
         'permissions': sorted(principal.permissions),
+        'page_permissions': principal.user.page_permissions or {},
+        'force_fullscreen_mode': bool(principal.user.force_fullscreen_mode),
         'server_time': datetime.now(UTC).isoformat(),
     }

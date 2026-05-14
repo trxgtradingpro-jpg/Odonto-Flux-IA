@@ -27,6 +27,7 @@ class CampaignUpdate(BaseModel):
 class CampaignOutput(BaseModel):
     id: UUID
     tenant_id: UUID
+    unit_id: UUID | None = None
     name: str
     objective: str
     status: str

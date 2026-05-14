@@ -8,11 +8,26 @@
   --tenant-secondary: #0ea5a4;
   --tenant-accent: #f59e0b;
   --surface-base: #f2f4f7;
+  --surface-subtle: #eef2f6;
   --surface-card: #ffffff;
-  --surface-subtle: #f8fafc;
   --text-primary: #1c1917;
   --text-secondary: #475569;
   --border-soft: #d6d3d1;
+  --theme-background: 242 244 247;
+  --theme-foreground: 28 25 23;
+  --theme-primary: 15 118 110;
+  --theme-primary-foreground: 240 253 250;
+  --theme-secondary: 14 165 164;
+  --theme-accent: 245 158 11;
+  --theme-accent-foreground: 255 255 255;
+  --theme-muted: 238 242 246;
+  --theme-muted-foreground: 71 85 105;
+  --theme-card: 255 255 255;
+  --theme-border: 214 211 209;
+  --fullscreen-background: #0c0a09;
+  --fullscreen-header: #111111;
+  --fullscreen-accent: #10b981;
+  --fullscreen-foreground: #ffffff;
   --radius-xs: 0.45rem;
   --radius-sm: 0.65rem;
   --radius-md: 0.9rem;
@@ -39,8 +54,55 @@ body {
   @apply bg-background text-foreground antialiased;
   min-height: 100vh;
   color: var(--text-primary);
-  background-image: radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 15%, transparent), transparent 45%),
-    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-accent) 15%, transparent), transparent 40%);
+  background-color: var(--surface-base);
+  background-image: radial-gradient(
+      circle at 0% 0%,
+      color-mix(in srgb, var(--tenant-primary) 15%, transparent),
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 100% 100%,
+      color-mix(in srgb, var(--tenant-accent) 15%, transparent),
+      transparent 40%
+    );
+}
+
+.branded-app-shell {
+  background-color: var(--surface-base);
+}
+
+.branded-app-shell.surface-soft,
+.branded-app-shell.surface-flat,
+.branded-app-shell.surface-glass {
+  background: transparent;
+}
+
+.branded-content-frame {
+  background-color: var(--surface-base);
+  background-image: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--surface-base) 78%, transparent),
+      color-mix(in srgb, var(--surface-base) 86%, transparent)
+    ),
+    radial-gradient(
+      circle at 8% 0%,
+      color-mix(in srgb, var(--tenant-primary) 16%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 94% 100%,
+      color-mix(in srgb, var(--tenant-accent) 14%, transparent),
+      transparent 38%
+    ),
+    url("/images/dental-floss-smile-background.png");
+  background-position:
+    center center,
+    left top,
+    right bottom,
+    center center;
+  background-size: cover, auto, auto, cover;
+  background-repeat: no-repeat;
+  background-attachment: local, local, local, fixed;
 }
 
 img,
@@ -107,9 +169,12 @@ input,
 select,
 textarea {
   border: 1px solid color-mix(in srgb, var(--border-soft) 85%, white 15%);
-  background: #fff;
+  background: var(--surface-card);
   color: var(--text-primary);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease;
 }
 
 input:hover,
@@ -127,17 +192,18 @@ textarea:focus {
 
 input::placeholder,
 textarea::placeholder {
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 select {
-  background-image:
-    linear-gradient(45deg, transparent 50%, #64748b 50%),
-    linear-gradient(135deg, #64748b 50%, transparent 50%);
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
   background-position:
     calc(100% - 16px) calc(50% - 2px),
     calc(100% - 12px) calc(50% - 2px);
-  background-size: 4px 4px, 4px 4px;
+  background-size:
+    4px 4px,
+    4px 4px;
   background-repeat: no-repeat;
   padding-right: 2rem;
   appearance: none;
@@ -158,27 +224,34 @@ th {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--tenant-primary) 25%, #94a3b8 75%);
+  background: color-mix(in srgb, var(--tenant-primary) 25%, var(--surface-subtle) 75%);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #e2e8f0;
+  background: var(--surface-subtle);
 }
 
 .surface-soft {
-  background-color: #f8f6f2;
+  background-color: color-mix(in srgb, var(--surface-base) 88%, white 12%);
 }
 
 .surface-flat {
-  background-color: #f5f5f4;
+  background-color: var(--surface-base);
 }
 
 .surface-glass {
-  background:
-    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--tenant-primary) 8%, transparent), transparent 38%),
-    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--tenant-secondary) 10%, transparent), transparent 42%),
-    #f3f4f6;
+  background: radial-gradient(
+      circle at 0% 0%,
+      color-mix(in srgb, var(--tenant-primary) 8%, transparent),
+      transparent 38%
+    ),
+    radial-gradient(
+      circle at 100% 100%,
+      color-mix(in srgb, var(--tenant-secondary) 10%, transparent),
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--surface-base) 86%, white 14%);
 }
 
 .bg-primary {
@@ -219,13 +292,13 @@ th {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #475569;
+  color: var(--text-secondary);
 }
 
 .field-help {
   margin-top: 0.3rem;
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .field-error {
@@ -237,6 +310,162 @@ th {
 .safe-wrap {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.theme-elevated {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 88%, white 12%);
+  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+.theme-subtle-panel {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 86%, white 14%);
+  background: color-mix(in srgb, var(--surface-subtle) 82%, white 18%);
+}
+
+.theme-inset-panel {
+  border: 1px solid color-mix(in srgb, var(--border-soft) 86%, white 14%);
+  background: color-mix(in srgb, var(--surface-card) 85%, var(--surface-subtle) 15%);
+}
+
+@keyframes auth-aurora-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  33% {
+    transform: translate3d(4%, -3%, 0) scale(1.05);
+  }
+
+  66% {
+    transform: translate3d(-3%, 4%, 0) scale(0.98);
+  }
+}
+
+@keyframes auth-grain-shift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  25% {
+    transform: translate3d(-1%, 1%, 0);
+  }
+
+  50% {
+    transform: translate3d(1.5%, -1%, 0);
+  }
+
+  75% {
+    transform: translate3d(1%, 1%, 0);
+  }
+}
+
+@keyframes auth-reveal-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+    filter: blur(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+@keyframes auth-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes auth-progress-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(94, 234, 212, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 24px rgba(94, 234, 212, 0.35);
+  }
+}
+
+.auth-demo-shell {
+  background-image: linear-gradient(145deg, rgba(247, 251, 251, 0.98), rgba(240, 248, 249, 0.96)),
+    radial-gradient(circle at top left, rgba(115, 217, 213, 0.24), transparent 38%),
+    radial-gradient(circle at bottom right, rgba(90, 169, 214, 0.16), transparent 34%);
+}
+
+.auth-aurora {
+  opacity: 0.68;
+  animation: auth-aurora-float 18s ease-in-out infinite;
+}
+
+.auth-aurora-primary {
+  background: radial-gradient(circle at 30% 30%, rgba(117, 217, 213, 0.46), transparent 56%),
+    radial-gradient(circle at 70% 60%, rgba(160, 232, 223, 0.26), transparent 45%);
+}
+
+.auth-aurora-secondary {
+  background: radial-gradient(circle at 55% 38%, rgba(90, 169, 214, 0.26), transparent 50%),
+    radial-gradient(circle at 45% 72%, rgba(124, 192, 204, 0.18), transparent 44%);
+  animation-duration: 24s;
+}
+
+.auth-grain {
+  opacity: 0.05;
+  mix-blend-mode: multiply;
+  background-image: repeating-linear-gradient(
+      0deg,
+      rgba(17, 52, 58, 0.04) 0 1px,
+      transparent 1px 3px
+    ),
+    repeating-linear-gradient(90deg, rgba(17, 52, 58, 0.03) 0 1px, transparent 1px 4px);
+  animation: auth-grain-shift 12s steps(8) infinite;
+}
+
+.auth-reveal {
+  animation: auth-reveal-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.auth-copy-swap {
+  animation: auth-reveal-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.auth-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+  animation: auth-shimmer 2.2s ease-in-out infinite;
+}
+
+.auth-progress-glow {
+  animation: auth-progress-breathe 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-aurora,
+  .auth-grain,
+  .auth-reveal,
+  .auth-copy-swap,
+  .auth-skeleton-shimmer::after,
+  .auth-progress-glow {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @media (max-width: 1023px) {

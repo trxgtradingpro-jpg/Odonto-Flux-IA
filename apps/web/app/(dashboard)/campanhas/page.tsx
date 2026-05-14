@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Megaphone, PlayCircle, Target } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable, FilterBar, PageHeader, StatCard, StatusBadge } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { api } from "@/lib/api";
 import { ApiPage, CampaignItem, UnitItem, UserItem } from "@/lib/domain-types";
 import { formatDateTimeBR, numberFormatter, percentFormatter } from "@/lib/formatters";
@@ -21,6 +22,11 @@ type CampaignWithMetrics = CampaignItem & {
 
 export default function CampanhasPage() {
   const queryClient = useQueryClient();
+  const ownerUnitScope = useOwnerUnitScope();
+  const selectedOwnerUnitId =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? ownerUnitScope.selectedUnitId
+      : null;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
@@ -31,10 +37,12 @@ export default function CampanhasPage() {
   const [unitId, setUnitId] = useState("");
 
   const campaignsQuery = useQuery<{ campaigns: CampaignItem[]; units: UnitItem[]; users: UserItem[] }>({
-    queryKey: ["campaigns-dataset"],
+    queryKey: ["campaigns-dataset", selectedOwnerUnitId ?? "all"],
     queryFn: async () => {
       const [campaignsResponse, unitsResponse, usersResponse] = await Promise.all([
-        api.get<ApiPage<CampaignItem>>("/campaigns", { params: { limit: 200, offset: 0 } }),
+        api.get<ApiPage<CampaignItem>>("/campaigns", {
+          params: { limit: 200, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
+        }),
         api.get<ApiPage<UnitItem>>("/units", { params: { limit: 100, offset: 0 } }),
         api.get<ApiPage<UserItem>>("/users", { params: { limit: 100, offset: 0 } }),
       ]);
@@ -62,7 +70,7 @@ export default function CampanhasPage() {
       setObjective("");
       setSegmentLabel("Pacientes inativos 6+ meses");
       setScheduleAt("");
-      setUnitId("");
+      setUnitId(selectedOwnerUnitId ?? "");
       queryClient.invalidateQueries({ queryKey: ["campaigns-dataset"] });
     },
     onError: () => toast.error("Não foi possível criar a campanha."),
@@ -77,8 +85,18 @@ export default function CampanhasPage() {
     onError: () => toast.error("Não foi possível iniciar a campanha."),
   });
 
+  useEffect(() => {
+    if (!ownerUnitScope.canSwitchUnits) return;
+    setUnitId(ownerUnitScope.selectedUnitId === "all" ? "" : ownerUnitScope.selectedUnitId);
+  }, [ownerUnitScope.canSwitchUnits, ownerUnitScope.selectedUnitId]);
+
   if (campaignsQuery.isLoading) return <LoadingState message="Carregando campanhas..." />;
   if (campaignsQuery.isError || !campaignsQuery.data) return <ErrorState message="Não foi possível carregar as campanhas." />;
+
+  const visibleUnits =
+    ownerUnitScope.canSwitchUnits && selectedOwnerUnitId
+      ? campaignsQuery.data.units.filter((unit) => unit.id === selectedOwnerUnitId)
+      : campaignsQuery.data.units;
 
   const campaigns: CampaignWithMetrics[] = campaignsQuery.data.campaigns.map((campaign, index) => ({
     ...campaign,
@@ -151,7 +169,7 @@ export default function CampanhasPage() {
               onChange={(event) => setUnitId(event.target.value)}
             >
               <option value="">Todas as unidades</option>
-              {campaignsQuery.data.units.map((unit) => (
+              {visibleUnits.map((unit) => (
                 <option key={unit.id} value={unit.id}>
                   {unit.name}
                 </option>

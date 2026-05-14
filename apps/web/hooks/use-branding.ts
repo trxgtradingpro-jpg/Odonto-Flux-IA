@@ -17,6 +17,16 @@ export type BrandingTheme = {
   primaryColor: string;
   secondaryColor: string;
   accentColor: string;
+  backgroundColor: string;
+  surfaceColor: string;
+  cardColor: string;
+  textColor: string;
+  mutedTextColor: string;
+  borderColor: string;
+  fullscreenBackgroundColor: string;
+  fullscreenHeaderColor: string;
+  fullscreenAccentColor: string;
+  fullscreenForegroundColor: string;
   surfaceStyle: SurfaceStyle;
   logoDataUrl: string | null;
   clinicName: string;
@@ -26,6 +36,16 @@ const DEFAULT_BRANDING: BrandingTheme = {
   primaryColor: "#0f766e",
   secondaryColor: "#0ea5a4",
   accentColor: "#f59e0b",
+  backgroundColor: "#f2f4f7",
+  surfaceColor: "#eef2f6",
+  cardColor: "#ffffff",
+  textColor: "#1c1917",
+  mutedTextColor: "#475569",
+  borderColor: "#d6d3d1",
+  fullscreenBackgroundColor: "#0c0a09",
+  fullscreenHeaderColor: "#111111",
+  fullscreenAccentColor: "#10b981",
+  fullscreenForegroundColor: "#ffffff",
   surfaceStyle: "soft",
   logoDataUrl: null,
   clinicName: "OdontoFlux",
@@ -33,6 +53,22 @@ const DEFAULT_BRANDING: BrandingTheme = {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readClinicName(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as {
+    clinic_name?: unknown;
+    display_name?: unknown;
+    trade_name?: unknown;
+    name?: unknown;
+  };
+  return (
+    readString(record.clinic_name) ??
+    readString(record.display_name) ??
+    readString(record.trade_name) ??
+    readString(record.name)
+  );
 }
 
 function sanitizeHexColor(value: unknown, fallback: string): string {
@@ -69,12 +105,35 @@ export function useBranding() {
         readString(settingMap.get("clinic.display_name")) ??
         readString(settingMap.get("clinic.name")) ??
         readString(settingMap.get("clinic.trade_name")) ??
+        readClinicName(settingMap.get("clinic.profile")) ??
         DEFAULT_BRANDING.clinicName;
 
       return {
         primaryColor: sanitizeHexColor(themePayload.primary_color, DEFAULT_BRANDING.primaryColor),
         secondaryColor: sanitizeHexColor(themePayload.secondary_color, DEFAULT_BRANDING.secondaryColor),
         accentColor: sanitizeHexColor(themePayload.accent_color, DEFAULT_BRANDING.accentColor),
+        backgroundColor: sanitizeHexColor(themePayload.background_color, DEFAULT_BRANDING.backgroundColor),
+        surfaceColor: sanitizeHexColor(themePayload.surface_color, DEFAULT_BRANDING.surfaceColor),
+        cardColor: sanitizeHexColor(themePayload.card_color, DEFAULT_BRANDING.cardColor),
+        textColor: sanitizeHexColor(themePayload.text_color, DEFAULT_BRANDING.textColor),
+        mutedTextColor: sanitizeHexColor(themePayload.muted_text_color, DEFAULT_BRANDING.mutedTextColor),
+        borderColor: sanitizeHexColor(themePayload.border_color, DEFAULT_BRANDING.borderColor),
+        fullscreenBackgroundColor: sanitizeHexColor(
+          themePayload.fullscreen_background_color,
+          DEFAULT_BRANDING.fullscreenBackgroundColor,
+        ),
+        fullscreenHeaderColor: sanitizeHexColor(
+          themePayload.fullscreen_header_color,
+          DEFAULT_BRANDING.fullscreenHeaderColor,
+        ),
+        fullscreenAccentColor: sanitizeHexColor(
+          themePayload.fullscreen_accent_color,
+          DEFAULT_BRANDING.fullscreenAccentColor,
+        ),
+        fullscreenForegroundColor: sanitizeHexColor(
+          themePayload.fullscreen_foreground_color,
+          DEFAULT_BRANDING.fullscreenForegroundColor,
+        ),
         surfaceStyle: parseSurfaceStyle(themePayload.surface_style),
         logoDataUrl,
         clinicName,
@@ -90,4 +149,3 @@ export function brandingSurfaceClass(style: SurfaceStyle): string {
   if (style === "glass") return "surface-glass";
   return "surface-soft";
 }
-

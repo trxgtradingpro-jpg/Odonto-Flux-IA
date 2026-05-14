@@ -1,13 +1,15 @@
 ﻿"use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Eye, FileUp } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable, FilterBar, PageHeader, RightDrawer, StatusBadge } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { api } from "@/lib/api";
+import { triggerBlobDownload } from "@/lib/download";
 import { ApiPage, DocumentItem, PatientItem, UnitItem, UserItem } from "@/lib/domain-types";
 import { formatDateTimeBR } from "@/lib/formatters";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
@@ -40,6 +42,11 @@ type DocumentsDataset = {
 
 export default function DocumentosPage() {
   const queryClient = useQueryClient();
+  const ownerUnitScope = useOwnerUnitScope();
+  const selectedOwnerUnitId =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? ownerUnitScope.selectedUnitId
+      : null;
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -60,11 +67,15 @@ export default function DocumentosPage() {
   const [previewData, setPreviewData] = useState<DocumentPreview | null>(null);
 
   const docsQuery = useQuery<DocumentsDataset>({
-    queryKey: ["documents-dataset"],
+    queryKey: ["documents-dataset", selectedOwnerUnitId ?? "all"],
     queryFn: async () => {
       const [documentsResponse, patientsResponse, unitsResponse, usersResponse] = await Promise.all([
-        api.get<ApiPage<DocumentItem>>("/documents", { params: { limit: 200, offset: 0 } }),
-        api.get<ApiPage<PatientItem>>("/patients", { params: { limit: 200, offset: 0 } }),
+        api.get<ApiPage<DocumentItem>>("/documents", {
+          params: { limit: 200, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
+        }),
+        api.get<ApiPage<PatientItem>>("/patients", {
+          params: { limit: 200, offset: 0, unit_id: selectedOwnerUnitId ?? undefined },
+        }),
         api.get<ApiPage<UnitItem>>("/units", { params: { limit: 100, offset: 0 } }),
         api.get<ApiPage<UserItem>>("/users", { params: { limit: 100, offset: 0 } }),
       ]);
@@ -128,27 +139,40 @@ export default function DocumentosPage() {
   const downloadMutation = useMutation({
     mutationFn: async (doc: { id: string; title: string }) => {
       const response = await api.get(`/documents/${doc.id}/download`, { responseType: "blob" });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${doc.title}.bin`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.URL.revokeObjectURL(url);
+      const blob = response.data instanceof Blob ? response.data : new Blob([response.data]);
+      triggerBlobDownload(blob, `${doc.title}.bin`);
     },
     onSuccess: () => toast.success("Download iniciado."),
     onError: () => toast.error("Não foi possível baixar o documento."),
   });
 
+  const dataset = docsQuery.data ?? {
+    documents: [],
+    patients: [],
+    units: [],
+    users: [],
+  };
+  const visibleUnits =
+    ownerUnitScope.canSwitchUnits && ownerUnitScope.selectedUnitId !== "all"
+      ? dataset.units.filter((unit) => unit.id === ownerUnitScope.selectedUnitId)
+      : dataset.units;
+
+  useEffect(() => {
+    if (!ownerUnitScope.canSwitchUnits) return;
+    setUnitFilter(ownerUnitScope.selectedUnitId);
+    if (ownerUnitScope.selectedUnitId !== "all") {
+      setUnitId(ownerUnitScope.selectedUnitId);
+    }
+  }, [ownerUnitScope.canSwitchUnits, ownerUnitScope.selectedUnitId]);
+
   if (docsQuery.isLoading) return <LoadingState message="Carregando documentos..." />;
   if (docsQuery.isError || !docsQuery.data) return <ErrorState message="Não foi possível carregar documentos." />;
 
-  const patientsById = new Map(docsQuery.data.patients.map((item) => [item.id, item.full_name]));
-  const unitsById = new Map(docsQuery.data.units.map((item) => [item.id, item.name]));
-  const usersById = new Map(docsQuery.data.users.map((item) => [item.id, item.full_name]));
+  const patientsById = new Map(dataset.patients.map((item) => [item.id, item.full_name]));
+  const unitsById = new Map(dataset.units.map((item) => [item.id, item.name]));
+  const usersById = new Map(dataset.users.map((item) => [item.id, item.full_name]));
 
-  const documents = docsQuery.data.documents
+  const documents = dataset.documents
     .filter((item) => {
       const term = search.toLowerCase().trim();
       const haystack = `${item.title} ${item.document_type}`.toLowerCase();
@@ -168,7 +192,7 @@ export default function DocumentosPage() {
       owner_name: item.created_by_user_id ? usersById.get(item.created_by_user_id) ?? "Equipe" : "Equipe",
     }));
 
-  const typeOptions = Array.from(new Set(docsQuery.data.documents.map((item) => item.document_type))).sort();
+  const typeOptions = Array.from(new Set(dataset.documents.map((item) => item.document_type))).sort();
 
   const operationalDocs = documents.filter((item) => !item.document_type.includes("consent"));
   const consentDocs = documents.filter((item) => item.document_type.includes("consent"));
@@ -205,16 +229,16 @@ export default function DocumentosPage() {
                 </option>
               ))}
             </select>
-            <select
-              className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
-              value={unitId}
-              onChange={(event) => setUnitId(event.target.value)}
-            >
-              <option value="">Unidade (opcional)</option>
-              {docsQuery.data.units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.name}
-                </option>
+              <select
+                className="h-10 rounded-md border border-stone-300 bg-white px-3 text-sm"
+                value={unitId}
+                onChange={(event) => setUnitId(event.target.value)}
+              >
+                <option value="">Unidade (opcional)</option>
+                {visibleUnits.map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.name}
+                  </option>
               ))}
             </select>
             <Input type="file" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} />
@@ -261,10 +285,16 @@ export default function DocumentosPage() {
         <select
           className="h-9 rounded-md border border-stone-300 bg-white px-2 text-sm"
           value={unitFilter}
-          onChange={(event) => setUnitFilter(event.target.value)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            setUnitFilter(nextValue);
+            if (ownerUnitScope.canSwitchUnits) {
+              ownerUnitScope.setSelectedUnitId(nextValue);
+            }
+          }}
         >
           <option value="all">Todas as unidades</option>
-          {docsQuery.data.units.map((unit) => (
+          {visibleUnits.map((unit) => (
             <option key={unit.id} value={unit.id}>
               {unit.name}
             </option>

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_current_principal, get_tenant_id
+from app.api.unit_scope import get_effective_unit_id, patient_unit_scope_filter
 from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Campaign, CampaignAudience, CampaignMessage, Conversation, Patient
@@ -19,10 +21,20 @@ router = APIRouter(prefix='/campaigns', tags=['campaigns'])
 def list_campaigns(
     db: Session = Depends(get_db),
     tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    unit_id: UUID | None = None,
 ):
     stmt = select(Campaign).where(Campaign.tenant_id == tenant_id)
+    effective_unit_id = get_effective_unit_id(
+        db,
+        principal=principal,
+        tenant_id=tenant_id,
+        requested_unit_id=unit_id,
+    )
+    if effective_unit_id:
+        stmt = stmt.where(Campaign.unit_id == effective_unit_id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.execute(stmt.order_by(Campaign.created_at.desc()).offset(offset).limit(limit)).scalars().all()
     return {'data': [CampaignOutput.model_validate(item, from_attributes=True).model_dump() for item in rows], 'meta': {'total': total, 'limit': limit, 'offset': offset}}
@@ -103,7 +115,12 @@ def start_campaign(
 
     patients = db.execute(
         select(Patient)
-        .where(Patient.tenant_id == tenant_id, Patient.marketing_opt_in.is_(True), Patient.archived_at.is_(None))
+        .where(
+            Patient.tenant_id == tenant_id,
+            Patient.marketing_opt_in.is_(True),
+            Patient.archived_at.is_(None),
+            patient_unit_scope_filter(tenant_id=tenant_id, unit_id=campaign.unit_id) if campaign.unit_id else True,
+        )
         .limit(200)
     ).scalars().all()
 

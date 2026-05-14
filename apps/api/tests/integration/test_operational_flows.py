@@ -14,11 +14,22 @@ from app.models import (
     Patient,
     PatientTag,
     Professional,
+    Setting,
     Unit,
     WebhookInbox,
 )
 from app.models.enums import OutboxStatus
 from app.services.automation_service import execute_automation_run
+
+
+def _future_business_datetime(*, business_days: int, hour: int = 9, minute: int = 0) -> datetime:
+    current = datetime.now(UTC).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    remaining = business_days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
 
 
 def _ensure_unit_and_patient(db_session, tenant_id):
@@ -48,21 +59,29 @@ def _ensure_unit_and_patient(db_session, tenant_id):
     return unit, patient
 
 
-def _create_professional(db_session, *, tenant_id, unit_id, full_name="Dr Profissional"):
+def _create_professional(
+    db_session,
+    *,
+    tenant_id,
+    unit_id,
+    full_name="Dr Profissional",
+    specialty=None,
+    procedures=None,
+):
     professional = Professional(
         tenant_id=tenant_id,
         unit_id=unit_id,
         full_name=full_name,
-        working_days=[0, 1, 2, 3, 4, 5],
+        specialty=specialty,
+        working_days=[1, 2, 3, 4, 5],
         shift_start="08:00",
         shift_end="18:00",
-        procedures=["Limpeza odontolÃ³gica", "ReabilitaÃ§Ã£o estÃ©tica"],
+        procedures=procedures or ["Limpeza odontologica", "Reabilitacao estetica"],
         is_active=True,
     )
     db_session.add(professional)
     db_session.flush()
     return professional
-
 
 
 def _run_pending_automation(db_session, tenant_id):
@@ -76,10 +95,29 @@ def _run_pending_automation(db_session, tenant_id):
     return run
 
 
+def _upsert_ai_knowledge_base_setting(db_session, *, tenant_id, value: dict):
+    item = db_session.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "ai_knowledge_base.global"))
+    if not item:
+        item = Setting(tenant_id=tenant_id, key="ai_knowledge_base.global", value=value, is_secret=False)
+    else:
+        item.value = value
+        item.is_secret = False
+    db_session.add(item)
+    db_session.commit()
+
+
 
 def test_flow_consulta_criada_lembrete_e_confirmacao(client, auth_headers, seeded_db, db_session):
     tenant_id = seeded_db['tenant_a'].id
     unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    professional = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Automacao",
+        procedures=["Avaliacao"],
+    )
+    db_session.commit()
 
     db_session.add(
         Automation(
@@ -101,8 +139,9 @@ def test_flow_consulta_criada_lembrete_e_confirmacao(client, auth_headers, seede
         json={
             'patient_id': str(patient.id),
             'unit_id': str(unit.id),
+            'professional_id': str(professional.id),
             'procedure_type': 'Avaliacao',
-            'starts_at': (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            'starts_at': _future_business_datetime(business_days=1).isoformat(),
         },
     )
     assert response.status_code == 200
@@ -128,7 +167,7 @@ def test_flow_consulta_criada_lembrete_e_confirmacao(client, auth_headers, seede
         headers=auth_headers['owner_a'],
         json={
             'unit_id': str(unit.id),
-            'starts_at': (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            'starts_at': _future_business_datetime(business_days=2).isoformat(),
             'status': 'agendada',
             'confirmation_status': 'pendente',
         },
@@ -164,7 +203,7 @@ def test_delete_professional_unlinks_appointments(client, auth_headers, seeded_d
             'unit_id': str(unit.id),
             'professional_id': professional_id,
             'procedure_type': 'Limpeza odontológica',
-            'starts_at': (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+            'starts_at': _future_business_datetime(business_days=3).isoformat(),
         },
     )
     assert appointment_response.status_code == 200
@@ -202,7 +241,7 @@ def test_create_appointment_blocks_overlapping_professional_slot(client, auth_he
     )
     db_session.commit()
 
-    first_start = datetime.now(UTC) + timedelta(days=2)
+    first_start = _future_business_datetime(business_days=2)
     first_end = first_start + timedelta(minutes=60)
     first = client.post(
         "/api/v1/appointments",
@@ -247,7 +286,7 @@ def test_update_appointment_blocks_overlapping_professional_slot(client, auth_he
     )
     db_session.commit()
 
-    first_start = datetime.now(UTC) + timedelta(days=5)
+    first_start = _future_business_datetime(business_days=5)
     first_end = first_start + timedelta(minutes=60)
     first = client.post(
         "/api/v1/appointments",
@@ -291,7 +330,235 @@ def test_update_appointment_blocks_overlapping_professional_slot(client, auth_he
     assert conflict_update.json()["error"]["code"] == "PROFESSIONAL_SLOT_CONFLICT"
 
 
+def test_create_appointment_blocks_weekend_slots(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    professional = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Semana",
+    )
+    db_session.commit()
 
+    saturday_start = datetime(2030, 5, 4, 12, 0, tzinfo=UTC)
+    response = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "professional_id": str(professional.id),
+            "procedure_type": "Limpeza odontologica",
+            "starts_at": saturday_start.isoformat(),
+            "ends_at": (saturday_start + timedelta(minutes=60)).isoformat(),
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "APPOINTMENT_OUTSIDE_WORKING_DAYS"
+
+
+def test_create_appointment_blocks_professional_outside_working_day(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Quarta",
+        working_days=[3],
+        shift_start="08:00",
+        shift_end="18:00",
+        procedures=["Limpeza odontologica"],
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.commit()
+
+    monday_start = datetime(2030, 4, 29, 12, 0, tzinfo=UTC)
+    response = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "professional_id": str(professional.id),
+            "procedure_type": "Limpeza odontologica",
+            "starts_at": monday_start.isoformat(),
+            "ends_at": (monday_start + timedelta(minutes=60)).isoformat(),
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROFESSIONAL_OUTSIDE_WORKING_DAYS"
+
+
+
+
+def test_create_appointment_auto_assigns_specialist_then_fallbacks_to_second_professional(
+    client,
+    auth_headers,
+    seeded_db,
+    db_session,
+):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    specialist = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Especialista",
+        specialty="Clareamento dental",
+        procedures=["Clareamento dental"],
+    )
+    support = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Apoio",
+        procedures=["Clareamento dental", "Limpeza odontologica"],
+    )
+    db_session.commit()
+
+    starts_at = _future_business_datetime(business_days=4, hour=11)
+    ends_at = starts_at + timedelta(minutes=60)
+
+    first = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Clareamento dental",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": ends_at.isoformat(),
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["professional_id"] == str(specialist.id)
+
+    second = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Clareamento dental",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": ends_at.isoformat(),
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["professional_id"] == str(support.id)
+
+
+def test_create_appointment_uses_service_duration_and_blocks_when_all_professionals_busy(
+    client,
+    auth_headers,
+    seeded_db,
+    db_session,
+):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "services": [
+                {
+                    "name": "Implante",
+                    "description": "",
+                    "duration_note": "2h",
+                    "price_note": "",
+                }
+            ]
+        },
+    )
+    specialist = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra Implante",
+        specialty="Implante",
+        procedures=["Implante"],
+    )
+    support = _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Implante 2",
+        procedures=["Implante"],
+    )
+    db_session.commit()
+
+    starts_at = _future_business_datetime(business_days=6)
+
+    first = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Implante",
+            "starts_at": starts_at.isoformat(),
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["professional_id"] == str(specialist.id)
+    assert first.json()["ends_at"] == (starts_at + timedelta(minutes=120)).isoformat()
+
+    second = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Implante",
+            "starts_at": starts_at.isoformat(),
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["professional_id"] == str(support.id)
+    assert second.json()["ends_at"] == (starts_at + timedelta(minutes=120)).isoformat()
+
+    third = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Implante",
+            "starts_at": (starts_at + timedelta(minutes=60)).isoformat(),
+        },
+    )
+    assert third.status_code == 409
+    assert third.json()["error"]["code"] == "NO_AVAILABLE_PROFESSIONAL_FOR_SLOT"
+
+
+def test_create_appointment_without_matching_professional_returns_conflict(client, auth_headers, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    unit, patient = _ensure_unit_and_patient(db_session, tenant_id)
+    _create_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dr Limpeza",
+        procedures=["Limpeza odontologica"],
+    )
+    db_session.commit()
+
+    starts_at = _future_business_datetime(business_days=3)
+    response = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers["owner_a"],
+        json={
+            "patient_id": str(patient.id),
+            "unit_id": str(unit.id),
+            "procedure_type": "Implante",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + timedelta(minutes=60)).isoformat(),
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "NO_AVAILABLE_PROFESSIONAL_FOR_PROCEDURE"
 def test_flow_sem_resposta_segunda_tentativa_fila_humana(client, auth_headers, seeded_db, db_session):
     tenant_id = seeded_db['tenant_a'].id
     _, patient = _ensure_unit_and_patient(db_session, tenant_id)
@@ -507,3 +774,6 @@ def test_flow_paciente_inativo_campanha_reativacao(client, auth_headers, seeded_
     message = db_session.scalar(select(CampaignMessage).where(CampaignMessage.tenant_id == tenant_id))
     assert audience is not None
     assert message is not None
+
+
+

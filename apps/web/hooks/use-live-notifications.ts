@@ -73,8 +73,8 @@ export function useLiveNotifications() {
       });
       notifications.push({
         id: "open-conversations",
-        title: "Conversas abertas",
-        description: `${openConversations} conversa(s) em aberto na fila de atendimento.`,
+        title: "WhatsApp em aberto",
+        description: `${openConversations} conversa(s) em aberto na fila do WhatsApp.`,
         level: openConversations > 0 ? "info" : "success",
         href: "/conversas",
       });
@@ -111,4 +111,3 @@ export function useLiveNotifications() {
     refetchOnWindowFocus: true,
   });
 }
-

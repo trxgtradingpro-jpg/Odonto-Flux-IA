@@ -39,15 +39,18 @@ class UnitCreate(BaseModel):
     email: str | None = None
     address: dict = {}
     working_hours: dict = {}
+    services: list[str] = []
 
 
 class UnitUpdate(BaseModel):
     name: str | None = None
+    code: str | None = None
     phone: str | None = None
     email: str | None = None
     address: dict | None = None
     working_hours: dict | None = None
     is_active: bool | None = None
+    services: list[str] | None = None
 
 
 class UnitOutput(BaseModel):
@@ -58,3 +61,6 @@ class UnitOutput(BaseModel):
     phone: str | None
     email: str | None
     is_active: bool
+    address: dict = {}
+    working_hours: dict = {}
+    services: list[str] = []

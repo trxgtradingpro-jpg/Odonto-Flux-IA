@@ -33,6 +33,9 @@ export interface DashboardKPI {
   ai_handoff_rate: number;
   avg_first_response_ai_minutes: number;
   ai_send_failure_rate: number;
+  ai_contract_valid_rate: number;
+  ai_handoff_reasons: { reason: string; count: number }[];
+  ai_outbox_failure_reasons: { reason: string; count: number }[];
 }
 
 export interface ConversationItem {

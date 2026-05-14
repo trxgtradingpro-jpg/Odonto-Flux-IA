@@ -1,11 +1,14 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    ai_lab,
     admin_platform,
+    admin_sales,
     appointments,
     audit,
     auth,
     automations,
+    backups,
     billing,
     campaigns,
     conversations,
@@ -30,6 +33,7 @@ from app.api.v1.endpoints import (
 api_router = APIRouter(prefix='/api/v1')
 
 api_router.include_router(auth.router)
+api_router.include_router(ai_lab.router)
 api_router.include_router(tenants.router)
 api_router.include_router(units.router)
 api_router.include_router(users.router)
@@ -40,6 +44,7 @@ api_router.include_router(conversations.router)
 api_router.include_router(messages.router)
 api_router.include_router(appointments.router)
 api_router.include_router(automations.router)
+api_router.include_router(backups.router)
 api_router.include_router(campaigns.router)
 api_router.include_router(documents.router)
 api_router.include_router(settings.router)
@@ -53,3 +58,4 @@ api_router.include_router(dashboards.router)
 api_router.include_router(audit.router)
 api_router.include_router(webhooks_whatsapp.router)
 api_router.include_router(admin_platform.router)
+api_router.include_router(admin_sales.router)

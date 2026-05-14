@@ -16,6 +16,7 @@ import {
   FileText,
   Gauge,
   LifeBuoy,
+  ListChecks,
   MessageSquare,
   Rocket,
   Settings,
@@ -27,16 +28,20 @@ import {
   Users,
   X,
   Building2,
+  Database,
 } from "lucide-react";
 
 import { Badge, cn } from "@odontoflux/ui";
 
 import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
+import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
-import { initials, ROLE_LABELS } from "@/lib/formatters";
+import { clinicInitials, initials, ROLE_LABELS } from "@/lib/formatters";
+import { PageKey } from "@/lib/page-access";
 
 type NavItem = {
+  key: PageKey;
   href: string;
   label: string;
   icon: ComponentType<{ size?: string | number; className?: string }>;
@@ -48,35 +53,39 @@ const navGroups: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "Operacao",
     items: [
-      { href: "/dashboard", label: "Dashboard", icon: Gauge },
-      { href: "/operacoes", label: "Operacoes", icon: AlertTriangle },
-      { href: "/onboarding", label: "Onboarding", icon: Rocket },
-      { href: "/conversas", label: "Conversas", icon: MessageSquare, badgeKey: "conversations" },
-      { href: "/agenda", label: "Agenda", icon: CalendarDays, badgeKey: "pendingConfirmations" },
-      { href: "/equipe-medica", label: "Equipe medica", icon: Stethoscope },
-      { href: "/pacientes", label: "Pacientes", icon: Users },
-      { href: "/leads", label: "Leads", icon: Bell, badgeKey: "leads" },
+      { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: Gauge },
+      { key: "operacoes", href: "/operacoes", label: "Operacoes", icon: AlertTriangle },
+      { key: "onboarding", href: "/onboarding", label: "Onboarding", icon: Rocket },
+      { key: "conversas", href: "/conversas", label: "WhatsApp", icon: MessageSquare, badgeKey: "conversations" },
+      { key: "agenda", href: "/agenda", label: "Agenda", icon: CalendarDays, badgeKey: "pendingConfirmations" },
+      { key: "equipe-medica", href: "/equipe-medica", label: "Equipe medica", icon: Stethoscope },
+      { key: "servicos", href: "/servicos", label: "Servicos", icon: ListChecks },
+      { key: "unidades", href: "/unidades", label: "Unidades", icon: Building2 },
+      { key: "pacientes", href: "/pacientes", label: "Pacientes", icon: Users },
+      { key: "leads", href: "/leads", label: "Leads", icon: Bell, badgeKey: "leads" },
     ],
   },
   {
     title: "Crescimento",
     items: [
-      { href: "/campanhas", label: "Campanhas", icon: ClipboardList },
-      { href: "/automacoes", label: "Automacoes", icon: Bot },
-      { href: "/documentos", label: "Documentos", icon: FileStack },
-      { href: "/importacao", label: "Importacao", icon: UploadCloud },
-      { href: "/relatorios", label: "Relatorios", icon: BarChart3 },
+      { key: "campanhas", href: "/campanhas", label: "Campanhas", icon: ClipboardList },
+      { key: "automacoes", href: "/automacoes", label: "Automacoes", icon: Bot },
+      { key: "ia-lab", href: "/ia-lab", label: "IA Lab", icon: Sparkles },
+      { key: "documentos", href: "/documentos", label: "Documentos", icon: FileStack },
+      { key: "importacao", href: "/importacao", label: "Importacao", icon: UploadCloud },
+      { key: "relatorios", href: "/relatorios", label: "Relatorios", icon: BarChart3 },
     ],
   },
   {
     title: "Administracao",
     items: [
-      { href: "/faturamento", label: "Faturamento", icon: CreditCard },
-      { href: "/suporte", label: "Suporte", icon: LifeBuoy },
-      { href: "/usuarios", label: "Usuarios", icon: UserCog },
-      { href: "/configuracoes", label: "Configuracoes", icon: Settings },
-      { href: "/auditoria", label: "Auditoria", icon: FileText },
-      { href: "/admin", label: "Admin Plataforma", icon: Shield, role: "admin_platform" },
+      { key: "faturamento", href: "/faturamento", label: "Faturamento", icon: CreditCard },
+      { key: "backup", href: "/backup", label: "Backup", icon: Database },
+      { key: "suporte", href: "/suporte", label: "Suporte", icon: LifeBuoy },
+      { key: "usuarios", href: "/usuarios", label: "Usuarios", icon: UserCog },
+      { key: "configuracoes", href: "/configuracoes", label: "Configuracoes", icon: Settings },
+      { key: "auditoria", href: "/auditoria", label: "Auditoria", icon: FileText },
+      { key: "admin", href: "/admin", label: "Admin Plataforma", icon: Shield, role: "admin_platform" },
     ],
   },
 ];
@@ -90,6 +99,7 @@ function NavGroupSection({
   pathname,
   badges,
   roles,
+  allowedPageKeys,
 }: {
   title: string;
   items: NavItem[];
@@ -99,14 +109,15 @@ function NavGroupSection({
   pathname: string;
   badges: Record<string, number>;
   roles: string[];
+  allowedPageKeys: PageKey[];
 }) {
   return (
     <div className="space-y-1">
       {!collapsed ? (
-        <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-stone-500">{title}</p>
+        <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
       ) : null}
       {items
-        .filter((item) => !item.role || roles.includes(item.role))
+        .filter((item) => (!item.role || roles.includes(item.role)) && allowedPageKeys.includes(item.key))
         .map((item) => {
           const active = pathname === item.href;
           const Icon = item.icon;
@@ -124,7 +135,7 @@ function NavGroupSection({
                 collapsed && "justify-center px-2",
                 active
                   ? "bg-gradient-to-r text-white shadow-sm"
-                  : "text-stone-700 hover:bg-stone-100",
+                  : "text-foreground hover:bg-muted/75",
               )}
               style={
                 active
@@ -145,7 +156,7 @@ function NavGroupSection({
                     </span>
                   ) : null}
                   {item.href === "/admin" ? (
-                    <Badge className="ml-1 bg-stone-200 text-stone-700">Restrito</Badge>
+                    <Badge className="ml-1">Restrito</Badge>
                   ) : null}
                 </span>
               ) : badgeValue > 0 ? (
@@ -162,17 +173,22 @@ function NavGroupSection({
 
 export function Sidebar({
   collapsed,
+  autoHide,
   mobileOpen,
   onCloseMobile,
   session,
   branding,
+  allowedPageKeys,
 }: {
   collapsed: boolean;
+  autoHide?: boolean;
   mobileOpen: boolean;
   onCloseMobile?: () => void;
   session?: SessionContext;
   branding?: BrandingTheme;
+  allowedPageKeys: PageKey[];
 }) {
+  const ownerUnitScope = useOwnerUnitScope();
   const pathname = usePathname();
   const currentRole = session?.roles?.[0] ?? "";
   const useCollapsed = collapsed && !mobileOpen;
@@ -184,6 +200,10 @@ export function Sidebar({
     pendingConfirmations: 0,
   };
   const roles = session?.roles ?? [];
+  const clinicDisplayName = session?.tenant_name ?? branding?.clinicName ?? "Clinica";
+  const activeUnitLabel = ownerUnitScope.canSwitchUnits
+    ? ownerUnitScope.selectedUnitName || "Todas as unidades"
+    : session?.unit_name ?? "Unidade principal";
 
   return (
     <>
@@ -198,14 +218,24 @@ export function Sidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex h-dvh max-w-[84vw] flex-col border-r border-border bg-white/95 transition-all duration-300 backdrop-blur",
+          "fixed inset-y-0 left-0 z-40 flex h-dvh max-w-[84vw] shrink-0 flex-col overflow-y-auto overflow-x-hidden overscroll-contain border-r border-border bg-card transition-[width,transform,opacity,border-color,box-shadow] duration-700 ease-in-out [scrollbar-gutter:stable]",
           "w-[286px] -translate-x-full shadow-none",
           mobileOpen && "translate-x-0 shadow-2xl",
-          "lg:static lg:z-auto lg:max-w-none lg:translate-x-0 lg:shadow-none",
-          useCollapsed ? "lg:w-[88px]" : "lg:w-[286px]",
+          "lg:sticky lg:top-0 lg:z-auto lg:max-w-none lg:translate-x-0 lg:shadow-none",
+          autoHide
+            ? "lg:w-0 lg:min-w-0 lg:-translate-x-6 lg:border-r-transparent lg:opacity-0 lg:pointer-events-none"
+            : useCollapsed
+              ? "lg:w-[88px]"
+              : "lg:w-[286px]",
         )}
       >
-      <div className={cn("border-b border-border", useCollapsed ? "px-3 py-4 text-center" : "px-5 py-5")}>
+      <div
+        className={cn(
+          "flex min-h-full flex-col transition-[opacity,transform,filter] duration-700 ease-in-out",
+          autoHide && "lg:-translate-x-6 lg:scale-[0.98] lg:opacity-0 lg:blur-[1px]",
+        )}
+      >
+      <div className={cn("shrink-0 border-b border-border", useCollapsed ? "px-3 py-4 text-center" : "px-5 py-5")}>
         <div className={cn("flex items-center gap-2", useCollapsed ? "justify-center" : "justify-between")}>
           <div className={cn("flex items-center gap-2", useCollapsed ? "justify-center" : "justify-start")}>
             {branding?.logoDataUrl ? (
@@ -222,19 +252,19 @@ export function Sidebar({
                 className="flex h-9 w-9 items-center justify-center rounded-md text-xs font-bold text-white"
                 style={{ backgroundColor: "var(--tenant-primary)" }}
               >
-                OF
+                {clinicInitials(clinicDisplayName)}
               </div>
             )}
             {!useCollapsed ? (
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">OdontoFlux</p>
-                <h1 className="text-lg font-bold text-stone-900">{branding?.clinicName ?? "Clinica"}</h1>
+                <h1 className="text-lg font-bold text-foreground">{clinicDisplayName}</h1>
+                <p className="text-xs text-muted-foreground">Plataforma OdontoFlux</p>
               </div>
             ) : null}
           </div>
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 text-stone-600 lg:hidden"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground lg:hidden"
             onClick={onCloseMobile}
             aria-label="Fechar barra lateral"
           >
@@ -243,17 +273,22 @@ export function Sidebar({
         </div>
 
         {!useCollapsed ? (
-          <div className="mt-3 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3">
-            <div className="flex items-center gap-2 text-xs text-stone-600">
+          <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted p-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Building2 size={14} />
-              <span className="font-semibold">{session?.tenant_name ?? "Clinica atual"}</span>
+              <span className="font-semibold">Unidade ativa</span>
             </div>
-            <p className="text-xs text-stone-500">{session?.unit_name ?? "Unidade principal"}</p>
+            <p className="text-sm font-semibold text-foreground">{activeUnitLabel}</p>
+            <p className="text-xs text-muted-foreground">
+              {ownerUnitScope.canSwitchUnits
+                ? "Troque a unidade no seletor do topo quando precisar."
+                : "Escopo fixado conforme o perfil deste usuario."}
+            </p>
           </div>
         ) : null}
       </div>
 
-      <nav className="flex-1 space-y-4 overflow-y-auto p-3">
+      <nav className="flex-1 space-y-4 p-3">
         {navGroups.map((group) => (
           <NavGroupSection
             key={group.title}
@@ -265,32 +300,34 @@ export function Sidebar({
             pathname={pathname}
             badges={badges}
             roles={roles}
+            allowedPageKeys={allowedPageKeys}
           />
         ))}
       </nav>
 
-      <div className="border-t border-border p-3">
+      <div className="shrink-0 border-t border-border p-3">
         {useCollapsed ? (
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-stone-200 text-xs font-semibold text-stone-700">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
             {initials(session?.full_name)}
           </div>
         ) : (
-          <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+          <div className="rounded-xl border border-border bg-muted p-3">
             <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-stone-200 text-xs font-semibold text-stone-700">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
                 {initials(session?.full_name)}
               </div>
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-stone-800">{session?.full_name ?? "Usuario"}</p>
-                <p className="truncate text-xs text-stone-500">{ROLE_LABELS[currentRole] ?? "Perfil"}</p>
+                <p className="truncate text-sm font-semibold text-foreground">{session?.full_name ?? "Usuario"}</p>
+                <p className="truncate text-xs text-muted-foreground">{ROLE_LABELS[currentRole] ?? "Perfil"}</p>
               </div>
             </div>
-            <div className="mt-2 inline-flex items-center gap-1 text-xs text-stone-500">
+            <div className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Sparkles size={12} />
               Atualizacao automatica ativa
             </div>
           </div>
         )}
+      </div>
       </div>
       </aside>
     </>

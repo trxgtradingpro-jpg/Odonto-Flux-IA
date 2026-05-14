@@ -1,0 +1,624 @@
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_principal
+from app.core.config import settings
+from app.core.exceptions import ApiError
+from app.core.security import TokenError, decode_token
+from app.db.session import get_db
+from app.models import DemoActivityEvent, ProspectAccount, ProspectNote, ProspectService, ProspectTimelineEvent, ProspectUnit
+from app.schemas.admin_sales import (
+    AdminChangeInitialPasswordInput,
+    AdminLoginInput,
+    AdminLoginOutput,
+    DemoAccessOutput,
+    DemoActivityOutput,
+    DemoGuideCompleteStepInput,
+    DemoGuideBackStepInput,
+    DemoGuideDismissInput,
+    DemoGuideResumeInput,
+    DemoGuideStateOutput,
+    DemoEventInput,
+    DemoProvisionOutput,
+    DemoRedeemTokenInput,
+    MagicLinkInput,
+    ProspectContactInput,
+    ProspectCreate,
+    ProspectInsightsOutput,
+    ProspectListOutput,
+    ProspectNoteInput,
+    ProspectNoteOutput,
+    ProspectOutreachLabInput,
+    ProspectOutreachLabOutput,
+    ProspectOutreachInput,
+    ProspectOutreachOutput,
+    ProspectOutput,
+    ProspectOverviewOutput,
+    ProspectServiceInput,
+    ProspectServiceOutput,
+    ProspectStatusInput,
+    ProspectTimelineEventOutput,
+    ProspectUnitInput,
+    ProspectUnitOutput,
+    ProspectUpdate,
+)
+from app.services import sales_demo_service as sales
+
+router = APIRouter(tags=["admin_sales"])
+
+_login_attempts: dict[str, list[datetime]] = {}
+
+
+def _client_key(request: Request, email: str) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    ip = forwarded or (request.client.host if request.client else "unknown")
+    return f"{ip}:{email.lower().strip()}"
+
+
+def _rate_limit_login(request: Request, email: str) -> None:
+    key = _client_key(request, email)
+    now = datetime.now(UTC)
+    attempts = [item for item in _login_attempts.get(key, []) if item > now - timedelta(minutes=1)]
+    if len(attempts) >= settings.adm_login_rate_limit_per_minute:
+        raise ApiError(status_code=429, code="ADM_LOGIN_RATE_LIMIT", message="Muitas tentativas. Tente novamente em instantes.")
+    attempts.append(now)
+    _login_attempts[key] = attempts
+
+
+def _base_url(request: Request) -> str:
+    return request.headers.get("origin") or "http://localhost:3000"
+
+
+def _get_prospect(db: Session, prospect_id: UUID) -> ProspectAccount:
+    prospect = db.get(ProspectAccount, prospect_id)
+    if not prospect:
+        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado")
+    return prospect
+
+
+def _current_principal_optional(request: Request, db: Session):
+    header = request.headers.get("authorization") or ""
+    if not header.lower().startswith("bearer "):
+        return None
+    try:
+        payload = decode_token(header.split(" ", 1)[1])
+    except TokenError:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    from app.api.deps import _load_principal
+
+    return _load_principal(db, user_id)
+
+
+def _require_demo_prospect(principal, db: Session) -> ProspectAccount:
+    if "demo_client" not in set(principal.roles):
+        raise ApiError(status_code=403, code="DEMO_GUIDE_FORBIDDEN", message="Guia disponivel apenas para usuarios de demo")
+    if not principal.tenant_id:
+        raise ApiError(status_code=403, code="DEMO_GUIDE_FORBIDDEN", message="Contexto de tenant ausente para a demo")
+    prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_tenant_id == principal.tenant_id))
+    if not prospect:
+        raise ApiError(status_code=404, code="DEMO_PROSPECT_NOT_FOUND", message="Demo vinculada nao encontrada")
+    return prospect
+
+
+@router.post("/admin/auth/login", response_model=AdminLoginOutput)
+def admin_login(payload: AdminLoginInput, request: Request, db: Session = Depends(get_db)):
+    _rate_limit_login(request, payload.email)
+    return sales.admin_login(db, email=payload.email, password=payload.password)
+
+
+@router.post("/admin/auth/logout")
+def admin_logout():
+    return {"message": "Sessao encerrada no cliente."}
+
+
+@router.post("/admin/auth/change-initial-password")
+def change_initial_password(
+    payload: AdminChangeInitialPasswordInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.change_initial_admin_password(
+        db,
+        user=principal.user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return {"message": "Senha atualizada com sucesso."}
+
+
+@router.get("/admin/prospects/overview", response_model=ProspectOverviewOutput)
+def prospects_overview(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    return sales.overview(db)
+
+
+@router.get("/admin/prospects", response_model=ProspectListOutput)
+def list_prospects(
+    status: str | None = None,
+    temperature: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_principal(principal)
+    query = select(ProspectAccount)
+    count_query = select(func.count(ProspectAccount.id))
+    filters = []
+    if status:
+        filters.append(ProspectAccount.status == status)
+    if temperature:
+        filters.append(ProspectAccount.temperature == temperature)
+    if q:
+        term = f"%{q.lower()}%"
+        filters.append(
+            func.lower(
+                func.concat(
+                    ProspectAccount.clinic_name,
+                    " ",
+                    func.coalesce(ProspectAccount.city, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.whatsapp_phone, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.phone, ""),
+                )
+            ).like(term)
+        )
+    for item in filters:
+        query = query.where(item)
+        count_query = count_query.where(item)
+    rows = db.execute(query.order_by(ProspectAccount.updated_at.desc()).limit(limit).offset(offset)).scalars().all()
+    total = db.scalar(count_query) or 0
+    return {
+        "data": [sales.serialize_prospect(db, row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.post("/admin/prospects", response_model=ProspectOutput)
+def create_prospect(payload: ProspectCreate, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_write(principal)
+    prospect = sales.create_prospect(db, payload, actor_id=principal.user.id)
+    return sales.serialize_prospect(db, prospect)
+
+
+@router.get("/admin/prospects/{prospect_id}", response_model=ProspectOutput)
+def get_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    return sales.serialize_prospect(db, _get_prospect(db, prospect_id))
+
+
+@router.patch("/admin/prospects/{prospect_id}", response_model=ProspectOutput)
+def update_prospect(
+    prospect_id: UUID,
+    payload: ProspectUpdate,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = sales.update_prospect(db, _get_prospect(db, prospect_id), payload, actor_id=principal.user.id)
+    return sales.serialize_prospect(db, prospect)
+
+
+@router.delete("/admin/prospects/{prospect_id}")
+def delete_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    db.delete(prospect)
+    db.commit()
+    return {"message": "Prospect removido."}
+
+
+@router.post("/admin/prospects/{prospect_id}/units", response_model=ProspectUnitOutput)
+def add_unit(
+    prospect_id: UUID,
+    payload: ProspectUnitInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    unit = ProspectUnit(
+        prospect_account_id=prospect.id,
+        unit_name=payload.unit_name,
+        address=payload.address,
+        phone=payload.phone,
+        email=str(payload.email) if payload.email else None,
+        is_primary=payload.is_primary,
+    )
+    db.add(unit)
+    sales.add_timeline(db, prospect, event_type="prospect.unit_added", event_label=f"Unidade adicionada: {payload.unit_name}", actor_id=principal.user.id, actor_type="admin")
+    db.commit()
+    db.refresh(unit)
+    return sales.serialize_unit(unit)
+
+
+@router.post("/admin/prospects/{prospect_id}/services", response_model=ProspectServiceOutput)
+def add_service(
+    prospect_id: UUID,
+    payload: ProspectServiceInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    service = ProspectService(
+        prospect_account_id=prospect.id,
+        service_name=payload.service_name,
+        category=payload.category,
+        duration_minutes=payload.duration_minutes,
+        price_range=payload.price_range,
+        description=payload.description,
+    )
+    db.add(service)
+    sales.add_timeline(db, prospect, event_type="prospect.service_added", event_label=f"Servico adicionado: {payload.service_name}", actor_id=principal.user.id, actor_type="admin")
+    db.commit()
+    db.refresh(service)
+    return sales.serialize_service(service)
+
+
+@router.post("/admin/prospects/{prospect_id}/notes", response_model=ProspectNoteOutput)
+def add_note(
+    prospect_id: UUID,
+    payload: ProspectNoteInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    note = ProspectNote(
+        prospect_account_id=prospect.id,
+        author_user_id=principal.user.id,
+        body=payload.body,
+        note_type=payload.note_type,
+    )
+    db.add(note)
+    sales.add_timeline(db, prospect, event_type="prospect.note_added", event_label="Nota comercial registrada", actor_id=principal.user.id, actor_type="admin")
+    db.commit()
+    db.refresh(note)
+    return {
+        "id": note.id,
+        "body": note.body,
+        "note_type": note.note_type,
+        "author_user_id": note.author_user_id,
+        "created_at": note.created_at,
+    }
+
+
+@router.get("/admin/prospects/{prospect_id}/timeline", response_model=list[ProspectTimelineEventOutput])
+def timeline(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    _get_prospect(db, prospect_id)
+    rows = db.execute(
+        select(ProspectTimelineEvent)
+        .where(ProspectTimelineEvent.prospect_account_id == prospect_id)
+        .order_by(ProspectTimelineEvent.created_at.desc())
+    ).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "event_type": row.event_type,
+            "event_label": row.event_label,
+            "actor_type": row.actor_type,
+            "actor_id": row.actor_id,
+            "payload": row.payload_json or {},
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/admin/prospects/{prospect_id}/generate-demo", response_model=DemoProvisionOutput)
+def generate_demo(
+    prospect_id: UUID,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    result = sales.generate_demo(db, _get_prospect(db, prospect_id), actor_id=principal.user.id, base_url=_base_url(request))
+    return {
+        "prospect": sales.serialize_prospect(db, result["prospect"]),
+        "access_token": result["access_token"],
+        "demo_login_url": result["demo_login_url"],
+        "checklist": result["checklist"],
+        "ai_draft": result["ai_draft"],
+    }
+
+
+@router.post("/admin/prospects/{prospect_id}/send-demo-access", response_model=DemoAccessOutput)
+def send_demo_access(
+    prospect_id: UUID,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
+    return {
+        "access_token": raw_token,
+        "demo_login_url": f"{_base_url(request)}/login?demo_token={raw_token}",
+        "expires_at": prospect.demo_access_token_expires_at,
+    }
+
+
+@router.post("/admin/prospects/{prospect_id}/record-contact", response_model=ProspectOutput)
+def record_contact(
+    prospect_id: UUID,
+    payload: ProspectContactInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    prospect.first_contact_channel = prospect.first_contact_channel or payload.channel
+    prospect.first_contact_at = prospect.first_contact_at or datetime.now(UTC)
+    if prospect.status in {"novo", "pesquisado"}:
+        prospect.status = "contato_iniciado"
+    sales.add_timeline(
+        db,
+        prospect,
+        event_type="contact.recorded",
+        event_label=f"Contato registrado via {payload.channel}",
+        actor_id=principal.user.id,
+        actor_type="admin",
+        payload={"summary": payload.summary, "next_step": payload.next_step},
+    )
+    db.add(prospect)
+    db.commit()
+    db.refresh(prospect)
+    return sales.serialize_prospect(db, prospect)
+
+
+@router.post("/admin/prospects/{prospect_id}/outreach", response_model=ProspectOutreachOutput)
+def send_outreach(
+    prospect_id: UUID,
+    payload: ProspectOutreachInput,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    result = sales.send_sales_outreach_step(
+        db,
+        prospect=_get_prospect(db, prospect_id),
+        step=payload.step,
+        actor_id=principal.user.id,
+        base_url=_base_url(request),
+        recipient_name=payload.recipient_name,
+        explicit_video_url=payload.video_url,
+    )
+    return result
+
+
+@router.post("/admin/prospects/{prospect_id}/outreach/automation/start", response_model=ProspectOutreachOutput)
+def start_outreach_automation(
+    prospect_id: UUID,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    result = sales.start_sales_outreach_automation(
+        db,
+        prospect=_get_prospect(db, prospect_id),
+        actor_id=principal.user.id,
+        base_url=_base_url(request),
+    )
+    return result
+
+
+@router.post("/admin/prospects/{prospect_id}/outreach/lab", response_model=ProspectOutreachLabOutput)
+def run_outreach_lab(
+    prospect_id: UUID,
+    payload: ProspectOutreachLabInput,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    result = sales.simulate_sales_outreach_lab(
+        db,
+        prospect=_get_prospect(db, prospect_id),
+        actor_id=principal.user.id,
+        base_url=_base_url(request),
+        scenario=payload.scenario,
+    )
+    return result
+
+
+@router.post("/admin/prospects/{prospect_id}/mark-status", response_model=ProspectOutput)
+def mark_status(
+    prospect_id: UUID,
+    payload: ProspectStatusInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    if payload.status not in sales.PROSPECT_STATUSES:
+        raise ApiError(status_code=400, code="PROSPECT_STATUS_INVALID", message="Status comercial invalido")
+    prospect = _get_prospect(db, prospect_id)
+    old_status = prospect.status
+    prospect.status = payload.status
+    sales.add_timeline(
+        db,
+        prospect,
+        event_type="prospect.status_changed",
+        event_label=f"Status alterado para {payload.status}",
+        actor_id=principal.user.id,
+        actor_type="admin",
+        payload={"from": old_status, "to": payload.status, "note": payload.note},
+    )
+    db.add(prospect)
+    db.commit()
+    db.refresh(prospect)
+    return sales.serialize_prospect(db, prospect)
+
+
+@router.post("/admin/prospects/{prospect_id}/score/recalculate", response_model=ProspectOutput)
+def recalculate_score(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    prospect = sales.recalculate_score(db, _get_prospect(db, prospect_id))
+    return sales.serialize_prospect(db, prospect)
+
+
+@router.get("/admin/prospects/{prospect_id}/activity", response_model=list[DemoActivityOutput])
+def activity(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    _get_prospect(db, prospect_id)
+    rows = db.execute(
+        select(DemoActivityEvent)
+        .where(DemoActivityEvent.prospect_account_id == prospect_id)
+        .order_by(DemoActivityEvent.occurred_at.desc())
+    ).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "event_name": row.event_name,
+            "page_path": row.page_path,
+            "session_id": row.session_id,
+            "payload": row.payload_json or {},
+            "occurred_at": row.occurred_at,
+        }
+        for row in rows
+    ]
+
+
+@router.get("/admin/prospects/{prospect_id}/insights", response_model=ProspectInsightsOutput)
+def insights(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_sales_principal(principal)
+    return sales.get_insights(db, _get_prospect(db, prospect_id))
+
+
+@router.post("/demo/events")
+def demo_events(payload: DemoEventInput, request: Request, db: Session = Depends(get_db)):
+    principal = _current_principal_optional(request, db)
+    prospect = None
+    user_id = principal.user.id if principal else None
+    if payload.prospect_account_id:
+        prospect = _get_prospect(db, payload.prospect_account_id)
+    elif principal and principal.tenant_id:
+        prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_tenant_id == principal.tenant_id))
+    if not prospect:
+        raise ApiError(status_code=400, code="DEMO_PROSPECT_REQUIRED", message="Nao foi possivel identificar a demo")
+    event = sales.record_demo_event(
+        db,
+        prospect=prospect,
+        user_id=user_id,
+        event_name=payload.event_name,
+        page_path=payload.page_path,
+        session_id=payload.session_id,
+        payload=payload.payload,
+    )
+    return {"id": event.id, "message": "Evento registrado."}
+
+
+@router.get("/demo/guide", response_model=DemoGuideStateOutput)
+def get_demo_guide(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    prospect = _require_demo_prospect(principal, db)
+    sales.ensure_demo_showcase_state(db, prospect=prospect)
+    db.commit()
+    return sales.get_demo_guide_state(db, tenant_id=prospect.demo_tenant_id)
+
+
+@router.post("/demo/guide/resume", response_model=DemoGuideStateOutput)
+def resume_demo_guide(
+    payload: DemoGuideResumeInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    prospect = _require_demo_prospect(principal, db)
+    return sales.resume_demo_guide(
+        db,
+        prospect=prospect,
+        user_id=principal.user.id,
+        page_path=payload.page_path,
+        session_id=payload.session_id,
+        source=payload.source,
+    )
+
+
+@router.post("/demo/guide/complete-step", response_model=DemoGuideStateOutput)
+def complete_demo_guide_step(
+    payload: DemoGuideCompleteStepInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    prospect = _require_demo_prospect(principal, db)
+    return sales.complete_demo_guide_step(
+        db,
+        prospect=prospect,
+        user_id=principal.user.id,
+        step_id=payload.step_id,
+        page_path=payload.page_path,
+        session_id=payload.session_id,
+        source=payload.source,
+    )
+
+
+@router.post("/demo/guide/back-step", response_model=DemoGuideStateOutput)
+def go_back_demo_guide_step(
+    payload: DemoGuideBackStepInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    prospect = _require_demo_prospect(principal, db)
+    return sales.go_back_demo_guide_step(
+        db,
+        prospect=prospect,
+        user_id=principal.user.id,
+        page_path=payload.page_path,
+        session_id=payload.session_id,
+        source=payload.source,
+    )
+
+
+@router.post("/demo/guide/dismiss", response_model=DemoGuideStateOutput)
+def dismiss_demo_guide(
+    payload: DemoGuideDismissInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    prospect = _require_demo_prospect(principal, db)
+    return sales.dismiss_demo_guide(
+        db,
+        prospect=prospect,
+        user_id=principal.user.id,
+        page_path=payload.page_path,
+        session_id=payload.session_id,
+        source=payload.source,
+    )
+
+
+@router.post("/demo/auth/magic-link", response_model=DemoAccessOutput)
+def demo_magic_link(
+    payload: MagicLinkInput,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, payload.prospect_account_id)
+    raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
+    return {
+        "access_token": raw_token,
+        "demo_login_url": f"{_base_url(request)}/login?demo_token={raw_token}",
+        "expires_at": prospect.demo_access_token_expires_at,
+    }
+
+
+@router.post("/demo/auth/redeem-token")
+def redeem_demo_token(payload: DemoRedeemTokenInput, request: Request, db: Session = Depends(get_db)):
+    session_id = request.headers.get("x-demo-session-id")
+    return sales.redeem_demo_token(db, token=payload.token, session_id=session_id)

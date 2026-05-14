@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -6,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_current_principal, get_tenant_id
+from app.api.unit_scope import get_effective_unit_id
 from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Document, DocumentVersion
@@ -20,11 +22,21 @@ router = APIRouter(prefix='/documents', tags=['documents'])
 def list_documents(
     db: Session = Depends(get_db),
     tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     patient_id: str | None = None,
+    unit_id: UUID | None = None,
 ):
     stmt = select(Document).where(Document.tenant_id == tenant_id)
+    effective_unit_id = get_effective_unit_id(
+        db,
+        principal=principal,
+        tenant_id=tenant_id,
+        requested_unit_id=unit_id,
+    )
+    if effective_unit_id:
+        stmt = stmt.where(Document.unit_id == effective_unit_id)
     if patient_id:
         stmt = stmt.where(Document.patient_id == patient_id)
 

@@ -49,6 +49,19 @@ class AppointmentStatus(StrEnum):
     COMPLETED = 'concluida'
 
 
+class AppointmentAttendanceStatus(StrEnum):
+    PENDING = 'pendente'
+    PRESENT = 'compareceu'
+    ABSENT = 'faltou'
+
+
+class AppointmentNextAppointmentStatus(StrEnum):
+    UNDEFINED = 'nao_definido'
+    NEEDS_SCHEDULING = 'precisa_agendar'
+    NOT_NEEDED = 'nao_precisa'
+    SCHEDULED = 'retorno_agendado'
+
+
 class AutomationTriggerType(StrEnum):
     EVENT = 'event'
     TIME = 'time'

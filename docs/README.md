@@ -11,3 +11,4 @@
 - `producao-checklist.md`: checklist de go-live em producao
 - `backup-e-recuperacao.md`: backup/restore de banco
 - `incidentes-e-sla.md`: operacao de suporte e resposta a incidentes
+- `adm-prospeccao-demos.md`: CRM interno, demos personalizadas e tracking comercial

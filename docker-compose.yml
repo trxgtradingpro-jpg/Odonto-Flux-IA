@@ -40,7 +40,9 @@ services:
         condition: service_healthy
     volumes:
       - ./apps/api:/app
+      - ./docs:/app/docs:ro
       - ./storage:/storage
+      - ../prompt_editavel.txt:/app/prompt_editavel.txt:ro
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
@@ -56,7 +58,9 @@ services:
         condition: service_healthy
     volumes:
       - ./apps/api:/app
+      - ./docs:/app/docs:ro
       - ./storage:/storage
+      - ../prompt_editavel.txt:/app/prompt_editavel.txt:ro
     command: celery -A app.tasks.celery_app worker --loglevel=info
 
   scheduler:
@@ -72,18 +76,22 @@ services:
         condition: service_healthy
     volumes:
       - ./apps/api:/app
+      - ./docs:/app/docs:ro
       - ./storage:/storage
+      - ../prompt_editavel.txt:/app/prompt_editavel.txt:ro
     command: celery -A app.tasks.celery_app beat --loglevel=info
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      target: ${WEB_DOCKER_TARGET:-dev}
     env_file:
       - .env
     environment:
       PLAYWRIGHT_CHROMIUM_PATH: /usr/bin/chromium
       WEB_RUNTIME_MODE: ${WEB_RUNTIME_MODE:-production}
+      NODE_ENV: ${WEB_NODE_ENV:-production}
     ports:
       - "3000:3000"
     depends_on:
@@ -94,7 +102,20 @@ services:
       - ./package.json:/workspace/package.json
       - ./pnpm-workspace.yaml:/workspace/pnpm-workspace.yaml
       - ./turbo.json:/workspace/turbo.json
-    command: sh -c "rm -rf /workspace/apps/web/.next /workspace/apps/web/.next-dev && pnpm install --frozen-lockfile=false && if [ \"$$WEB_RUNTIME_MODE\" = \"dev\" ]; then pnpm --filter @odontoflux/web dev --hostname 0.0.0.0 --port 3000; else pnpm --filter @odontoflux/web build && pnpm --filter @odontoflux/web start --hostname 0.0.0.0 --port 3000; fi"
+      - web_node_modules:/workspace/node_modules
+      - web_app_node_modules:/workspace/apps/web/node_modules
+      - web_next_cache:/workspace/apps/web/.next
+      - web_pnpm_store:/pnpm/store
+      - web_ui_node_modules:/workspace/packages/ui/node_modules
+    command: >
+      sh -c "if [ ! -d /workspace/node_modules/.pnpm ] || [ ! -e /workspace/apps/web/node_modules/next/dist/bin/next ] || [ ! -e /workspace/packages/ui/node_modules/react/package.json ]; then pnpm install --store-dir /pnpm/store --prefer-offline --frozen-lockfile=false; fi &&
+      cd /workspace/apps/web &&
+      if [ \"$$WEB_RUNTIME_MODE\" = \"dev\" ]; then
+        NODE_ENV=development pnpm dev --hostname 0.0.0.0 --port 3000;
+      else
+        NODE_ENV=production pnpm build &&
+        NODE_ENV=production pnpm start --hostname 0.0.0.0 --port 3000;
+      fi"
 
   nginx:
     image: nginx:1.27-alpine
@@ -108,3 +129,8 @@ services:
 
 volumes:
   pgdata:
+  web_node_modules:
+  web_app_node_modules:
+  web_next_cache:
+  web_pnpm_store:
+  web_ui_node_modules:

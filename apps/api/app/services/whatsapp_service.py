@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from hashlib import sha1
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,12 +25,24 @@ from app.models import (
     WhatsAppAccount,
 )
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
+from app.services.audio_transcription_service import (
+    AudioTranscriptionError,
+    AudioTranscriptionUnavailable,
+    transcribe_audio_bytes,
+)
 from app.services.automation_service import emit_event, pending_jobs_for_dispatch
+from app.services.demo_whatsapp_simulation_service import ensure_demo_virtual_whatsapp_account, is_demo_tenant
+from app.services.storage_service import StorageProviderFactory
 from app.utils.phone import normalize_phone
 
 
 SUPPORTED_WHATSAPP_PROVIDERS = {"meta_cloud", "infobip", "twilio"}
 WEBHOOK_EVENT_ID_MAX_LENGTH = 120
+AI_AUTORESPONDER_BURST_DELAY_SECONDS = 8
+AUDIO_MESSAGE_TYPES = {"audio", "voice"}
+AUDIO_TRANSCRIPTION_PENDING_BODY = "[Audio recebido - transcricao pendente]"
+AUDIO_TRANSCRIPTION_UNAVAILABLE_BODY = "[Audio recebido - transcricao indisponivel]"
+AUDIO_TRANSCRIPTION_FAILED_BODY = "[Audio recebido - transcricao nao concluida]"
 
 
 def _safe_webhook_event_id(raw_event_id: str | None) -> str:
@@ -45,6 +58,235 @@ def _safe_webhook_event_id(raw_event_id: str | None) -> str:
     if prefix_size <= 0:
         return digest[:WEBHOOK_EVENT_ID_MAX_LENGTH]
     return f'{value[:prefix_size]}:{digest}'
+
+
+def _audio_media_suffix(*, mime_type: str | None, file_name: str | None) -> str:
+    file_suffix = Path(file_name or "").suffix.strip().lower()
+    if file_suffix:
+        return file_suffix if file_suffix.startswith(".") else f".{file_suffix}"
+
+    mime_value = str(mime_type or "").strip().lower()
+    if "ogg" in mime_value or "opus" in mime_value:
+        return ".ogg"
+    if "mpeg" in mime_value or "mp3" in mime_value:
+        return ".mp3"
+    if "wav" in mime_value or "wave" in mime_value:
+        return ".wav"
+    if "mp4" in mime_value or "m4a" in mime_value:
+        return ".m4a"
+    if "webm" in mime_value:
+        return ".webm"
+    return ".bin"
+
+
+def _existing_audio_storage_path(media: dict | None) -> Path | None:
+    if not isinstance(media, dict):
+        return None
+    raw_path = str(media.get("local_storage_path") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    if not path.exists() or not path.is_file():
+        return None
+    return path
+
+
+def _store_whatsapp_audio_bytes(
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    message_id: UUID,
+    media: dict,
+    audio_bytes: bytes,
+    mime_type: str | None = None,
+    file_name: str | None = None,
+) -> dict:
+    resolved_mime_type = str(mime_type or media.get("mime_type") or "").strip() or None
+    resolved_file_name = str(file_name or media.get("file_name") or "").strip() or None
+    suffix = _audio_media_suffix(mime_type=resolved_mime_type, file_name=resolved_file_name)
+    if not resolved_file_name:
+        resolved_file_name = f"{message_id}{suffix}"
+
+    relative_path = f"whatsapp/audio/{conversation_id}/{message_id}{suffix}"
+    storage = StorageProviderFactory.create()
+    stored = storage.save_bytes(
+        tenant_slug=str(tenant_id),
+        relative_path=relative_path,
+        content=audio_bytes,
+    )
+
+    merged_media = dict(media)
+    merged_media.update(
+        {
+            "file_name": resolved_file_name,
+            "mime_type": resolved_mime_type,
+            "local_storage_path": stored["path"],
+            "local_storage_relative_path": relative_path,
+            "local_storage_checksum": stored["checksum"],
+            "local_storage_size_bytes": stored["size_bytes"],
+            "stored_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    return merged_media
+
+
+def _schedule_ai_autoresponder_for_inbound(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    inbound_message_id: UUID,
+    interactive_reply: dict | None = None,
+) -> None:
+    countdown = 0 if interactive_reply else AI_AUTORESPONDER_BURST_DELAY_SECONDS
+    try:
+        from app.tasks.jobs import process_ai_autoresponder_inbound_task
+
+        process_ai_autoresponder_inbound_task.apply_async(
+            args=[str(tenant_id), str(conversation_id), str(inbound_message_id)],
+            countdown=countdown,
+        )
+    except Exception as exc:
+        logger.warning(
+            'ai_autoresponder.schedule_failed_running_inline',
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation_id),
+            message_id=str(inbound_message_id),
+            error=str(exc),
+        )
+        from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
+
+        process_ai_autoresponder_inbound(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            inbound_message_id=inbound_message_id,
+        )
+
+
+def _schedule_audio_transcription_for_inbound(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    inbound_message_id: UUID,
+) -> None:
+    try:
+        from app.tasks.jobs import process_whatsapp_audio_inbound_task
+
+        process_whatsapp_audio_inbound_task.apply_async(
+            args=[str(tenant_id), str(conversation_id), str(inbound_message_id)],
+            countdown=0,
+        )
+    except Exception as exc:
+        logger.warning(
+            'whatsapp_audio.schedule_failed_running_inline',
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation_id),
+            message_id=str(inbound_message_id),
+            error=str(exc),
+        )
+        process_inbound_audio_message(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            inbound_message_id=inbound_message_id,
+        )
+
+
+def _build_provider_context(account: WhatsAppAccount) -> dict[str, str | None]:
+    return {
+        'whatsapp_account_id': str(account.id),
+        'provider_name': account.provider_name,
+        'phone_number_id': account.phone_number_id,
+        'business_account_id': account.business_account_id,
+    }
+
+
+def _is_audio_content_type(content_type: str | None) -> bool:
+    value = str(content_type or '').strip().lower()
+    return value.startswith('audio/') or 'ogg' in value or 'opus' in value
+
+
+def _placeholder_body_for_message_type(message_type: str) -> str:
+    normalized = str(message_type or '').strip().lower()
+    if normalized in AUDIO_MESSAGE_TYPES:
+        return AUDIO_TRANSCRIPTION_PENDING_BODY
+    if normalized == 'media':
+        return '[Mensagem com midia]'
+    return '[Mensagem sem texto]'
+
+
+def _extract_meta_audio_media(message: dict) -> dict | None:
+    message_type = str(message.get('type') or '').strip().lower()
+    if message_type != 'audio':
+        return None
+
+    audio_block = message.get('audio') if isinstance(message.get('audio'), dict) else {}
+    media_id = str(audio_block.get('id') or '').strip()
+    mime_type = str(audio_block.get('mime_type') or '').strip()
+    return {
+        'kind': 'audio',
+        'provider': 'meta_cloud',
+        'media_id': media_id or None,
+        'mime_type': mime_type or None,
+        'sha256': str(audio_block.get('sha256') or '').strip() or None,
+        'voice': bool(audio_block.get('voice')),
+    }
+
+
+def _extract_infobip_audio_media(result: dict, message_block: dict) -> dict | None:
+    normalized_type = str(result.get('type') or message_block.get('type') or '').strip().lower()
+    if normalized_type not in AUDIO_MESSAGE_TYPES:
+        return None
+
+    media_url = str(
+        message_block.get('url')
+        or message_block.get('mediaUrl')
+        or message_block.get('fileUrl')
+        or result.get('url')
+        or result.get('mediaUrl')
+        or ''
+    ).strip()
+    mime_type = str(
+        message_block.get('mimeType')
+        or result.get('mimeType')
+        or message_block.get('contentType')
+        or result.get('contentType')
+        or ''
+    ).strip()
+    return {
+        'kind': 'audio',
+        'provider': 'infobip',
+        'media_url': media_url or None,
+        'mime_type': mime_type or None,
+        'file_name': str(message_block.get('fileName') or result.get('fileName') or '').strip() or None,
+        'voice': normalized_type == 'voice',
+    }
+
+
+def _extract_twilio_audio_media(payload: dict) -> dict | None:
+    try:
+        media_count = max(int(str(payload.get('NumMedia') or '0').strip() or '0'), 0)
+    except ValueError:
+        media_count = 0
+
+    for index in range(media_count):
+        content_type = str(payload.get(f'MediaContentType{index}') or '').strip()
+        if not _is_audio_content_type(content_type):
+            continue
+        media_url = str(payload.get(f'MediaUrl{index}') or '').strip()
+        if not media_url:
+            continue
+        return {
+            'kind': 'audio',
+            'provider': 'twilio',
+            'media_url': media_url,
+            'mime_type': content_type or None,
+            'media_index': index,
+            'voice': 'ogg' in content_type.lower() or 'opus' in content_type.lower(),
+        }
+    return None
 
 
 def _extract_meta_inbound_body_and_interactive(message: dict) -> tuple[str, str, dict | None]:
@@ -224,6 +466,8 @@ def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) 
         .limit(1)
     )
     if not account:
+        if is_demo_tenant(db, tenant_id=tenant_id):
+            return ensure_demo_virtual_whatsapp_account(db, tenant_id=tenant_id)
         raise ApiError(
             status_code=400,
             code='WHATSAPP_ACCOUNT_NOT_CONFIGURED',
@@ -237,6 +481,8 @@ def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) 
         access_token=account.access_token_encrypted,
     )
     if issues:
+        if is_demo_tenant(db, tenant_id=tenant_id):
+            return account
         raise ApiError(
             status_code=400,
             code='WHATSAPP_ACCOUNT_INVALID',
@@ -247,6 +493,85 @@ def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) 
             },
         )
     return account
+
+
+def _dispatch_demo_virtual_outbox_item(db: Session, item: OutboxMessage) -> None:
+    payload = item.payload or {}
+    payload_metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+    outbound_message_id = payload_metadata.get('outbound_message_id')
+    provider_message_id = f'demo_virtual_{str(item.id).replace("-", "")[:18]}'
+    simulated_response = {
+        'provider': 'demo_virtual',
+        'status': 'sent',
+        'message_id': provider_message_id,
+        'simulated': True,
+    }
+
+    linked_outbound_message = None
+    dispatched_message = None
+    if outbound_message_id:
+        try:
+            outbound_uuid = UUID(outbound_message_id)
+            linked_outbound_message = db.scalar(
+                select(Message).where(
+                    Message.id == outbound_uuid,
+                    Message.tenant_id == item.tenant_id,
+                )
+            )
+        except (ValueError, TypeError):
+            linked_outbound_message = None
+
+    if linked_outbound_message:
+        linked_outbound_message.provider_message_id = provider_message_id
+        linked_outbound_message.status = MessageStatus.SENT.value
+        linked_outbound_message.sent_at = datetime.now(UTC)
+        existing_payload = linked_outbound_message.payload if isinstance(linked_outbound_message.payload, dict) else {}
+        linked_outbound_message.payload = {
+            **existing_payload,
+            'provider_response': simulated_response,
+            'virtual_dispatch': True,
+        }
+        db.add(linked_outbound_message)
+        dispatched_message = linked_outbound_message
+    elif payload.get('conversation_id'):
+        dispatched_message = Message(
+            tenant_id=item.tenant_id,
+            conversation_id=UUID(str(payload.get('conversation_id'))),
+            direction=MessageDirection.OUTBOUND.value,
+            channel='whatsapp',
+            provider_message_id=provider_message_id,
+            sender_type='automation',
+            body=payload.get('body') or '',
+            message_type=payload.get('message_type', 'text'),
+            payload={
+                **payload,
+                'provider_response': simulated_response,
+                'virtual_dispatch': True,
+            },
+            status=MessageStatus.SENT.value,
+            sent_at=datetime.now(UTC),
+        )
+        db.add(dispatched_message)
+
+    item.status = OutboxStatus.SENT.value
+    item.last_error = None
+    db.add(item)
+    db.commit()
+
+    if (
+        dispatched_message
+        and dispatched_message.sender_type == 'automation'
+        and dispatched_message.channel == 'whatsapp'
+    ):
+        from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_whatsapp_reply_simulation
+
+        maybe_schedule_demo_whatsapp_reply_simulation(
+            db,
+            tenant_id=item.tenant_id,
+            conversation_id=dispatched_message.conversation_id,
+            outbound_message_id=dispatched_message.id,
+            source=str(payload_metadata.get('source') or 'automation'),
+        )
 
 
 def _get_meta_account_by_phone_number_id(db: Session, phone_number_id: str) -> WhatsAppAccount | None:
@@ -293,6 +618,326 @@ def _get_twilio_account_by_destination(db: Session, destination: str | None) -> 
         if _normalized_provider_phone(account.phone_number_id) == destination_normalized:
             return account
     return None
+
+
+def _resolve_whatsapp_account_from_payload(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    payload: dict,
+) -> WhatsAppAccount | None:
+    provider_context = payload.get('provider_context') if isinstance(payload.get('provider_context'), dict) else {}
+    account_id = str(provider_context.get('whatsapp_account_id') or '').strip()
+    if account_id:
+        try:
+            account = db.get(WhatsAppAccount, UUID(account_id))
+        except ValueError:
+            account = None
+        if account and account.tenant_id == tenant_id:
+            return account
+
+    provider_name = normalize_whatsapp_provider_name(provider_context.get('provider_name'))
+    phone_number_id = str(provider_context.get('phone_number_id') or '').strip()
+    if _is_meta_provider(provider_name) and phone_number_id:
+        return _get_meta_account_by_phone_number_id(db, phone_number_id)
+    if _is_infobip_provider(provider_name) and phone_number_id:
+        return _get_infobip_account_by_sender(db, phone_number_id)
+    if _is_twilio_provider(provider_name) and phone_number_id:
+        return _get_twilio_account_by_destination(db, phone_number_id)
+
+    return db.scalar(
+        select(WhatsAppAccount)
+        .where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+
+
+def _download_whatsapp_audio_bytes(
+    *,
+    account: WhatsAppAccount,
+    media: dict,
+) -> tuple[bytes, dict]:
+    provider_name = normalize_whatsapp_provider_name(account.provider_name)
+    resolved_media_url = str(media.get('media_url') or media.get('resolved_url') or '').strip() or None
+    if _is_meta_provider(provider_name):
+        client = WhatsAppCloudProvider()
+        return client.download_media(
+            access_token=account.access_token_encrypted,
+            media_id=str(media.get('media_id') or '').strip() or None,
+            media_url=resolved_media_url,
+        )
+    if _is_infobip_provider(provider_name):
+        client = InfobipWhatsAppProvider(base_url=account.business_account_id)
+        return client.download_media(
+            access_token=account.access_token_encrypted,
+            media_url=resolved_media_url,
+        )
+    if _is_twilio_provider(provider_name):
+        client = TwilioWhatsAppProvider(account_sid=account.business_account_id)
+        return client.download_media(
+            access_token=account.access_token_encrypted,
+            media_url=resolved_media_url,
+        )
+    raise RuntimeError('unsupported_whatsapp_provider_for_audio')
+
+
+def ensure_whatsapp_audio_media_stored(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    message: Message,
+) -> tuple[Path, str | None, str | None]:
+    normalized_type = str(message.message_type or "").strip().lower()
+    if normalized_type not in AUDIO_MESSAGE_TYPES:
+        raise ApiError(
+            status_code=400,
+            code="MESSAGE_MEDIA_UNSUPPORTED",
+            message="Apenas mensagens de audio podem ser reproduzidas nesta rota.",
+        )
+
+    payload = dict(message.payload or {})
+    media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
+    if not media:
+        raise ApiError(
+            status_code=404,
+            code="MESSAGE_MEDIA_NOT_FOUND",
+            message="Audio da mensagem nao encontrado.",
+        )
+
+    existing_path = _existing_audio_storage_path(media)
+    if existing_path:
+        resolved_mime_type = str(media.get("mime_type") or media.get("downloaded_content_type") or "").strip() or None
+        resolved_file_name = str(media.get("file_name") or existing_path.name).strip() or existing_path.name
+        return existing_path, resolved_mime_type, resolved_file_name
+
+    account = _resolve_whatsapp_account_from_payload(db, tenant_id=tenant_id, payload=payload)
+    if not account:
+        raise ApiError(
+            status_code=404,
+            code="WHATSAPP_ACCOUNT_NOT_FOUND",
+            message="Conta WhatsApp nao encontrada para recuperar o audio.",
+        )
+
+    try:
+        audio_bytes, download_metadata = _download_whatsapp_audio_bytes(account=account, media=media)
+    except Exception as exc:
+        raise ApiError(
+            status_code=404,
+            code="MESSAGE_MEDIA_RECOVERY_FAILED",
+            message="Nao foi possivel recuperar o audio original desta mensagem.",
+        ) from exc
+    mime_type = (
+        str(media.get("mime_type") or "").strip()
+        or str(download_metadata.get("content_type") or "").strip()
+        or None
+    )
+    file_name = str(media.get("file_name") or "").strip() or None
+
+    merged_media = _store_whatsapp_audio_bytes(
+        tenant_id=tenant_id,
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+        media=media,
+        audio_bytes=audio_bytes,
+        mime_type=mime_type,
+        file_name=file_name,
+    )
+    merged_media.update(
+        {
+            "downloaded_content_type": str(download_metadata.get("content_type") or "").strip() or None,
+            "downloaded_content_length": str(download_metadata.get("content_length") or "").strip() or None,
+            "resolved_url": str(download_metadata.get("resolved_url") or "").strip() or None,
+        }
+    )
+    payload["media"] = merged_media
+    message.payload = payload
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    stored_path = _existing_audio_storage_path(merged_media)
+    if stored_path is None:
+        raise ApiError(
+            status_code=500,
+            code="MESSAGE_MEDIA_STORAGE_FAILED",
+            message="Nao foi possivel preparar o audio para reproducao.",
+        )
+    return stored_path, mime_type, str(merged_media.get("file_name") or stored_path.name).strip() or stored_path.name
+
+
+def process_inbound_audio_message(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+    inbound_message_id: UUID,
+) -> dict[str, object]:
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == tenant_id,
+        )
+    )
+    inbound_message = db.scalar(
+        select(Message).where(
+            Message.id == inbound_message_id,
+            Message.tenant_id == tenant_id,
+            Message.direction == MessageDirection.INBOUND.value,
+        )
+    )
+    if not conversation or not inbound_message:
+        return {'status': 'ignored', 'reason': 'context_not_found'}
+
+    if str(inbound_message.message_type or '').strip().lower() not in AUDIO_MESSAGE_TYPES:
+        return {'status': 'ignored', 'reason': 'message_is_not_audio'}
+
+    payload = dict(inbound_message.payload or {})
+    media = payload.get('media') if isinstance(payload.get('media'), dict) else {}
+    if not media:
+        return {'status': 'ignored', 'reason': 'audio_media_not_found'}
+
+    current_transcription = (
+        payload.get('audio_transcription')
+        if isinstance(payload.get('audio_transcription'), dict)
+        else {}
+    )
+    if str(current_transcription.get('status') or '').strip().lower() == 'completed':
+        return {'status': 'duplicate', 'reason': 'audio_already_transcribed'}
+
+    try:
+        account = _resolve_whatsapp_account_from_payload(db, tenant_id=tenant_id, payload=payload)
+        if not account:
+            raise AudioTranscriptionError('whatsapp_account_not_found_for_audio')
+
+        audio_bytes, download_metadata = _download_whatsapp_audio_bytes(account=account, media=media)
+        mime_type = (
+            str(media.get('mime_type') or '').strip()
+            or str(download_metadata.get('content_type') or '').strip()
+            or None
+        )
+        file_name = str(media.get('file_name') or '').strip() or None
+        merged_media = _store_whatsapp_audio_bytes(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            message_id=inbound_message.id,
+            media=media,
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+            file_name=file_name,
+        )
+        merged_media.update(
+            {
+                'downloaded_content_type': str(download_metadata.get('content_type') or '').strip() or None,
+                'downloaded_content_length': str(download_metadata.get('content_length') or '').strip() or None,
+                'resolved_url': str(download_metadata.get('resolved_url') or '').strip() or None,
+            }
+        )
+        payload['media'] = merged_media
+        transcription = transcribe_audio_bytes(
+            audio_bytes,
+            mime_type=mime_type,
+            file_name=file_name,
+        )
+        transcript_text = str(transcription.get('text') or '').strip()
+        if not transcript_text:
+            raise AudioTranscriptionError('empty_audio_transcript')
+
+        payload['audio_transcription'] = {
+            'status': 'completed',
+            'text': transcript_text,
+            'language': transcription.get('language'),
+            'language_probability': transcription.get('language_probability'),
+            'duration_seconds': transcription.get('duration_seconds'),
+            'model': transcription.get('model'),
+            'system': transcription.get('system'),
+            'score': transcription.get('score'),
+            'selected_system': transcription.get('selected_system'),
+            'selection_reason': transcription.get('selection_reason'),
+            'candidates': transcription.get('candidates') if isinstance(transcription.get('candidates'), list) else [],
+            'errors': transcription.get('errors') if isinstance(transcription.get('errors'), list) else [],
+            'updated_at': datetime.now(UTC).isoformat(),
+        }
+        inbound_message.body = transcript_text
+        inbound_message.payload = payload
+        db.add(inbound_message)
+        db.add(
+            MessageEvent(
+                tenant_id=tenant_id,
+                message_id=inbound_message.id,
+                event_type='audio_transcribed',
+                payload={
+                    'language': transcription.get('language'),
+                    'duration_seconds': transcription.get('duration_seconds'),
+                    'model': transcription.get('model'),
+                    'selected_system': transcription.get('selected_system'),
+                    'selection_reason': transcription.get('selection_reason'),
+                },
+            )
+        )
+        db.commit()
+    except AudioTranscriptionUnavailable as exc:
+        payload['audio_transcription'] = {
+            'status': 'unavailable',
+            'error': str(exc),
+            'updated_at': datetime.now(UTC).isoformat(),
+        }
+        inbound_message.body = AUDIO_TRANSCRIPTION_UNAVAILABLE_BODY
+        inbound_message.payload = payload
+        db.add(inbound_message)
+        db.add(
+            MessageEvent(
+                tenant_id=tenant_id,
+                message_id=inbound_message.id,
+                event_type='audio_transcription_unavailable',
+                payload={'error': str(exc)},
+            )
+        )
+        db.commit()
+        logger.warning(
+            'whatsapp_audio.transcription_unavailable',
+            tenant_id=str(tenant_id),
+            message_id=str(inbound_message.id),
+            error=str(exc),
+        )
+        return {'status': 'unavailable', 'reason': str(exc)}
+    except Exception as exc:
+        payload['audio_transcription'] = {
+            'status': 'failed',
+            'error': str(exc),
+            'updated_at': datetime.now(UTC).isoformat(),
+        }
+        inbound_message.body = AUDIO_TRANSCRIPTION_FAILED_BODY
+        inbound_message.payload = payload
+        db.add(inbound_message)
+        db.add(
+            MessageEvent(
+                tenant_id=tenant_id,
+                message_id=inbound_message.id,
+                event_type='audio_transcription_failed',
+                payload={'error': str(exc)},
+            )
+        )
+        db.commit()
+        logger.warning(
+            'whatsapp_audio.transcription_failed',
+            tenant_id=str(tenant_id),
+            message_id=str(inbound_message.id),
+            error=str(exc),
+        )
+        return {'status': 'failed', 'reason': str(exc)}
+
+    _schedule_ai_autoresponder_for_inbound(
+        db,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        inbound_message_id=inbound_message.id,
+        interactive_reply=None,
+    )
+    return {'status': 'completed', 'message_id': str(inbound_message.id)}
 
 
 
@@ -352,6 +997,31 @@ def _create_patient_and_lead_from_phone(
     db.add(lead)
     db.flush()
     return patient, lead
+
+
+def _sync_sales_outreach_reply_if_needed(
+    db: Session,
+    *,
+    conversation: Conversation | None,
+    inbound_message: Message,
+) -> None:
+    if not conversation or "prospect_outreach" not in set(conversation.tags or []):
+        return
+    try:
+        from app.services.sales_demo_service import sync_prospect_outreach_reply
+
+        sync_prospect_outreach_reply(
+            db,
+            conversation=conversation,
+            message=inbound_message,
+        )
+    except Exception as exc:
+        logger.warning(
+            'sales_outreach.reply_sync_failed',
+            conversation_id=str(conversation.id) if conversation else None,
+            message_id=str(inbound_message.id),
+            error=str(exc),
+        )
 
 
 
@@ -470,9 +1140,19 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     preferred_unit_id=preferred_unit_id,
                 )
                 body, inbound_type, interactive_reply = _extract_meta_inbound_body_and_interactive(message)
+                media = _extract_meta_audio_media(message)
+                if not body:
+                    body = _placeholder_body_for_message_type(inbound_type)
                 inbound_payload = dict(message)
+                inbound_payload['provider_context'] = _build_provider_context(account)
                 if interactive_reply:
                     inbound_payload['interactive_reply'] = interactive_reply
+                if media:
+                    inbound_payload['media'] = media
+                    inbound_payload['audio_transcription'] = {
+                        'status': 'pending',
+                        'updated_at': datetime.now(UTC).isoformat(),
+                    }
                 inbound_message = Message(
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
@@ -491,6 +1171,11 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 if conversation:
                     conversation.last_message_at = datetime.now(UTC)
                     db.add(conversation)
+                _sync_sales_outreach_reply_if_needed(
+                    db,
+                    conversation=conversation,
+                    inbound_message=inbound_message,
+                )
                 db.add(
                     MessageEvent(
                         tenant_id=tenant_id,
@@ -516,22 +1201,20 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                         'message': body,
                     },
                 )
-                try:
-                    from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
-
-                    process_ai_autoresponder_inbound(
+                if inbound_type in AUDIO_MESSAGE_TYPES:
+                    _schedule_audio_transcription_for_inbound(
                         db,
                         tenant_id=tenant_id,
                         conversation_id=conversation_id,
                         inbound_message_id=inbound_message.id,
                     )
-                except Exception as exc:
-                    logger.exception(
-                        'ai_autoresponder.inbound_failed',
-                        tenant_id=str(tenant_id),
-                        conversation_id=str(conversation_id),
-                        message_id=str(inbound_message.id),
-                        error=str(exc),
+                else:
+                    _schedule_ai_autoresponder_for_inbound(
+                        db,
+                        tenant_id=tenant_id,
+                        conversation_id=conversation_id,
+                        inbound_message_id=inbound_message.id,
+                        interactive_reply=interactive_reply,
                     )
 
             for status in value.get('statuses', []):
@@ -634,9 +1317,10 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         sender_phone = str(result.get('from') or '').strip()
         message_block = result.get('message') if isinstance(result.get('message'), dict) else {}
         inbound_text, inferred_type, interactive_reply = _extract_infobip_inbound_body_and_interactive(result, message_block)
+        media = _extract_infobip_audio_media(result, message_block)
 
         has_status = isinstance(result.get('status'), dict) or bool(result.get('status'))
-        is_inbound = bool(sender_phone and inbound_text)
+        is_inbound = bool(sender_phone and (inbound_text or media))
 
         if is_inbound:
             stats['received'] += 1
@@ -682,9 +1366,17 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 patient.id,
                 preferred_unit_id=preferred_unit_id,
             )
+            inbound_body = inbound_text or _placeholder_body_for_message_type(inferred_type)
             inbound_payload = dict(result)
+            inbound_payload['provider_context'] = _build_provider_context(account)
             if interactive_reply:
                 inbound_payload['interactive_reply'] = interactive_reply
+            if media:
+                inbound_payload['media'] = media
+                inbound_payload['audio_transcription'] = {
+                    'status': 'pending',
+                    'updated_at': datetime.now(UTC).isoformat(),
+                }
             inbound_message = Message(
                 tenant_id=tenant_id,
                 conversation_id=conversation_id,
@@ -692,7 +1384,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 channel='whatsapp',
                 provider_message_id=provider_message_id or None,
                 sender_type='patient',
-                body=inbound_text,
+                body=inbound_body,
                 message_type=inferred_type,
                 payload=inbound_payload,
                 status=MessageStatus.RECEIVED.value,
@@ -703,6 +1395,11 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             if conversation:
                 conversation.last_message_at = datetime.now(UTC)
                 db.add(conversation)
+            _sync_sales_outreach_reply_if_needed(
+                db,
+                conversation=conversation,
+                inbound_message=inbound_message,
+            )
 
             db.add(
                 MessageEvent(
@@ -726,25 +1423,23 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                     'patient_id': str(patient.id),
                     'lead_id': str(lead.id) if lead else None,
                     'phone': sender_phone,
-                    'message': inbound_text,
+                    'message': inbound_body,
                 },
             )
-            try:
-                from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
-
-                process_ai_autoresponder_inbound(
+            if inferred_type in AUDIO_MESSAGE_TYPES:
+                _schedule_audio_transcription_for_inbound(
                     db,
                     tenant_id=tenant_id,
                     conversation_id=conversation_id,
                     inbound_message_id=inbound_message.id,
                 )
-            except Exception as exc:
-                logger.exception(
-                    'ai_autoresponder.inbound_failed',
-                    tenant_id=str(tenant_id),
-                    conversation_id=str(conversation_id),
-                    message_id=str(inbound_message.id),
-                    error=str(exc),
+            else:
+                _schedule_ai_autoresponder_for_inbound(
+                    db,
+                    tenant_id=tenant_id,
+                    conversation_id=conversation_id,
+                    inbound_message_id=inbound_message.id,
+                    interactive_reply=interactive_reply,
                 )
             continue
 
@@ -823,6 +1518,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
     raw_status = payload.get('MessageStatus') or payload.get('SmsStatus')
     normalized_status = _normalize_twilio_delivery_status(raw_status)
     num_media = str(payload.get('NumMedia') or '0').strip()
+    audio_media = _extract_twilio_audio_media(payload)
 
     account = _get_twilio_account_by_destination(db, to_phone)
     if not account:
@@ -889,11 +1585,19 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
             preferred_unit_id=preferred_unit_id,
         )
         inbound_body = body
-        if not inbound_body and num_media != '0':
-            inbound_body = '[Mensagem com midia]'
+        if not inbound_body:
+            inbound_body = _placeholder_body_for_message_type('audio' if audio_media else ('media' if num_media != '0' else 'text'))
         if not inbound_body:
             inbound_body = '[Mensagem sem texto]'
-        inferred_type = 'media' if num_media != '0' else 'text'
+        inferred_type = 'audio' if audio_media else ('media' if num_media != '0' else 'text')
+        inbound_payload = dict(payload)
+        inbound_payload['provider_context'] = _build_provider_context(account)
+        if audio_media:
+            inbound_payload['media'] = audio_media
+            inbound_payload['audio_transcription'] = {
+                'status': 'pending',
+                'updated_at': datetime.now(UTC).isoformat(),
+            }
 
         inbound_message = Message(
             tenant_id=tenant_id,
@@ -904,7 +1608,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
             sender_type='patient',
             body=inbound_body,
             message_type=inferred_type,
-            payload=payload,
+            payload=inbound_payload,
             status=MessageStatus.RECEIVED.value,
         )
         db.add(inbound_message)
@@ -913,6 +1617,11 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
         if conversation:
             conversation.last_message_at = datetime.now(UTC)
             db.add(conversation)
+        _sync_sales_outreach_reply_if_needed(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
 
         db.add(
             MessageEvent(
@@ -939,22 +1648,20 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
                 'message': inbound_body,
             },
         )
-        try:
-            from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
-
-            process_ai_autoresponder_inbound(
+        if inferred_type in AUDIO_MESSAGE_TYPES:
+            _schedule_audio_transcription_for_inbound(
                 db,
                 tenant_id=tenant_id,
                 conversation_id=conversation_id,
                 inbound_message_id=inbound_message.id,
             )
-        except Exception as exc:
-            logger.exception(
-                'ai_autoresponder.inbound_failed',
-                tenant_id=str(tenant_id),
-                conversation_id=str(conversation_id),
-                message_id=str(inbound_message.id),
-                error=str(exc),
+        else:
+            _schedule_ai_autoresponder_for_inbound(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                inbound_message_id=inbound_message.id,
+                interactive_reply=None,
             )
         return stats
 
@@ -1029,6 +1736,8 @@ def queue_outbound_message(
     template: dict | None = None,
     interactive: dict | None = None,
     metadata: dict | None = None,
+    immediate_dispatch: bool | None = None,
+    commit: bool = True,
 ) -> OutboxMessage:
     normalized_to = normalize_phone(to)
     if not normalized_to:
@@ -1067,8 +1776,19 @@ def queue_outbound_message(
         max_retries=5,
     )
     db.add(outbox)
-    db.commit()
-    db.refresh(outbox)
+    if commit:
+        db.commit()
+        db.refresh(outbox)
+    else:
+        db.flush()
+    should_dispatch_inline = (
+        settings.whatsapp_inline_dispatch_on_queue
+        if immediate_dispatch is None
+        else immediate_dispatch
+    )
+    if should_dispatch_inline:
+        _dispatch_outbox_item_inline(db, outbox_id=outbox.id)
+        db.refresh(outbox)
     return outbox
 
 
@@ -1137,6 +1857,10 @@ def _extract_provider_dispatch_error(*, provider_name: str | None, response: dic
 
 
 def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
+    if is_demo_tenant(db, tenant_id=item.tenant_id):
+        _dispatch_demo_virtual_outbox_item(db, item)
+        return
+
     account = db.scalar(
         select(WhatsAppAccount)
         .where(
@@ -1328,6 +2052,23 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
         db.add(item)
         db.commit()
 
+
+def _dispatch_outbox_item_inline(db: Session, *, outbox_id: UUID) -> None:
+    item = db.get(OutboxMessage, outbox_id)
+    if not item:
+        return
+
+    if item.status not in {OutboxStatus.PENDING.value, OutboxStatus.FAILED.value}:
+        return
+
+    try:
+        _dispatch_outbox_item(db, item)
+    except Exception as exc:
+        logger.exception(
+            'whatsapp.inline_dispatch_failed',
+            outbox_id=str(outbox_id),
+            error=str(exc),
+        )
 
 
 def process_outbox_batch(db: Session, *, batch_size: int = 30) -> dict:

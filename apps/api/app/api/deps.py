@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApiError
 from app.core.security import TokenError, decode_token
+from app.db.mutation_tracking import ACTOR_TENANT_ID_KEY, ACTOR_USER_ID_KEY, ACTOR_USER_NAME_KEY
 from app.db.session import get_db
 from app.models import Role, User, UserRole
 
@@ -60,6 +61,9 @@ def get_current_principal(
         raise ApiError(status_code=401, code='AUTH_INVALID_TOKEN_TYPE', message='Token invalido')
 
     principal = _load_principal(db, payload.get('sub'))
+    db.info[ACTOR_USER_ID_KEY] = principal.user.id
+    db.info[ACTOR_USER_NAME_KEY] = principal.user.full_name
+    db.info[ACTOR_TENANT_ID_KEY] = principal.tenant_id
     return principal
 
 

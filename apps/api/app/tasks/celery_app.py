@@ -37,6 +37,10 @@ celery_app.conf.update(
             'task': 'app.tasks.jobs.monitor_platform_health_task',
             'schedule': 120.0,
         },
+        'run-automatic-backups': {
+            'task': 'app.tasks.jobs.run_automatic_backups_task',
+            'schedule': 900.0,
+        },
     },
     imports=('app.tasks.jobs',),
 )

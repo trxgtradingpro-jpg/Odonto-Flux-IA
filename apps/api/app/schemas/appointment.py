@@ -13,6 +13,9 @@ class AppointmentCreate(BaseModel):
     ends_at: datetime | None = None
     origin: str = 'manual'
     notes: str = ''
+    attendance_status: str = 'pendente'
+    attendance_notes: str = ''
+    next_appointment_status: str = 'nao_definido'
 
 
 class AppointmentUpdate(BaseModel):
@@ -24,6 +27,9 @@ class AppointmentUpdate(BaseModel):
     status: str | None = None
     confirmation_status: str | None = None
     notes: str | None = None
+    attendance_status: str | None = None
+    attendance_notes: str | None = None
+    next_appointment_status: str | None = None
 
 
 class AppointmentOutput(BaseModel):
@@ -39,3 +45,6 @@ class AppointmentOutput(BaseModel):
     confirmation_status: str
     origin: str
     notes: str
+    attendance_status: str
+    attendance_notes: str
+    next_appointment_status: str

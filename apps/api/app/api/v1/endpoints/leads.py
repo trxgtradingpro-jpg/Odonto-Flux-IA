@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 import csv
 from io import StringIO
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_current_principal, get_tenant_id
+from app.api.unit_scope import get_effective_unit_id, lead_unit_scope_filter
 from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Lead, Setting, User
@@ -23,12 +25,22 @@ VALID_TEMPERATURES = {'frio', 'morno', 'quente'}
 def list_leads(
     db: Session = Depends(get_db),
     tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     stage: str | None = None,
     temperature: str | None = None,
+    unit_id: UUID | None = None,
 ):
     stmt = select(Lead).where(Lead.tenant_id == tenant_id)
+    effective_unit_id = get_effective_unit_id(
+        db,
+        principal=principal,
+        tenant_id=tenant_id,
+        requested_unit_id=unit_id,
+    )
+    if effective_unit_id:
+        stmt = stmt.where(lead_unit_scope_filter(tenant_id=tenant_id, unit_id=effective_unit_id))
     if stage:
         stmt = stmt.where(Lead.stage == stage)
     if temperature:
@@ -47,7 +59,14 @@ def create_lead(
     tenant_id=Depends(get_tenant_id),
     principal: Principal = Depends(get_current_principal),
 ):
-    lead = Lead(tenant_id=tenant_id, **payload.model_dump())
+    payload_data = payload.model_dump()
+    payload_data['unit_id'] = get_effective_unit_id(
+        db,
+        principal=principal,
+        tenant_id=tenant_id,
+        requested_unit_id=payload.unit_id,
+    )
+    lead = Lead(tenant_id=tenant_id, **payload_data)
     db.add(lead)
     db.commit()
     db.refresh(lead)
@@ -59,7 +78,7 @@ def create_lead(
         entity_id=str(lead.id),
         tenant_id=tenant_id,
         user_id=principal.user.id,
-        metadata={'origin': lead.origin, 'stage': lead.stage},
+        metadata={'origin': lead.origin, 'stage': lead.stage, 'unit_id': str(lead.unit_id) if lead.unit_id else None},
     )
 
     return LeadOutput.model_validate(lead, from_attributes=True)
@@ -78,6 +97,13 @@ def update_lead(
         raise ApiError(status_code=404, code='LEAD_NOT_FOUND', message='Lead nao encontrado')
 
     updates = payload.model_dump(exclude_unset=True)
+    if 'unit_id' in updates:
+        updates['unit_id'] = get_effective_unit_id(
+            db,
+            principal=principal,
+            tenant_id=tenant_id,
+            requested_unit_id=updates['unit_id'],
+        )
     for key, value in updates.items():
         setattr(lead, key, value)
 

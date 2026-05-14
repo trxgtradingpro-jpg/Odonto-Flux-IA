@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import Principal, get_current_principal, get_tenant_id
 from app.core.exceptions import ApiError
 from app.db.session import get_db
-from app.models import Job
+from app.models import Job, Tenant
 from app.services.audit_service import record_audit
+from app.services.system_support_service import SUPPORT_KNOWLEDGE_VERSION, generate_system_support_answer
 
 router = APIRouter(prefix='/support', tags=['support'])
 
@@ -26,6 +27,16 @@ class SupportIncidentInput(BaseModel):
     severity: str = Field(default='media')
     description: str = Field(min_length=8)
     contact_email: str | None = None
+
+
+class SupportAIMessageInput(BaseModel):
+    role: str
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class SupportAIAnswerInput(BaseModel):
+    question: str = Field(min_length=2, max_length=1200)
+    history: list[SupportAIMessageInput] = Field(default_factory=list, max_length=12)
 
 
 @router.get('/overview')
@@ -47,6 +58,39 @@ def overview(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
         'open_incidents': len(open_incidents),
         'last_incident_at': incidents[0].created_at.isoformat() if incidents else None,
     }
+
+
+@router.post('/ai-answer')
+def ai_answer(
+    payload: SupportAIAnswerInput,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    tenant_name = db.scalar(select(Tenant.trade_name).where(Tenant.id == tenant_id)) or 'clínica atual'
+    answer = generate_system_support_answer(
+        db,
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        user_name=principal.user.full_name,
+        tenant_name=tenant_name,
+        question=payload.question,
+    )
+
+    record_audit(
+        db,
+        action='support.ai.answer',
+        entity_type='support',
+        entity_id=str(principal.user.id),
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={
+            'knowledge_version': SUPPORT_KNOWLEDGE_VERSION,
+            'mode': answer.get('mode'),
+            'sources': [item.get('id') for item in answer.get('sources', [])],
+        },
+    )
+    return answer
 
 
 @router.get('/incidents')

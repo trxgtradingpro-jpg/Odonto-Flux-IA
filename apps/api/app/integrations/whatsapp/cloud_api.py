@@ -65,6 +65,25 @@ class WhatsAppCloudProvider(WhatsAppProvider):
             )
         return response.json()
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    def _get_bytes(self, *, url: str, access_token: str) -> tuple[bytes, dict]:
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+        }
+        response = httpx.get(url, headers=headers, timeout=30)
+        if response.is_error:
+            detail = self._extract_error_detail(response)
+            raise httpx.HTTPStatusError(
+                f'WhatsApp API request failed ({response.status_code}): {detail}',
+                request=response.request,
+                response=response,
+            )
+        return response.content, {
+            'content_type': response.headers.get('content-type'),
+            'content_length': response.headers.get('content-length'),
+            'resolved_url': str(response.url),
+        }
+
     def send_text_message(self, *, phone_number_id: str, access_token: str, to: str, body: str) -> dict:
         payload = {
             'messaging_product': 'whatsapp',
@@ -234,3 +253,28 @@ class WhatsAppCloudProvider(WhatsAppProvider):
                 params={'fields': 'id,name'},
             )
         return {'phone': phone_data, 'business': business_data}
+
+    def download_media(
+        self,
+        *,
+        access_token: str,
+        media_id: str | None = None,
+        media_url: str | None = None,
+    ) -> tuple[bytes, dict]:
+        metadata: dict = {}
+        resolved_url = (media_url or '').strip()
+        if not resolved_url:
+            if not (media_id or '').strip():
+                raise ValueError('media_id obrigatorio para download de media da Meta')
+            metadata = self._get(
+                url=f'{self.base_url}/{media_id}',
+                access_token=access_token,
+            )
+            resolved_url = str(metadata.get('url') or '').strip()
+            if not resolved_url:
+                raise RuntimeError('Meta nao retornou url de download da media')
+
+        content, response_metadata = self._get_bytes(url=resolved_url, access_token=access_token)
+        merged_metadata = dict(metadata)
+        merged_metadata.update(response_metadata)
+        return content, merged_metadata

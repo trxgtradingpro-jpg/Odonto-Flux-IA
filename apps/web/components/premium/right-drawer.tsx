@@ -2,6 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { cn } from "@odontoflux/ui";
 
@@ -20,9 +21,21 @@ export function RightDrawer({
   children: React.ReactNode;
   widthClassName?: string;
 }) {
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const syncPortalContainer = () => {
+      setPortalContainer(document.fullscreenElement instanceof HTMLElement ? document.fullscreenElement : null);
+    };
+
+    syncPortalContainer();
+    document.addEventListener("fullscreenchange", syncPortalContainer);
+    return () => document.removeEventListener("fullscreenchange", syncPortalContainer);
+  }, []);
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
+      <Dialog.Portal container={portalContainer ?? undefined}>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px]" />
         <Dialog.Content
           className={cn(

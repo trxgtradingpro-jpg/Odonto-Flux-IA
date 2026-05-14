@@ -9,19 +9,20 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: '#f5f5f4',
-        foreground: '#1c1917',
+        background: 'rgb(var(--theme-background) / <alpha-value>)',
+        foreground: 'rgb(var(--theme-foreground) / <alpha-value>)',
         primary: {
-          DEFAULT: '#0f766e',
-          foreground: '#f0fdfa',
+          DEFAULT: 'rgb(var(--theme-primary) / <alpha-value>)',
+          foreground: 'rgb(var(--theme-primary-foreground) / <alpha-value>)',
         },
+        secondary: 'rgb(var(--theme-secondary) / <alpha-value>)',
         muted: {
-          DEFAULT: '#e7e5e4',
-          foreground: '#57534e',
+          DEFAULT: 'rgb(var(--theme-muted) / <alpha-value>)',
+          foreground: 'rgb(var(--theme-muted-foreground) / <alpha-value>)',
         },
-        card: '#ffffff',
-        border: '#d6d3d1',
-        accent: '#f59e0b',
+        card: 'rgb(var(--theme-card) / <alpha-value>)',
+        border: 'rgb(var(--theme-border) / <alpha-value>)',
+        accent: 'rgb(var(--theme-accent) / <alpha-value>)',
       },
       borderRadius: {
         lg: '0.8rem',

@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Principal, get_current_principal, get_tenant_id
+from app.api.unit_scope import get_effective_unit_id
 from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import Conversation, Message
@@ -13,6 +14,7 @@ from app.schemas.conversation import (
     ConversationAIAutoresponderUpdate,
     ConversationCreate,
     ConversationOutput,
+    ConversationSummaryRequest,
     ConversationUpdate,
 )
 from app.services.ai_autoresponder_service import (
@@ -29,12 +31,22 @@ router = APIRouter(prefix='/conversations', tags=['conversations'])
 def list_conversations(
     db: Session = Depends(get_db),
     tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     status: str | None = None,
     assigned_user_id: str | None = None,
+    unit_id: UUID | None = None,
 ):
     stmt = select(Conversation).where(Conversation.tenant_id == tenant_id)
+    effective_unit_id = get_effective_unit_id(
+        db,
+        principal=principal,
+        tenant_id=tenant_id,
+        requested_unit_id=unit_id,
+    )
+    if effective_unit_id:
+        stmt = stmt.where(Conversation.unit_id == effective_unit_id)
     if status:
         stmt = stmt.where(Conversation.status == status)
     if assigned_user_id:
@@ -114,7 +126,12 @@ def update_conversation(
 
 
 @router.post('/{conversation_id}/summarize')
-def summarize(conversation_id: str, db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
+def summarize(
+    conversation_id: str,
+    payload: ConversationSummaryRequest | None = None,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+):
     conversation = db.scalar(
         select(Conversation).where(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id)
     )
@@ -135,6 +152,7 @@ def summarize(conversation_id: str, db: Session = Depends(get_db), tenant_id=Dep
         tenant_id=tenant_id,
         conversation_id=conversation.id,
         transcript=transcript,
+        additional_context=(payload.additional_context if payload else None),
     )
     conversation.ai_summary = llm_result['output']
     db.add(conversation)

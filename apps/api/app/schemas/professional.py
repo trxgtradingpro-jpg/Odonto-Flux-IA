@@ -9,7 +9,7 @@ class ProfessionalCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=180)
     cro_number: str | None = Field(default=None, max_length=80)
     specialty: str | None = Field(default=None, max_length=120)
-    working_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    working_days: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
     shift_start: str = "08:00"
     shift_end: str = "18:00"
     procedures: list[str] = Field(default_factory=list)
@@ -19,7 +19,7 @@ class ProfessionalCreate(BaseModel):
     @classmethod
     def validate_working_days(cls, value: list[int]) -> list[int]:
         cleaned = sorted({int(day) for day in value if 0 <= int(day) <= 6})
-        return cleaned or [0, 1, 2, 3, 4]
+        return cleaned or [1, 2, 3, 4, 5]
 
     @field_validator("shift_start", "shift_end")
     @classmethod
@@ -62,7 +62,7 @@ class ProfessionalUpdate(BaseModel):
         if value is None:
             return None
         cleaned = sorted({int(day) for day in value if 0 <= int(day) <= 6})
-        return cleaned or [0, 1, 2, 3, 4]
+        return cleaned or [1, 2, 3, 4, 5]
 
     @field_validator("shift_start", "shift_end")
     @classmethod

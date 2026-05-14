@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_cors_origins: list[str] = ['http://localhost:3000']
     api_secret_key: str = 'change_me_super_secret'
-    api_access_token_expire_minutes: int = 30
-    api_refresh_token_expire_minutes: int = 60 * 24 * 7
+    api_access_token_expire_minutes: int = 60 * 8
+    api_refresh_token_expire_minutes: int = 60 * 24 * 30
     api_rate_limit_per_minute: int = 120
 
     celery_broker_url: str = 'redis://redis:6379/0'
@@ -41,11 +41,25 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ''
     whatsapp_business_account_id: str = ''
     whatsapp_api_base_url: str = 'https://graph.facebook.com/v19.0'
+    whatsapp_inline_dispatch_on_queue: bool = False
 
     llm_provider: str = 'mock'
     llm_api_key: str | None = None
     llm_model: str = 'gpt-4.1-mini'
     llm_timeout_seconds: int = 20
+    ai_autoresponder_prompt_path: str | None = '/app/prompt_editavel.txt'
+    audio_transcription_enabled: bool = True
+    audio_transcription_model: str = 'base'
+    audio_transcription_refined_model: str = 'medium'
+    audio_transcription_language: str | None = 'pt'
+    audio_transcription_device: str = 'cpu'
+    audio_transcription_compute_type: str = 'int8'
+    audio_transcription_beam_size: int = 1
+    audio_transcription_refined_beam_size: int = 5
+    audio_transcription_refined_enabled: bool = True
+    audio_transcription_refined_preprocess_enabled: bool = True
+    audio_transcription_initial_prompt: str | None = 'Mensagem de voz em portugues do Brasil enviada pelo WhatsApp.'
+    audio_transcription_refined_filter: str = 'highpass=f=120, lowpass=f=3800, loudnorm'
 
     storage_provider: str = 'local'
     storage_base_path: str = '/storage'
@@ -62,6 +76,15 @@ class Settings(BaseSettings):
 
     monitoring_failed_jobs_threshold: int = 5
     monitoring_alert_channels: list[str] = ['email:suporte@odontoflux.com']
+
+    adm_bootstrap_email: str | None = None
+    adm_bootstrap_password: str | None = None
+    adm_login_rate_limit_per_minute: int = 8
+    demo_access_token_expire_hours: int = 72
+    demo_default_expire_days: int = 21
+    sales_outreach_sender_tenant_slug: str | None = None
+    sales_outreach_display_name: str = 'Equipe OdontoFlux'
+    sales_outreach_video_url: str | None = None
 
     @property
     def database_url(self) -> str:
