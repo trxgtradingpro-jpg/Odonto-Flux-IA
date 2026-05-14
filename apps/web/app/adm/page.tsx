@@ -22,11 +22,13 @@ import {
   Search,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/premium";
+import ConfiguracoesPanel from "@/components/settings/configuracoes-panel";
 import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
 import { formatDateTimeBR, numberFormatter } from "@/lib/formatters";
@@ -221,6 +223,8 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "already_has_system", label: "Ja tem sistema" },
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
+
+type AdmSection = "crm" | "whatsapp";
 
 function humanize(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -662,6 +666,7 @@ export default function AdmPage() {
   const queryClient = useQueryClient();
   const [hasToken, setHasToken] = useState(false);
   const [forcePasswordChange, setForcePasswordChange] = useState(false);
+  const [activeSection, setActiveSection] = useState<AdmSection>("crm");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -871,7 +876,9 @@ export default function AdmPage() {
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-950 text-sm font-black text-white">OF</div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Admin comercial</p>
-              <h1 className="text-lg font-bold">Prospeccao e demos personalizadas</h1>
+              <h1 className="text-lg font-bold">
+                {activeSection === "crm" ? "Prospeccao e demos personalizadas" : "Configuracoes da clinica e WhatsApp"}
+              </h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -889,6 +896,40 @@ export default function AdmPage() {
       </header>
 
       <div className="mx-auto max-w-[1600px] space-y-4 px-5 py-5">
+        <Card className="border-stone-200 bg-white">
+          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</p>
+              <h2 className="mt-1 text-xl font-black text-stone-950">Escolha a area que quer operar agora</h2>
+              <p className="mt-1 text-sm text-stone-600">
+                Alterne entre o CRM comercial e a configuracao do WhatsApp sem sair da pagina administrativa.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={activeSection === "crm" ? "default" : "outline"}
+                className={cn(activeSection === "crm" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                onClick={() => setActiveSection("crm")}
+              >
+                <Building2 size={16} />
+                CRM comercial
+              </Button>
+              <Button
+                variant={activeSection === "whatsapp" ? "default" : "outline"}
+                className={cn(activeSection === "whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                onClick={() => setActiveSection("whatsapp")}
+              >
+                <SlidersHorizontal size={16} />
+                Configuracoes WhatsApp
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {activeSection === "whatsapp" ? <ConfiguracoesPanel fixedTab="WhatsApp" /> : null}
+
+        {activeSection === "crm" ? (
+          <>
         <CreateProspectForm
           onCreated={(prospect) => {
             setSelectedId(prospect.id);
@@ -1065,6 +1106,8 @@ export default function AdmPage() {
             )}
           </aside>
         </div>
+          </>
+        ) : null}
       </div>
     </main>
   );
