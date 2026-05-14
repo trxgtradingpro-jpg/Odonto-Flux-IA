@@ -100,7 +100,7 @@ def suggest_reply(
     context: str,
 ) -> dict:
     prompt = (
-        'Sugira resposta profissional em pt-BR para recepcao odontologica sem orientacao clinica. '
+        'Sugira resposta profissional em pt-BR para recepcao de clinicas sem orientacao clinica. '
         f'Contexto: {context}'
     )
     return run_llm_task(

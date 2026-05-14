@@ -277,7 +277,7 @@ def _lab_booking_visit_guidance(db: Session, *, tenant_id: UUID, context_text: s
             f"• Unidade: {unit_name}",
             address_line,
             "• Para o atendimento: leve documento com foto e CPF.",
-            "• Se tiver exames, radiografias, receitas ou documentos odontológicos recentes, leve também.",
+            "• Se tiver exames, receitas ou documentos recentes do seu atendimento, leve também.",
             "• Chegue com 10 a 15 minutos de antecedência.",
             "Seu agendamento está confirmado. Se precisar alterar, cancelar ou tirar outra dúvida, avise por aqui. Aguardamos você!",
         ]

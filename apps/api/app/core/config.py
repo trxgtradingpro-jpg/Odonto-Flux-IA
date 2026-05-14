@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', case_sensitive=False)
 
     app_env: str = 'local'
-    app_name: str = 'OdontoFlux'
+    app_name: str = 'ClinicFlux AI'
     app_timezone: str = 'America/Sao_Paulo'
     default_locale: str = 'pt-BR'
     default_currency: str = 'BRL'
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     billing_provider: str = 'manual'
     billing_success_url: str = 'http://localhost:3000/faturamento?checkout=success'
     billing_cancel_url: str = 'http://localhost:3000/faturamento?checkout=cancel'
-    billing_manual_checkout_url: str = 'https://billing.odontoflux.com/checkout'
+    billing_manual_checkout_url: str = 'https://billing.clinicfluxai.com.br/checkout'
     billing_cycle_days: int = 30
     billing_overdue_grace_days: int = 5
     stripe_secret_key: str | None = None
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str | None = None
 
     monitoring_failed_jobs_threshold: int = 5
-    monitoring_alert_channels: list[str] = ['email:suporte@odontoflux.com']
+    monitoring_alert_channels: list[str] = ['email:suporte@clinicfluxai.com.br']
 
     adm_bootstrap_email: str | None = None
     adm_bootstrap_password: str | None = None
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     demo_access_token_expire_hours: int = 72
     demo_default_expire_days: int = 21
     sales_outreach_sender_tenant_slug: str | None = None
-    sales_outreach_display_name: str = 'Equipe OdontoFlux'
+    sales_outreach_display_name: str = 'Time ClinicFlux AI'
     sales_outreach_video_url: str | None = None
 
     @property

@@ -1,20 +1,20 @@
-# Comercial OdontoFlux
+# Comercial ClinicFlux AI
 
 Atualizado em 26 de abril de 2026.
 
 ## Posicionamento recomendado
 
-Nao venda o OdontoFlux como "mais um software odontologico".
+Não venda o ClinicFlux AI como "mais um software de clínica".
 
 Venda como:
 
-- central operacional para clinicas odontologicas que dependem de WhatsApp
+- plataforma SaaS para clínicas que dependem de WhatsApp
 - implantacao premium com piloto assistido
 - organizacao da recepcao, agenda, conversao de leads e retorno de pacientes
 
 Frase curta de posicionamento:
 
-> O OdontoFlux organiza a operacao da clinica do primeiro contato no WhatsApp ate o comparecimento, reagendamento e retorno do paciente.
+> O ClinicFlux AI organiza a operação da clínica do primeiro contato no WhatsApp até o comparecimento, reagendamento e retorno do paciente.
 
 ## Cliente ideal
 
@@ -36,7 +36,7 @@ Evite vender primeiro para:
 
 Oferta de entrada recomendada:
 
-- Piloto Assistido OdontoFlux
+- Piloto Assistido ClinicFlux AI
 - configuracao da clinica
 - cadastro de equipe, servicos, unidades e agenda
 - organizacao do fluxo de WhatsApp e recepcao
@@ -52,7 +52,7 @@ Objetivo da venda:
 
 ## Planos sugeridos
 
-Estas faixas sao uma hipotese comercial inicial para o OdontoFlux no estagio atual do produto.
+Estas faixas sao uma hipotese comercial inicial para o ClinicFlux AI no estagio atual do produto.
 
 ### 1. Piloto Assistido
 
@@ -87,8 +87,8 @@ Links:
 
 Como interpreto isso:
 
-- o mercado brasileiro ja aceita software odontologico na faixa de entrada de cerca de R$ 127 a R$ 330 por mes para software padrao
-- o OdontoFlux ainda nao deve se vender como software padrao barato
+- o mercado brasileiro ja aceita software de gestao para clinicas na faixa de entrada de cerca de R$ 127 a R$ 330 por mes para software padrao
+- o ClinicFlux AI ainda nao deve se vender como software padrao barato
 - neste momento ele faz mais sentido como implantacao premium com servico junto
 - por isso a mensalidade pode ser mais alta, desde que a venda enfatize implantacao, suporte inicial e ganho operacional
 
@@ -107,7 +107,7 @@ Fluxo recomendado no produto:
 
 1. Cadastrar a clinica no `/adm`.
 2. Acionar o botao `Chamar recepcao`.
-3. A mensagem sai no WhatsApp de forma transparente, identificando a equipe OdontoFlux e pedindo o contato do dono(a) ou gerente responsavel pela operacao.
+3. A mensagem sai no WhatsApp de forma transparente, identificando a equipe ClinicFlux AI e pedindo o contato do dono(a) ou gerente responsável pela operação.
 4. Quando o decisor estiver identificado, acionar `Enviar pitch + demo`.
 5. O sistema garante uma demo personalizada, emite um link rastreavel com UTM e envia um texto curto com proposta de valor.
 6. Depois, acionar `Enviar video`.
@@ -116,7 +116,7 @@ Fluxo recomendado no produto:
 
 Mensagem inicial segura:
 
-> Oi! Aqui e a equipe OdontoFlux. Estou entrando em contato de forma comercial e transparente porque acredito que a clinica pode organizar melhor WhatsApp, recepcao, agenda e retorno de pacientes. Voce pode me indicar o dono(a) ou gerente responsavel pela operacao?
+> Oi! Aqui é a equipe ClinicFlux AI. Estou entrando em contato de forma comercial e transparente porque acredito que a clínica pode organizar melhor WhatsApp, recepção, agenda e retorno de pacientes. Você pode me indicar o dono(a) ou gerente responsável pela operação?
 
 Regra critica:
 
@@ -146,7 +146,7 @@ Como medir:
 - `utm_campaign=<seed_da_clinica>`
 - `utm_content=decision_maker_pitch` ou `video_followup`
 
-SEO continua importante na landing publica do OdontoFlux, mas para esse fluxo o ganho maior vem de:
+SEO continua importante na landing publica do ClinicFlux AI, mas para esse fluxo o ganho maior vem de:
 
 - mensagem curta e clara
 - CTA unico por etapa
@@ -174,7 +174,7 @@ Promessa ruim:
 
 Use algo assim:
 
-> Hoje muitas clinicas perdem pacientes e produtividade porque atendimento, agenda e recepcao ficam espalhados em WhatsApp, planilhas e processos sem dono. O OdontoFlux organiza essa operacao em um fluxo unico. Em vez de vender so agenda, eu vendo uma central operacional para captar, responder, agendar, confirmar, registrar comparecimento e trazer o paciente de volta com mais previsibilidade.
+> Hoje muitas clínicas perdem pacientes e produtividade porque atendimento, agenda e recepção ficam espalhados em WhatsApp, planilhas e processos sem dono. O ClinicFlux AI organiza essa operação em um fluxo único. Em vez de vender só agenda, eu vendo uma central operacional para captar, responder, agendar, confirmar, registrar comparecimento e trazer o paciente de volta com mais previsibilidade.
 
 ## Script de demo
 
@@ -215,7 +215,7 @@ Resposta:
 
 Checklist pratico:
 
-1. Escolher um nicho inicial: clinicas odontologicas com muito WhatsApp.
+1. Escolher um nicho inicial de clínicas com muito volume de WhatsApp.
 2. Usar a landing page publica do projeto para apresentar a oferta.
 3. Fechar 3 demonstracoes com donos de clinica.
 4. Oferecer Piloto Assistido como entrada.

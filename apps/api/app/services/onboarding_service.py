@@ -199,7 +199,7 @@ def onboarding_status(db: Session, tenant_id) -> dict:
         'help_resources': help_resources,
         'faq': faq,
         'support': {
-            'email': 'suporte@odontoflux.com',
+            'email': 'suporte@clinicfluxai.com.br',
             'whatsapp': '+55 11 95555-0101',
             'hours': 'Seg-Sex 08:00-18:00',
         },

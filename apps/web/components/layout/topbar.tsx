@@ -12,6 +12,7 @@ import { useLiveNotifications } from "@/hooks/use-live-notifications";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
 import { clinicInitials, formatDateBR, initials, ROLE_LABELS } from "@/lib/formatters";
+import { BRAND_MONOGRAM, BRAND_NAME } from "@/lib/brand";
 import { QuickFocusPageKey } from "./quick-focus-pages";
 import { QuickAccessPill } from "./quick-access-pill";
 
@@ -81,6 +82,15 @@ export function Topbar({
               {clinicDisplayName}
             </h2>
             <p className="text-[11px] text-muted-foreground">{activeWorkspaceLabel}</p>
+          </div>
+        </div>
+        <div className="hidden items-center gap-2 rounded-xl border border-primary/15 bg-primary/5 px-2.5 py-1.5 lg:flex">
+          <div className="grid h-8 w-8 place-items-center rounded-md bg-primary text-xs font-black text-primary-foreground">
+            {BRAND_MONOGRAM}
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/80">SaaS ativo</p>
+            <p className="text-sm font-bold text-foreground">{BRAND_NAME}</p>
           </div>
         </div>
       </div>

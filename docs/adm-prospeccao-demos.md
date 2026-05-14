@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-O `/adm` e o painel interno do OdontoFlux para operar prospeccao B2B, gerar demos personalizadas por clinica e acompanhar sinais de interesse comercial.
+O `/adm` é o painel interno do ClinicFlux AI para operar prospecção B2B, gerar demos personalizadas por clínica e acompanhar sinais de interesse comercial.
 
 Cada demo criada pelo `/adm` vira um tenant separado. Conversas, agenda, pacientes, configuracoes, equipe e tracking ficam isolados por clinica.
 

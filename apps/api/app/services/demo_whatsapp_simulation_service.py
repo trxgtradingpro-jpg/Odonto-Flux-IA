@@ -376,7 +376,7 @@ def _build_demo_patient_reply(
     scheduling = payload.get("scheduling") if isinstance(payload.get("scheduling"), dict) else {}
     mode = str(payload.get("mode") or scheduling.get("mode") or "").strip().lower()
     service_name = str(
-        lead.interest if lead and lead.interest else appointment.procedure_type if appointment and appointment.procedure_type else "avaliação odontológica"
+        lead.interest if lead and lead.interest else appointment.procedure_type if appointment and appointment.procedure_type else "avaliação inicial"
     ).strip()
     unit_name = str(unit.name if unit and unit.name else "unidade principal").strip()
     patient_name = str(patient.full_name if patient and patient.full_name else "Paciente Demo").strip()

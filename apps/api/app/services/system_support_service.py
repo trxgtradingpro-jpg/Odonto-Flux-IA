@@ -26,7 +26,7 @@ from app.models import (
 )
 
 
-SUPPORT_KNOWLEDGE_VERSION = "odontoflux-support-2026-04-27.2"
+SUPPORT_KNOWLEDGE_VERSION = "clinicfluxai-support-2026-05-14.1"
 
 
 @dataclass(frozen=True)
@@ -143,9 +143,9 @@ SYSTEM_SUPPORT_CHUNKS: tuple[SupportChunk, ...] = (
     ),
     SupportChunk(
         "suporte.ia",
-        "Suporte IA do OdontoFlux",
+        "Suporte IA do ClinicFlux AI",
         (
-            "O suporte IA deve responder dúvidas operacionais sobre o próprio OdontoFlux usando conhecimento versionado "
+            "O suporte IA deve responder dúvidas operacionais sobre o próprio ClinicFlux AI usando conhecimento versionado "
             "do produto, documentação do repositório quando disponível e dados do tenant logado. Quando não houver base "
             "suficiente, deve dizer que não encontrou a informação com segurança e indicar o caminho mais provável ou "
             "abrir incidente de suporte."
@@ -353,7 +353,7 @@ def _fallback_answer(question: str, chunks: list[SupportChunk]) -> str:
             "Abra a Central de Suporte ou registre um incidente para análise humana."
         )
     return (
-        f"Pelo que existe na base do OdontoFlux, o caminho mais seguro é: {first.body} "
+        f"Pelo que existe na base do ClinicFlux AI, o caminho mais seguro é: {first.body} "
         "Se essa dúvida for sobre um comportamento diferente do que aparece na sua tela, registre um incidente em Suporte "
         "com o print e o módulo afetado para validarmos."
     )
@@ -361,14 +361,14 @@ def _fallback_answer(question: str, chunks: list[SupportChunk]) -> str:
 
 def _build_prompt(question: str, chunks: list[SupportChunk], user_name: str, tenant_name: str) -> str:
     return f"""
-Você é o Suporte IA interno do OdontoFlux.
+Você é o Suporte IA interno do ClinicFlux AI.
 
 Objetivo:
-- Responder dúvidas operacionais sobre o sistema OdontoFlux com precisão.
+- Responder dúvidas operacionais sobre o sistema ClinicFlux AI com precisão.
 - Usar SOMENTE o contexto abaixo e os dados reais da clínica.
 - Não inventar telas, botões, políticas, integrações, preços, endpoints ou comportamentos.
 - Se a informação não estiver no contexto, diga claramente: "não encontrei essa informação com segurança na base atual".
-- Para dúvidas clínicas/odontológicas, não orientar diagnóstico ou tratamento; explique que o suporte é sobre o sistema.
+- Para dúvidas clínicas, não orientar diagnóstico ou tratamento; explique que o suporte é sobre o sistema.
 - Responda em português do Brasil, direto, com passos práticos.
 - Quando fizer sentido, cite o caminho exato da tela, por exemplo: Configurações > Tema e Marca.
 

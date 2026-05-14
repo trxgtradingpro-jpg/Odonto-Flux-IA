@@ -1,6 +1,6 @@
-# Suporte IA OdontoFlux
+# Suporte IA ClinicFlux AI
 
-O Suporte IA do OdontoFlux responde dúvidas operacionais sobre o próprio sistema. Ele deve ser usado para orientar usuários sobre telas, botões, fluxos, configurações, agenda, WhatsApp, IA, pacientes, leads, equipe médica, usuários, permissões, segurança, LGPD, demos comerciais e implantação.
+O Suporte IA do ClinicFlux AI responde dúvidas operacionais sobre o próprio sistema. Ele deve ser usado para orientar usuários sobre telas, botões, fluxos, configurações, agenda, WhatsApp, IA, pacientes, leads, equipe clínica, usuários, permissões, segurança, LGPD, demos comerciais e implantação.
 
 ## Fontes de conhecimento
 

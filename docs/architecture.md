@@ -1,7 +1,7 @@
-# Arquitetura OdontoFlux
+# Arquitetura ClinicFlux AI
 
 ## Visao geral
-Plataforma SaaS B2B multi-tenant para operacao administrativa/comercial de clinicas odontologicas.
+Plataforma SaaS B2B multi-tenant para operação administrativa, comercial e de atendimento de clínicas.
 
 ## Componentes
 - `web`: SPA/SSR com Next.js App Router

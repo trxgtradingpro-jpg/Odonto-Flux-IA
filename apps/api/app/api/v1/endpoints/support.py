@@ -52,7 +52,7 @@ def overview(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
     return {
         'channels': [
             {'name': 'WhatsApp suporte', 'contact': '+55 11 95555-0101', 'availability': 'Seg-Sex 08:00-18:00'},
-            {'name': 'E-mail suporte', 'contact': 'suporte@odontoflux.com', 'availability': '24x7 recebimento'},
+            {'name': 'E-mail suporte', 'contact': 'suporte@clinicfluxai.com.br', 'availability': '24x7 recebimento'},
         ],
         'sla_hours': SLA_HOURS,
         'open_incidents': len(open_incidents),

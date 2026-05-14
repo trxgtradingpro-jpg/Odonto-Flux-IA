@@ -113,7 +113,7 @@ type AutoTranscriptItem = {
 
 const GOLDEN_SCENARIOS = [
   "Oi, quero agendar uma avaliação para esta semana.",
-  "Quanto custa clareamento dental?",
+  "Quanto custa esse procedimento?",
   "Preciso remarcar minha consulta de amanhã.",
   "Estou com dor forte e sangramento, é urgente.",
   "Quero falar com um atendente humano.",
@@ -357,7 +357,7 @@ function deriveNextPatientMessage(
     if (structuredAction === "query_service") {
       return {
         text: turnIndex % 2 === 0
-          ? "Quero fazer uma avaliação odontológica para entender o melhor tratamento."
+          ? "Quero fazer uma avaliação inicial para entender o melhor tratamento."
           : "Pode verificar horários para uma avaliação desse tratamento?",
         reason: "Paciente informou o servico/procedimento depois da consulta estruturada.",
       };
@@ -414,7 +414,7 @@ function deriveNextPatientMessage(
   }
   if (reply.includes("servico") || reply.includes("procedimento") || reply.includes("tratamento")) {
     return {
-      text: "Quero avaliacao odontologica para entender o melhor tratamento.",
+      text: "Quero uma avaliacao inicial para entender o melhor tratamento.",
       reason: "Paciente escolheu um servico inicial.",
     };
   }

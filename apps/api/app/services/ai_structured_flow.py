@@ -583,7 +583,7 @@ def build_ai_conversation_context(
         clinic_profile.get("clinic_name"),
         clinic_profile.get("legal_name"),
         (knowledge_base.get("clinic_profile") or {}).get("clinic_name") if isinstance(knowledge_base.get("clinic_profile"), dict) else None,
-        "Clínica odontológica",
+        "Clínica",
     )
 
     recent_messages = _recent_messages(db, conversation=conversation, include_message_id=inbound_message.id)
@@ -1330,11 +1330,11 @@ def _apply_structured_reply_guardrail(
 
 def _extractor_prompt(*, context: AiConversationContext, inbound_text: str) -> str:
     return (
-        "Você é o motor de análise estruturada do OdontoFlux.\n"
+        "Você é o motor de análise estruturada do ClinicFlux AI.\n"
         "Leia a mensagem atual do paciente, o histórico recente e o contexto permitido, e retorne SOMENTE um JSON "
         "válido conforme o schema AiDecisionOutput.\n"
         "Você não conversa com o paciente. Você não gera resposta final. Você não salva dados. Você não consulta banco.\n"
-        "Seu objetivo é entender intenção, extrair dados e sugerir a próxima ação segura para atendimento odontológico.\n"
+        "Seu objetivo é entender intenção, extrair dados e sugerir a próxima ação segura para atendimento de clínicas.\n"
         "Regras obrigatórias:\n"
         "- Não invente campos, unidades, horários, preços, convênios, endereços ou profissionais.\n"
         "- Quando depender de agenda, unidade, serviço, preço, convênio, profissional, status de consulta, cancelamento ou remarcação, marque system_action.required=true.\n"
@@ -1368,12 +1368,12 @@ def _reply_prompt(
     system_action_result: dict[str, Any],
 ) -> str:
     return (
-        "Você é a recepcionista virtual humanizada de uma clínica odontológica.\n"
+        "Você é a assistente virtual humanizada de uma clínica.\n"
         "Responda pelo WhatsApp de forma simpática, objetiva e segura usando somente dados permitidos, validados e "
         "retornados pelo backend.\n"
         "Objetivo da conversa: acolher, entender, qualificar e conduzir para o próximo passo de agendamento sem parecer robótica.\n"
         "Regras de resposta:\n"
-        "- Fale curto, humano e profissional, como recepção odontológica experiente.\n"
+        "- Fale curto, humano e profissional, como uma recepção experiente e bem treinada.\n"
         "- Faça uma pergunta por vez e não transforme a conversa em formulário.\n"
         "- Sempre que possível termine com CTA claro: verificar horário, escolher período, escolher unidade ou confirmar dado faltante.\n"
         "- Não encerre com 'qualquer dúvida estamos à disposição' quando ainda houver próximo passo comercial.\n"
@@ -2164,7 +2164,7 @@ def _fallback_patient_reply(
                 else:
                     message = (
                         f"O valor de {service_name} pode variar conforme a avaliação, porque cada caso é diferente. "
-                        "Posso verificar um horário para você passar com o dentista e receber a orientação certinha?"
+                        "Posso verificar um horário para você passar por uma avaliação e receber a orientação certinha?"
                     )
             else:
                 message = (
@@ -2269,7 +2269,7 @@ def _query_availability(
         decision.appointment_intent.procedure_type,
         decision.extracted_data.procedure_type,
         decision.extracted_data.service_requested_text,
-        "Avaliação odontológica",
+        "Avaliação inicial",
     )
     service_catalog = get_service_duration_catalog(db, tenant_id=tenant_id)
     duration = resolve_service_duration_minutes(procedure_type=procedure, service_catalog=service_catalog)
@@ -2393,7 +2393,7 @@ def _validate_slot(
         decision.appointment_intent.procedure_type,
         decision.extracted_data.procedure_type,
         decision.extracted_data.service_requested_text,
-        "Avaliação odontológica",
+        "Avaliação inicial",
     )
     service_catalog = get_service_duration_catalog(db, tenant_id=tenant_id)
     duration = resolve_service_duration_minutes(procedure_type=procedure, service_catalog=service_catalog)

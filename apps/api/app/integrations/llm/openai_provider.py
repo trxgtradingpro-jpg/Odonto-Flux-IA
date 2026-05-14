@@ -68,7 +68,7 @@ class OpenAILLMProvider(LLMProvider):
                 {
                     'role': 'system',
                     'content': (
-                        'Você é um assistente operacional de recepção odontológica. '
+                        'Você é um assistente operacional de recepção para clínicas. '
                         'Siga estritamente as instruções do prompt do usuário.'
                     ),
                 },

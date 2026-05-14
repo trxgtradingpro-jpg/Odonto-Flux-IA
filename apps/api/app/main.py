@@ -23,11 +23,11 @@ if settings.sentry_dsn and sentry_sdk:
         dsn=settings.sentry_dsn,
         traces_sample_rate=0.1,
         environment=settings.app_env,
-        release='odontoflux@1.0.0',
+        release='clinicflux-ai@1.0.0',
     )
 
 app = FastAPI(
-    title='OdontoFlux API',
+    title='ClinicFlux AI API',
     version='1.0.0',
     docs_url='/api/v1/docs',
     redoc_url='/api/v1/redoc',

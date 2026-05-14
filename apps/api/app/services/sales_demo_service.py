@@ -302,7 +302,7 @@ def _slugify(value: str) -> str:
 
 def _demo_email(prospect: ProspectAccount) -> str:
     seed = prospect.tenant_seed_key or _slugify(prospect.clinic_name)
-    return f"demo+{seed}@demo.odontoflux.app"
+    return f"demo+{seed}@demo.clinicfluxai.com.br"
 
 
 def _random_password() -> str:
@@ -380,7 +380,7 @@ def ensure_admin_bootstrap(db: Session) -> None:
         tenant_id=None,
         unit_id=None,
         email=email,
-        full_name="Admin Comercial OdontoFlux",
+        full_name="Admin Comercial ClinicFlux AI",
         phone=None,
         hashed_password=hash_password(settings.adm_bootstrap_password),
         is_active=True,
@@ -727,7 +727,7 @@ def simulate_sales_outreach_lab(
     reception_message = _build_outreach_message(prospect, step="reception_intro")
     add_turn(
         "odontoflux",
-        "OdontoFlux - contato inicial",
+        "ClinicFlux AI - contato inicial",
         reception_message,
         step="reception_intro",
     )
@@ -797,7 +797,7 @@ def simulate_sales_outreach_lab(
         )
         add_turn(
             "odontoflux",
-            "OdontoFlux - pitch com demo",
+            "ClinicFlux AI - pitch com demo",
             pitch_message,
             step="decision_maker_pitch",
             meta={"demo_login_url": demo_login_url},
@@ -840,7 +840,7 @@ def simulate_sales_outreach_lab(
         )
         add_turn(
             "odontoflux",
-            "OdontoFlux - video follow-up",
+            "ClinicFlux AI - video follow-up",
             video_message,
             step="video_followup",
             meta={"video_url": video_url, "video_source": video_source},
@@ -961,13 +961,13 @@ def _build_outreach_message(
     video_url: str | None = None,
     recipient_name: str | None = None,
 ) -> str:
-    sender_name = str(settings.sales_outreach_display_name or "Equipe OdontoFlux").strip() or "Equipe OdontoFlux"
+    sender_name = str(settings.sales_outreach_display_name or "Time ClinicFlux AI").strip() or "Time ClinicFlux AI"
     pain_hint = f" e reduzir {prospect.main_pain.lower()}" if prospect.main_pain else ""
 
     if step == "reception_intro":
         return (
-            f"Olá! Aqui é {sender_name} da OdontoFlux.\n"
-            f"Estou falando com a {prospect.clinic_name} de forma comercial e transparente porque acredito que a clínica pode organizar melhor WhatsApp, recepção, agenda e retorno de pacientes{pain_hint}.\n"
+            f"Olá! Aqui é {sender_name} da ClinicFlux AI.\n"
+            f"Estou falando com a {prospect.clinic_name} de forma comercial e transparente porque acredito que a clínica pode organizar melhor atendimento, WhatsApp, agenda e recuperação de pacientes{pain_hint}.\n"
             "Você pode me indicar o dono(a) ou gerente responsável pela operação/recepção para eu enviar uma demonstração curta?"
         )
 
@@ -975,9 +975,9 @@ def _build_outreach_message(
         addressee = _first_name(recipient_name or prospect.owner_name or prospect.manager_name)
         greeting = f"Olá, {addressee}!" if addressee else "Olá!"
         return (
-            f"{greeting} Aqui é {sender_name} da OdontoFlux.\n"
-            "O OdontoFlux organiza WhatsApp, recepção, agenda, confirmações e retorno do paciente em um fluxo único para reduzir retrabalho, dar mais previsibilidade e melhorar a conversão da clínica.\n"
-            f"Demo rápida: {demo_login_url}"
+            f"{greeting} Aqui é {sender_name} da ClinicFlux AI.\n"
+            "A ClinicFlux AI organiza WhatsApp, atendimento, agenda, confirmações e recuperação de pacientes em um fluxo único para reduzir retrabalho, dar mais previsibilidade e aumentar a conversão da clínica.\n"
+            f"Demonstração rápida: {demo_login_url}"
         )
 
     if step == "video_followup":
@@ -986,7 +986,7 @@ def _build_outreach_message(
         return (
             f"{greeting} Separei um vídeo curto mostrando esse fluxo na prática:\n"
             f"{video_url}\n"
-            "Se fizer sentido, eu também posso te orientar nos pontos que mais costumam destravar resultado: recepção no WhatsApp, agenda e retorno do paciente."
+            "Se fizer sentido, eu também posso te orientar nos pontos que mais costumam destravar resultado: atendimento no WhatsApp, agenda e recuperação de oportunidades."
         )
 
     raise ApiError(status_code=400, code="SALES_OUTREACH_STEP_INVALID", message="Etapa comercial invalida")
@@ -1014,7 +1014,7 @@ def _ensure_outreach_conversation(
             full_name=f"Contato comercial - {prospect.clinic_name}",
             phone=raw_phone,
             normalized_phone=normalized_phone,
-            operational_notes=f"Prospect comercial OdontoFlux vinculado ao prospect_account_id={prospect.id}",
+            operational_notes=f"Prospect comercial ClinicFlux AI vinculado ao prospect_account_id={prospect.id}",
             status="lead",
             origin="sales_outreach",
             lgpd_consent=False,
@@ -1589,7 +1589,7 @@ def _ai_draft(db: Session, prospect: ProspectAccount, services: list[ProspectSer
         "services": [serialize_service(service) for service in services],
     })
     prompt = (
-        "Gere um rascunho JSON para configurar uma demo de SaaS odontologico. "
+        "Gere um rascunho JSON para configurar uma demo de SaaS para clinicas. "
         "Nao invente telefone, endereco ou dado sensivel. Marque inferencias em campos com inferred=true. "
         "Campos esperados: institutional_summary, voice_tone, scheduling_policy, faq, greeting, service_descriptions, ai_knowledge. "
         f"Dados: {json.dumps(jsonable_encoder(input_data), ensure_ascii=True)}"
@@ -1625,7 +1625,7 @@ def _ai_draft(db: Session, prospect: ProspectAccount, services: list[ProspectSer
 
 
 def build_fallback_ai_draft(prospect: ProspectAccount, services: list[ProspectService]) -> dict:
-    service_names = [service.service_name for service in services] or ["Avaliacao odontologica", "Clareamento dental", "Limpeza odontologica"]
+    service_names = [service.service_name for service in services] or ["Avaliacao inicial", "Consulta de retorno", "Procedimento estetico"]
     return {
         "institutional_summary": f"{prospect.clinic_name} atende pacientes com foco em acolhimento, organizacao de agenda e acompanhamento de retorno.",
         "voice_tone": "Profissional, cordial, objetivo e consultivo.",
@@ -1672,8 +1672,8 @@ def _ensure_demo_services(db: Session, prospect: ProspectAccount) -> list[Prospe
     if services:
         return services
     defaults = [
-        ("Avaliacao odontologica", "Consulta", 45),
-        ("Limpeza odontologica", "Preventivo", 60),
+        ("Avaliacao inicial", "Consulta", 45),
+        ("Consulta de retorno", "Retorno", 30),
         ("Clareamento dental", "Estetica", 75),
     ]
     for name, category, duration in defaults:
@@ -2289,7 +2289,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     password = _random_password()
     existing_user = db.scalar(select(User).where(User.email == demo_email))
     if existing_user:
-        demo_email = f"demo+{slug_candidate}@demo.odontoflux.app"
+        demo_email = f"demo+{slug_candidate}@demo.clinicfluxai.com.br"
     demo_user = User(
         tenant_id=tenant.id,
         unit_id=demo_units[0].id if demo_units else None,
@@ -2348,7 +2348,7 @@ def _seed_demo_operational_data(
     services: list[ProspectService],
     professionals: list[Professional],
 ) -> None:
-    service_names = [service.service_name for service in services] or ["Avaliacao odontologica"]
+    service_names = [service.service_name for service in services] or ["Avaliacao inicial"]
     unit_professionals = [professional for professional in professionals if professional.unit_id == unit.id] or professionals
     showcase_week_start = _next_demo_showcase_week_start(_now())
     weekday_labels = [

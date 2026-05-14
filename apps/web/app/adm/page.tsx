@@ -874,7 +874,7 @@ export default function AdmPage() {
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-5 py-3">
           <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-950 text-sm font-black text-white">OF</div>
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-950 text-sm font-black text-white">CF</div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Admin comercial</p>
               <h1 className="text-lg font-bold">

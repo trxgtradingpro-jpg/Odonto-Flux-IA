@@ -210,7 +210,7 @@ def _stripe_checkout(
         ("subscription_data[metadata][plan_code]", plan.code),
         ("line_items[0][price_data][currency]", (plan.currency or "BRL").lower()),
         ("line_items[0][price_data][unit_amount]", str(plan.price_cents)),
-        ("line_items[0][price_data][product_data][name]", f"OdontoFlux {plan.name}"),
+        ("line_items[0][price_data][product_data][name]", f"ClinicFlux AI {plan.name}"),
         ("line_items[0][price_data][recurring][interval]", "month"),
         ("line_items[0][quantity]", "1"),
     ]

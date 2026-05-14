@@ -460,11 +460,11 @@ BOOKING_WIZARD_HUMAN_KEYWORDS = (
     "humano",
 )
 BOOKING_WIZARD_DEFAULT_SERVICES = (
-    "Avaliação odontológica",
-    "Clareamento dental",
-    "Instalação de lentes",
-    "Limpeza odontológica",
-    "Reabilitação estética",
+    "Avaliação inicial",
+    "Consulta de retorno",
+    "Procedimento estético",
+    "Exame clínico",
+    "Atendimento especializado",
 )
 
 WELCOME_MENU_OPTIONS: tuple[dict[str, str], ...] = (
@@ -3939,7 +3939,7 @@ def _resolve_procedure_for_action_preview(action_payload: dict[str, Any] | None)
 
     blob = _action_payload_text(action_payload)
     inferred = _infer_procedure_type(inbound_text=blob, context=blob)
-    return inferred or "Avaliação odontológica"
+    return inferred or "Avaliação inicial"
 
 
 def _resolve_slot_duration_minutes(
@@ -4404,7 +4404,7 @@ def _post_booking_visit_guidance_lines(
         lines.extend(
             [
                 "• Para o atendimento: leve documento com foto e CPF.",
-                "• Se tiver exames, radiografias, receitas ou documentos odontológicos recentes, leve também.",
+                "• Se tiver exames, receitas ou documentos recentes do seu atendimento, leve também.",
                 "• Chegue com 10 a 15 minutos de antecedência.",
             ]
         )
@@ -6481,7 +6481,7 @@ def _try_booking_wizard_response(
 
             if selected_option == "menu_services":
                 preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context)
-                if preferred_service == "Avaliação odontológica":
+                if preferred_service == "Avaliação inicial":
                     preferred_service = None
                 return _wizard_build_service_step_response(
                     db,
@@ -6691,7 +6691,7 @@ def _try_booking_wizard_response(
                 conversation.unit_id = unit.id
                 db.add(conversation)
 
-            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação inicial"
             return _wizard_build_day_step_response(
                 db,
                 conversation=conversation,
@@ -6705,7 +6705,7 @@ def _try_booking_wizard_response(
             )
 
         if latest_mode == "booking_wizard_day_select":
-            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação inicial"
             if selection_token_normalized in {"day_change_service", "trocar servico", "trocar serviço"}:
                 return _wizard_build_service_step_response(
                     db,
@@ -6774,7 +6774,7 @@ def _try_booking_wizard_response(
             )
 
         if latest_mode == "booking_wizard_time_select":
-            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação inicial"
             if selection_token_normalized in {"time_change_service", "trocar servico", "trocar serviço"}:
                 return _wizard_build_service_step_response(
                     db,
@@ -6864,7 +6864,7 @@ def _try_booking_wizard_response(
         if latest_mode == "booking_wizard_confirm":
             confirmation_choice = _wizard_parse_confirmation_choice(selection_token)
             confirmation_action = _wizard_parse_confirmation_action(selection_token)
-            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação odontológica"
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação inicial"
             unit_id_raw = latest_scheduling.get("unit_id")
             try:
                 unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
@@ -7676,7 +7676,7 @@ def _procedure_mentions_in_normalized_text(normalized_text: str) -> list[str]:
             mentions.append(label)
 
     if "limpeza" in normalized or "profilax" in normalized:
-        _add("Limpeza odontológica")
+        _add("Limpeza clínica")
 
     # Aceita variações comuns e erros de digitação de "clareamento".
     if (
@@ -7744,7 +7744,7 @@ def _infer_procedure_type(*, inbound_text: str, context: str) -> str:
         if context_inference:
             return context_inference
 
-    return "Avaliação odontológica"
+    return "Avaliação inicial"
 
 
 def _recent_ai_outbound_messages(
@@ -8336,7 +8336,7 @@ def _build_scheduling_operation_response(
 
     if _is_service_catalog_request(inbound_text):
         preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context)
-        if preferred_service == "Avaliação odontológica":
+        if preferred_service == "Avaliação inicial":
             preferred_service = None
         return _wizard_build_service_step_response(
             db,
@@ -8645,7 +8645,7 @@ def _prompt_for_autoresponder(
     )
 
     return (
-        "Você é assistente virtual de recepção odontológica do OdontoFlux.\n"
+        "Você é a assistente virtual de recepção da ClinicFlux AI.\n"
         "Responda somente em pt-BR com tom humano, cordial, consultivo e persuasivo (sem pressão agressiva).\n"
         "Escreva como uma recepcionista premium com clareza de copy sênior: linguagem simples, natural, elegante, direta e fácil de escanear no WhatsApp.\n"
         "Cada mensagem deve soar humana e segura, nunca travada, técnica demais ou repetitiva.\n"
