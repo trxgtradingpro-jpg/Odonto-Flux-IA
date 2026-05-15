@@ -41,6 +41,7 @@ from app.models import (
     Unit,
     User,
     UserRole,
+    WhatsAppAccount,
 )
 from app.models.enums import (
     AppointmentStatus,
@@ -2791,6 +2792,26 @@ def _build_demo_whatsapp_link(phone: str | None) -> str | None:
     return f"https://wa.me/{normalized}"
 
 
+def _resolve_demo_whatsapp_link(db: Session, *, tenant_id: UUID) -> str | None:
+    account = db.scalar(
+        select(WhatsAppAccount)
+        .where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+    if not account:
+        return None
+
+    phone_number_id = str(account.phone_number_id or "").strip()
+    if phone_number_id.startswith("demo_virtual_"):
+        return None
+
+    return _build_demo_whatsapp_link(account.display_phone or phone_number_id)
+
+
 def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None) -> dict:
     token_hash = sha256_text(token)
     prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_access_token_hash == token_hash))
@@ -2839,7 +2860,7 @@ def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None)
         "token_type": "bearer",
         "expires_in": settings.api_access_token_expire_minutes * 60,
         "demo_test_phone_number": prospect.test_phone_number,
-        "demo_whatsapp_link": _build_demo_whatsapp_link(prospect.test_phone_number),
+        "demo_whatsapp_link": _resolve_demo_whatsapp_link(db, tenant_id=prospect.demo_tenant_id),
         "demo_target_path": "/conversas",
     }
 

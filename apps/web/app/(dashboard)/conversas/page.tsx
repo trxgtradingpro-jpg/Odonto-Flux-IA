@@ -1988,7 +1988,7 @@ export default function ConversasPage() {
       if (options?.popup && !options.popup.closed) {
         options.popup.close();
       }
-      toast.error("Nenhum número de teste foi cadastrado para esta demo.");
+      toast.error("Esta demo ainda nao tem um numero real de WhatsApp da clinica conectado.");
       return;
     }
 

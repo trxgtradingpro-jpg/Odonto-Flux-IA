@@ -529,18 +529,25 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       { label: "Teste sem WhatsApp", onClick: handleSimulateMessage },
       { label: "Criar conversa + agenda", onClick: handleSimulateCompleteConversation },
     ];
+    const hasRealWhatsAppLink = Boolean(progress.context.whatsappLink);
 
     switch (progress.step) {
       case "spotlight_whatsapp":
         return {
           align: "center",
-          badge: "Conversa real",
-          title: "Teste como paciente",
+          badge: hasRealWhatsAppLink ? "Conversa real" : "Teste guiado",
+          title: hasRealWhatsAppLink ? "Teste como paciente" : "Esta demo ainda nao tem um numero real conectado",
           description:
-            "Abra o WhatsApp da demo e envie uma mensagem simples, como se fosse um paciente querendo agendar.",
-          primaryLabel: whatsappLaunchState === "loading" ? "Abrindo WhatsApp" : "Abrir WhatsApp",
+            hasRealWhatsAppLink
+              ? "Abra o WhatsApp da demo e envie uma mensagem simples, como se fosse um paciente querendo agendar."
+              : "Use um dos testes guiados abaixo ou conecte um numero real da clinica dentro do tenant da demo. O numero de teste do /adm identifica quem vai testar, mas nao e o numero da clinica.",
+          primaryLabel: hasRealWhatsAppLink
+            ? whatsappLaunchState === "loading"
+              ? "Abrindo WhatsApp"
+              : "Abrir WhatsApp"
+            : undefined,
           statusLabel:
-            whatsappLaunchCountdown !== null
+            hasRealWhatsAppLink && whatsappLaunchCountdown !== null
               ? `Abrindo WhatsApp em ${String(whatsappLaunchCountdown).padStart(2, "0")}s`
               : undefined,
           compact: false,
@@ -630,6 +637,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         return null;
     }
   }, [
+    progress.context.whatsappLink,
     progress.seenEvents.appointment_detected,
     progress.step,
     waitingElapsedSeconds,
