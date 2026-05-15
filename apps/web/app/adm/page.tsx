@@ -180,6 +180,11 @@ type OutreachLabResult = {
   metrics: Record<string, unknown>;
 };
 
+type ProspectDemoAiSettings = {
+  enabled: boolean;
+  whatsapp_enabled: boolean;
+};
+
 type ProspectEditFormState = {
   clinic_name: string;
   owner_name: string;
@@ -195,6 +200,8 @@ type ProspectEditFormState = {
   lead_source: string;
   status: string;
   test_phone_number: string;
+  demo_ai_enabled: boolean;
+  demo_whatsapp_enabled: boolean;
   notes: string;
   do_not_contact: boolean;
 };
@@ -280,7 +287,17 @@ function nullableText(value: string) {
   return normalized.length ? normalized : null;
 }
 
+function getDemoAiSettingsSnapshot(prospect: Prospect): ProspectDemoAiSettings {
+  const raw = prospect.proposal_snapshot?.demo_ai;
+  const value = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: value.enabled !== false,
+    whatsapp_enabled: value.whatsapp_enabled !== false,
+  };
+}
+
 function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
+  const demoAi = getDemoAiSettingsSnapshot(prospect);
   return {
     clinic_name: prospect.clinic_name ?? "",
     owner_name: prospect.owner_name ?? "",
@@ -296,6 +313,8 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     lead_source: prospect.lead_source ?? "",
     status: prospect.status || "novo",
     test_phone_number: prospect.test_phone_number ?? "",
+    demo_ai_enabled: demoAi.enabled,
+    demo_whatsapp_enabled: demoAi.whatsapp_enabled,
     notes: prospect.notes ?? "",
     do_not_contact: Boolean(prospect.do_not_contact),
   };
@@ -480,6 +499,8 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
   const [mainPain, setMainPain] = useState("");
   const [leadSource, setLeadSource] = useState("Google/Maps manual");
   const [testPhoneNumber, setTestPhoneNumber] = useState("");
+  const [demoAiEnabled, setDemoAiEnabled] = useState(true);
+  const [demoWhatsappEnabled, setDemoWhatsappEnabled] = useState(true);
   const [services, setServices] = useState("Consulta inicial, Avaliacao clinica, Retorno");
   const [notes, setNotes] = useState("");
 
@@ -505,6 +526,12 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
           first_contact_channel: "ligacao_whatsapp_manual",
           uses_whatsapp_heavily: true,
           test_phone_number: testPhoneNumber || null,
+          proposal_snapshot: {
+            demo_ai: {
+              enabled: demoAiEnabled,
+              whatsapp_enabled: demoWhatsappEnabled,
+            },
+          },
           notes,
           services: serviceItems,
         })
@@ -524,6 +551,8 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
       setMainPain("");
       setLeadSource("Google/Maps manual");
       setTestPhoneNumber("");
+      setDemoAiEnabled(true);
+      setDemoWhatsappEnabled(true);
       setNotes("");
       onCreated(data);
     },
@@ -655,6 +684,18 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
               <Field label="Numero de teste" helper="Numero que o dono pode usar para testar o fluxo. Se informar sem DDI, assumimos Brasil. Se for internacional, informe com + ou 00.">
                 <Input placeholder="(11) 98888-7777 ou +44 7786 004289" value={testPhoneNumber} onChange={(event) => setTestPhoneNumber(event.target.value)} />
               </Field>
+              <Field label="Controles da demo" helper="Essas chaves valem para o numero de teste da clinica quando a demo for gerada." className="lg:col-span-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
+                    <input type="checkbox" checked={demoAiEnabled} onChange={(event) => setDemoAiEnabled(event.target.checked)} />
+                    IA da demo ligada
+                  </label>
+                  <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
+                    <input type="checkbox" checked={demoWhatsappEnabled} onChange={(event) => setDemoWhatsappEnabled(event.target.checked)} />
+                    WhatsApp de teste ligado
+                  </label>
+                </div>
+              </Field>
               <Field label="Servicos da clinica" helper="Separe por virgula. A demo usa isso para equipe, agenda e IA." className="lg:col-span-4">
                 <textarea
                   className="min-h-[92px] w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
@@ -723,6 +764,8 @@ function EditProspectDrawer({
           lead_source: "",
           status: "novo",
           test_phone_number: "",
+          demo_ai_enabled: true,
+          demo_whatsapp_enabled: true,
           notes: "",
           do_not_contact: false,
         },
@@ -757,6 +800,13 @@ function EditProspectDrawer({
           lead_source: nullableText(form.lead_source),
           status: form.status,
           test_phone_number: nullableText(form.test_phone_number),
+          proposal_snapshot: {
+            ...(prospect.proposal_snapshot ?? {}),
+            demo_ai: {
+              enabled: form.demo_ai_enabled,
+              whatsapp_enabled: form.demo_whatsapp_enabled,
+            },
+          },
           notes: form.notes,
           do_not_contact: form.do_not_contact,
         })
@@ -848,6 +898,28 @@ function EditProspectDrawer({
               </Field>
               <Field label="Numero de teste" helper="Numero que o dono usa para testar a demo.">
                 <Input value={form.test_phone_number} onChange={(event) => updateField("test_phone_number", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Controles da demo" helper={prospect.demo_tenant_id ? "Ao salvar, atualiza a demo atual desta clinica." : "Sera aplicado quando a demo desta clinica for gerada."} className="lg:col-span-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.demo_ai_enabled}
+                      onChange={(event) => updateField("demo_ai_enabled", event.target.checked)}
+                      disabled={mutation.isPending}
+                    />
+                    IA da demo ligada
+                  </label>
+                  <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.demo_whatsapp_enabled}
+                      onChange={(event) => updateField("demo_whatsapp_enabled", event.target.checked)}
+                      disabled={mutation.isPending}
+                    />
+                    WhatsApp de teste ligado
+                  </label>
+                </div>
               </Field>
               <Field label="Cidade" helper="Cidade da clinica.">
                 <Input value={form.city} onChange={(event) => updateField("city", event.target.value)} disabled={mutation.isPending} />

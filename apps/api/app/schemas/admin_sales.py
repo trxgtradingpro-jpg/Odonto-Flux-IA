@@ -60,6 +60,7 @@ class ProspectCreate(BaseModel):
     main_pain: str | None = None
     tags: list[str] = []
     test_phone_number: str | None = None
+    proposal_snapshot: dict | None = None
     units: list[ProspectUnitInput] = []
     services: list[ProspectServiceInput] = []
 

@@ -77,6 +77,11 @@ PROSPECT_STATUSES = {
     "fechado_perdido",
 }
 
+DEMO_AI_DEFAULT_SETTINGS = {
+    "enabled": True,
+    "whatsapp_enabled": True,
+}
+
 SCORE_RULES = {
     "demo_opened": 10,
     "login_completed": 10,
@@ -684,6 +689,20 @@ def _update_outreach_snapshot(prospect: ProspectAccount, *, patch: dict) -> None
     outreach.update(jsonable_encoder(patch))
     snapshot["outreach"] = outreach
     prospect.proposal_snapshot = snapshot
+
+
+def _normalize_demo_ai_settings(value: dict | None) -> dict[str, bool]:
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled", DEMO_AI_DEFAULT_SETTINGS["enabled"])),
+        "whatsapp_enabled": bool(raw.get("whatsapp_enabled", DEMO_AI_DEFAULT_SETTINGS["whatsapp_enabled"])),
+    }
+
+
+def _demo_ai_settings(prospect: ProspectAccount) -> dict[str, bool]:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    raw = snapshot.get("demo_ai")
+    return _normalize_demo_ai_settings(raw if isinstance(raw, dict) else None)
 
 
 def _outreach_snapshot(prospect: ProspectAccount) -> dict:
@@ -1558,6 +1577,7 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         main_pain=payload.main_pain,
         tags=payload.tags,
         test_phone_number=payload.test_phone_number,
+        proposal_snapshot=jsonable_encoder(payload.proposal_snapshot or {}),
         created_by=actor_id,
         updated_by=actor_id,
         tenant_seed_key=f"{_slugify(payload.clinic_name)}-{secrets.token_hex(3)}",
@@ -1612,6 +1632,8 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
             value = str(value)
         setattr(prospect, key, value)
     prospect.updated_by = actor_id
+    if prospect.demo_tenant_id:
+        ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
     if prospect.do_not_contact and not prospect.opt_out_at:
         prospect.opt_out_at = _now()
     add_timeline(db, prospect, event_type="prospect.updated", event_label="Dados da clinica atualizados", actor_id=actor_id, actor_type="admin", payload=data)
@@ -1893,21 +1915,39 @@ def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount,
         _upsert_setting(db, tenant_id=tenant_id, key=key, value=value)
 
 
-def ensure_demo_ai_autoresponder_ready(db: Session, *, tenant_id: UUID) -> bool:
+def ensure_demo_ai_autoresponder_ready(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    prospect: ProspectAccount | None = None,
+) -> bool:
+    linked_prospect = prospect or db.scalar(
+        select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1)
+    )
+    desired_demo_ai = _demo_ai_settings(linked_prospect) if linked_prospect else dict(DEMO_AI_DEFAULT_SETTINGS)
+
     config_item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "ai_autoresponder.global"))
     current_config = dict(config_item.value) if config_item and isinstance(config_item.value, dict) else {}
     channels = current_config.get("channels")
     if not isinstance(channels, dict):
         channels = {}
 
+    desired_enabled = bool(desired_demo_ai["enabled"])
+    desired_whatsapp_enabled = bool(desired_demo_ai["whatsapp_enabled"])
     config_changed = bool(
-        not current_config.get("enabled")
-        or not bool(channels.get("whatsapp", False))
+        config_item is None
+        or bool(current_config.get("enabled")) != desired_enabled
+        or bool(channels.get("whatsapp", False)) != desired_whatsapp_enabled
     )
     if config_changed:
-        merged_config = {**current_config, "enabled": True, "channels": {**channels, "whatsapp": True}}
+        merged_config = {
+            **current_config,
+            "enabled": desired_enabled,
+            "channels": {**channels, "whatsapp": desired_whatsapp_enabled},
+        }
         _upsert_setting(db, tenant_id=tenant_id, key="ai_autoresponder.global", value=merged_config)
 
+    desired_conversation_state = desired_enabled and desired_whatsapp_enabled
     conversations_changed = False
     demo_conversations = db.execute(
         select(Conversation).where(
@@ -1916,8 +1956,8 @@ def ensure_demo_ai_autoresponder_ready(db: Session, *, tenant_id: UUID) -> bool:
         )
     ).scalars().all()
     for conversation in demo_conversations:
-        if conversation.ai_autoresponder_enabled is not True:
-            conversation.ai_autoresponder_enabled = True
+        if conversation.ai_autoresponder_enabled is not desired_conversation_state:
+            conversation.ai_autoresponder_enabled = desired_conversation_state
             db.add(conversation)
             conversations_changed = True
 
@@ -2114,7 +2154,7 @@ def _seed_demo_automation_showcase(db: Session, *, tenant_id: UUID) -> None:
 def ensure_demo_showcase_state(db: Session, *, prospect: ProspectAccount) -> None:
     if not prospect.demo_tenant_id:
         return
-    ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id)
+    ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
     ensure_demo_guide_state(db, tenant_id=prospect.demo_tenant_id)
     _seed_demo_automation_showcase(db, tenant_id=prospect.demo_tenant_id)
 
@@ -2301,7 +2341,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         demo_user = db.get(User, prospect.demo_user_id) if prospect.demo_user_id else None
         professionals = db.execute(select(Professional).where(Professional.tenant_id == prospect.demo_tenant_id)).scalars().all()
         _sync_demo_service_catalog(db, tenant_id=prospect.demo_tenant_id, services=services, demo_units=demo_units)
-        ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id)
+        ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         if demo_tenant and demo_units and demo_user:
             _seed_demo_operational_data(
                 db,
@@ -2433,7 +2473,6 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     _create_settings(db, tenant_id=tenant.id, prospect=prospect, ai_draft=ai_draft, services=services)
     _sync_demo_service_catalog(db, tenant_id=tenant.id, services=services, demo_units=demo_units)
     _seed_demo_operational_data(db, tenant=tenant, unit=demo_units[0], user=demo_user, services=services, professionals=professionals)
-    ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant.id)
     ensure_demo_guide_state(db, tenant_id=tenant.id)
     _seed_demo_automation_showcase(db, tenant_id=tenant.id)
 
@@ -2446,6 +2485,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     prospect.demo_expires_at = _now() + timedelta(days=settings.demo_default_expire_days)
     prospect.demo_checklist = checklist
     prospect.status = "demo_criada"
+    ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant.id, prospect=prospect)
     add_timeline(db, prospect, event_type="demo.created", event_label="Demo personalizada gerada", actor_id=actor_id, actor_type="admin", payload={"tenant_id": str(tenant.id)})
     db.add(prospect)
     db.commit()
