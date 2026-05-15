@@ -9059,6 +9059,13 @@ def process_inbound_message(
     if not conversation or not inbound_message:
         return {"status": "ignored", "reason": "context_not_found"}
 
+    from app.services.demo_whatsapp_simulation_service import is_demo_tenant
+
+    if is_demo_tenant(db, tenant_id=tenant_id):
+        from app.services.sales_demo_service import ensure_demo_ai_autoresponder_ready
+
+        ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant_id)
+
     dedupe_key = f"inbound:{inbound_message.id}"
     existing = db.scalar(
         select(AIAutoresponderDecision).where(

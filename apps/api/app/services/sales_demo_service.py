@@ -1893,6 +1893,37 @@ def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount,
         _upsert_setting(db, tenant_id=tenant_id, key=key, value=value)
 
 
+def ensure_demo_ai_autoresponder_ready(db: Session, *, tenant_id: UUID) -> bool:
+    config_item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "ai_autoresponder.global"))
+    current_config = dict(config_item.value) if config_item and isinstance(config_item.value, dict) else {}
+    channels = current_config.get("channels")
+    if not isinstance(channels, dict):
+        channels = {}
+
+    config_changed = bool(
+        not current_config.get("enabled")
+        or not bool(channels.get("whatsapp", False))
+    )
+    if config_changed:
+        merged_config = {**current_config, "enabled": True, "channels": {**channels, "whatsapp": True}}
+        _upsert_setting(db, tenant_id=tenant_id, key="ai_autoresponder.global", value=merged_config)
+
+    conversations_changed = False
+    demo_conversations = db.execute(
+        select(Conversation).where(
+            Conversation.tenant_id == tenant_id,
+            Conversation.channel == "whatsapp",
+        )
+    ).scalars().all()
+    for conversation in demo_conversations:
+        if conversation.ai_autoresponder_enabled is not True:
+            conversation.ai_autoresponder_enabled = True
+            db.add(conversation)
+            conversations_changed = True
+
+    return config_changed or conversations_changed
+
+
 def _default_demo_guide_state() -> dict:
     return {
         "version": DEMO_GUIDE_VERSION,
@@ -2083,6 +2114,7 @@ def _seed_demo_automation_showcase(db: Session, *, tenant_id: UUID) -> None:
 def ensure_demo_showcase_state(db: Session, *, prospect: ProspectAccount) -> None:
     if not prospect.demo_tenant_id:
         return
+    ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id)
     ensure_demo_guide_state(db, tenant_id=prospect.demo_tenant_id)
     _seed_demo_automation_showcase(db, tenant_id=prospect.demo_tenant_id)
 
@@ -2269,6 +2301,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         demo_user = db.get(User, prospect.demo_user_id) if prospect.demo_user_id else None
         professionals = db.execute(select(Professional).where(Professional.tenant_id == prospect.demo_tenant_id)).scalars().all()
         _sync_demo_service_catalog(db, tenant_id=prospect.demo_tenant_id, services=services, demo_units=demo_units)
+        ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id)
         if demo_tenant and demo_units and demo_user:
             _seed_demo_operational_data(
                 db,
@@ -2400,6 +2433,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     _create_settings(db, tenant_id=tenant.id, prospect=prospect, ai_draft=ai_draft, services=services)
     _sync_demo_service_catalog(db, tenant_id=tenant.id, services=services, demo_units=demo_units)
     _seed_demo_operational_data(db, tenant=tenant, unit=demo_units[0], user=demo_user, services=services, professionals=professionals)
+    ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant.id)
     ensure_demo_guide_state(db, tenant_id=tenant.id)
     _seed_demo_automation_showcase(db, tenant_id=tenant.id)
 
