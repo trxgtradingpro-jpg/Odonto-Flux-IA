@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.models import (
     ProspectService,
     ProspectTimelineEvent,
     ProspectUnit,
+    RefreshToken,
     Role,
     Setting,
     Tenant,
@@ -268,6 +269,12 @@ SALES_OUTREACH_LAB_SCENARIOS = {
 DEFAULT_SALES_OUTREACH_SENDER_TENANT_SLUG = "clinicflux-ai-system"
 DEFAULT_SALES_OUTREACH_SENDER_TENANT_LEGAL_NAME = "ClinicFlux AI Comercial LTDA"
 DEFAULT_SALES_OUTREACH_SENDER_TENANT_TRADE_NAME = "ClinicFlux AI Comercial"
+ADM_BOOTSTRAP_GRANT_ROLE_NAMES = ("admin_platform", "sales_admin")
+ADM_BOOTSTRAP_ACCESS_ROLE_NAMES = ("admin_platform", "sales_admin", "sales_viewer")
+ADM_BOOTSTRAP_MANAGED_KEY = "adm_bootstrap_managed"
+ADM_BOOTSTRAP_VERSION_KEY = "adm_bootstrap_version"
+ADM_INITIAL_PASSWORD_KEY = "adm_initial_password"
+ADM_BOOTSTRAP_DISPLAY_NAME = "Admin Comercial ClinicFlux AI"
 
 
 def _now() -> datetime:
@@ -351,46 +358,110 @@ def ensure_sales_roles(db: Session) -> dict[str, Role]:
     return result
 
 
+def _bootstrap_version() -> str:
+    return str(settings.adm_bootstrap_version or "1").strip() or "1"
+
+
+def _page_permissions(user: User) -> dict:
+    return dict(user.page_permissions or {})
+
+
+def _user_role_ids(db: Session, user_id: UUID) -> set[UUID]:
+    return {row[0] for row in db.execute(select(UserRole.role_id).where(UserRole.user_id == user_id)).all()}
+
+
+def _revoke_user_refresh_tokens(db: Session, *, user_id: UUID) -> None:
+    db.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
+
+
+def _retire_bootstrap_access(
+    db: Session,
+    *,
+    user: User,
+    access_role_ids: set[UUID],
+) -> None:
+    db.execute(delete(UserRole).where(UserRole.user_id == user.id, UserRole.role_id.in_(tuple(access_role_ids))))
+    permissions = _page_permissions(user)
+    permissions.pop(ADM_INITIAL_PASSWORD_KEY, None)
+    permissions.pop(ADM_BOOTSTRAP_MANAGED_KEY, None)
+    permissions.pop(ADM_BOOTSTRAP_VERSION_KEY, None)
+    user.page_permissions = permissions
+    db.add(user)
+    _revoke_user_refresh_tokens(db, user_id=user.id)
+
+
+def _looks_like_bootstrap_user(
+    user: User,
+    *,
+    user_role_ids: set[UUID],
+    access_role_ids: set[UUID],
+) -> bool:
+    permissions = _page_permissions(user)
+    if permissions.get(ADM_BOOTSTRAP_MANAGED_KEY):
+        return True
+    if permissions.get(ADM_INITIAL_PASSWORD_KEY) and user_role_ids.intersection(access_role_ids):
+        return True
+    return user.tenant_id is None and user.full_name == ADM_BOOTSTRAP_DISPLAY_NAME and bool(user_role_ids.intersection(access_role_ids))
+
+
 def ensure_admin_bootstrap(db: Session) -> None:
     if not settings.adm_bootstrap_email or not settings.adm_bootstrap_password:
         return
 
     email = settings.adm_bootstrap_email.lower().strip()
-    existing = db.scalar(select(User).where(User.email == email))
-    if existing:
-        roles = ensure_sales_roles(db)
-        current_role_ids = {row[0] for row in db.execute(select(UserRole.role_id).where(UserRole.user_id == existing.id)).all()}
-        missing_role = False
-        for role_name in ["admin_platform", "sales_admin"]:
-            if roles[role_name].id not in current_role_ids:
-                db.add(UserRole(tenant_id=None, user_id=existing.id, role_id=roles[role_name].id))
-                missing_role = True
-        if missing_role:
-            validate_password_strength(settings.adm_bootstrap_password)
-            permissions = dict(existing.page_permissions or {})
-            permissions["adm_initial_password"] = True
-            existing.page_permissions = permissions
-            existing.hashed_password = hash_password(settings.adm_bootstrap_password)
-            db.add(existing)
-            db.commit()
-        return
-
     validate_password_strength(settings.adm_bootstrap_password)
+    existing = db.scalar(select(User).where(User.email == email))
     roles = ensure_sales_roles(db)
-    user = User(
-        tenant_id=None,
-        unit_id=None,
-        email=email,
-        full_name="Admin Comercial ClinicFlux AI",
-        phone=None,
-        hashed_password=hash_password(settings.adm_bootstrap_password),
-        is_active=True,
-        page_permissions={"adm_initial_password": True},
+    bootstrap_version = _bootstrap_version()
+    access_role_ids = {roles[role_name].id for role_name in ADM_BOOTSTRAP_ACCESS_ROLE_NAMES}
+    current_role_ids = _user_role_ids(db, existing.id) if existing else set()
+
+    for candidate in db.execute(select(User).where(User.email != email)).scalars().all():
+        candidate_role_ids = _user_role_ids(db, candidate.id)
+        if _looks_like_bootstrap_user(candidate, user_role_ids=candidate_role_ids, access_role_ids=access_role_ids):
+            _retire_bootstrap_access(db, user=candidate, access_role_ids=access_role_ids)
+
+    if not existing:
+        existing = User(
+            tenant_id=None,
+            unit_id=None,
+            email=email,
+            full_name=ADM_BOOTSTRAP_DISPLAY_NAME,
+            phone=None,
+            hashed_password=hash_password(settings.adm_bootstrap_password),
+            is_active=True,
+            page_permissions={
+                ADM_INITIAL_PASSWORD_KEY: True,
+                ADM_BOOTSTRAP_MANAGED_KEY: True,
+                ADM_BOOTSTRAP_VERSION_KEY: bootstrap_version,
+            },
+        )
+        db.add(existing)
+        db.flush()
+        current_role_ids = set()
+
+    missing_role = False
+    for role_name in ADM_BOOTSTRAP_GRANT_ROLE_NAMES:
+        if roles[role_name].id not in current_role_ids:
+            db.add(UserRole(tenant_id=None, user_id=existing.id, role_id=roles[role_name].id))
+            missing_role = True
+
+    permissions = _page_permissions(existing)
+    requires_rotation = (
+        missing_role
+        or not permissions.get(ADM_BOOTSTRAP_MANAGED_KEY)
+        or str(permissions.get(ADM_BOOTSTRAP_VERSION_KEY) or "").strip() != bootstrap_version
     )
-    db.add(user)
-    db.flush()
-    for role_name in ["admin_platform", "sales_admin"]:
-        db.add(UserRole(tenant_id=None, user_id=user.id, role_id=roles[role_name].id))
+    if requires_rotation:
+        permissions[ADM_INITIAL_PASSWORD_KEY] = True
+        permissions[ADM_BOOTSTRAP_MANAGED_KEY] = True
+        permissions[ADM_BOOTSTRAP_VERSION_KEY] = bootstrap_version
+        existing.page_permissions = permissions
+        existing.hashed_password = hash_password(settings.adm_bootstrap_password)
+        existing.is_active = True
+        _revoke_user_refresh_tokens(db, user_id=existing.id)
+
+    db.add(existing)
     db.commit()
 
 

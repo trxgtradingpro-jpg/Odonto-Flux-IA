@@ -80,6 +80,7 @@ class Settings(BaseSettings):
 
     adm_bootstrap_email: str | None = None
     adm_bootstrap_password: str | None = None
+    adm_bootstrap_version: str = '1'
     adm_login_rate_limit_per_minute: int = 8
     demo_access_token_expire_hours: int = 72
     demo_default_expire_days: int = 21
