@@ -16,6 +16,7 @@ import {
   KeyRound,
   Lock,
   MessageSquareText,
+  Pencil,
   PhoneCall,
   Plus,
   RefreshCw,
@@ -28,7 +29,7 @@ import {
 import { toast } from "sonner";
 
 import PlatformWhatsAppSettings from "@/components/adm/platform-whatsapp-settings";
-import { EmptyState } from "@/components/premium";
+import { EmptyState, RightDrawer } from "@/components/premium";
 import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
 import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
@@ -179,6 +180,25 @@ type OutreachLabResult = {
   metrics: Record<string, unknown>;
 };
 
+type ProspectEditFormState = {
+  clinic_name: string;
+  owner_name: string;
+  manager_name: string;
+  phone: string;
+  whatsapp_phone: string;
+  email: string;
+  website: string;
+  city: string;
+  state: string;
+  main_address: string;
+  main_pain: string;
+  lead_source: string;
+  status: string;
+  test_phone_number: string;
+  notes: string;
+  do_not_contact: boolean;
+};
+
 const STATUS_OPTIONS = [
   "novo",
   "pesquisado",
@@ -253,6 +273,32 @@ function extractApiErrorMessage(error: unknown, fallback: string): string {
 
 function humanize(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function nullableText(value: string) {
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
+}
+
+function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
+  return {
+    clinic_name: prospect.clinic_name ?? "",
+    owner_name: prospect.owner_name ?? "",
+    manager_name: prospect.manager_name ?? "",
+    phone: prospect.phone ?? "",
+    whatsapp_phone: prospect.whatsapp_phone ?? "",
+    email: prospect.email ?? "",
+    website: prospect.website ?? "",
+    city: prospect.city ?? "",
+    state: prospect.state ?? "",
+    main_address: prospect.main_address ?? "",
+    main_pain: prospect.main_pain ?? "",
+    lead_source: prospect.lead_source ?? "",
+    status: prospect.status || "novo",
+    test_phone_number: prospect.test_phone_number ?? "",
+    notes: prospect.notes ?? "",
+    do_not_contact: Boolean(prospect.do_not_contact),
+  };
 }
 
 function getOutreachSnapshot(prospect: Prospect): OutreachSnapshot {
@@ -648,6 +694,210 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
   );
 }
 
+function EditProspectDrawer({
+  prospect,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  prospect: Prospect | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: (prospect: Prospect) => void;
+}) {
+  const [form, setForm] = useState<ProspectEditFormState>(() =>
+    prospect
+      ? prospectToEditForm(prospect)
+      : {
+          clinic_name: "",
+          owner_name: "",
+          manager_name: "",
+          phone: "",
+          whatsapp_phone: "",
+          email: "",
+          website: "",
+          city: "",
+          state: "",
+          main_address: "",
+          main_pain: "",
+          lead_source: "",
+          status: "novo",
+          test_phone_number: "",
+          notes: "",
+          do_not_contact: false,
+        },
+  );
+
+  useEffect(() => {
+    if (open && prospect) {
+      setForm(prospectToEditForm(prospect));
+    }
+  }, [open, prospect]);
+
+  const updateField = <Key extends keyof ProspectEditFormState>(key: Key, value: ProspectEditFormState[Key]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!prospect) throw new Error("Prospect nao selecionado.");
+      return (
+        await api.patch(`/admin/prospects/${prospect.id}`, {
+          clinic_name: form.clinic_name.trim(),
+          owner_name: nullableText(form.owner_name),
+          manager_name: nullableText(form.manager_name),
+          phone: nullableText(form.phone),
+          whatsapp_phone: nullableText(form.whatsapp_phone),
+          email: nullableText(form.email),
+          website: nullableText(form.website),
+          city: nullableText(form.city),
+          state: nullableText(form.state.toUpperCase()),
+          main_address: nullableText(form.main_address),
+          main_pain: nullableText(form.main_pain),
+          lead_source: nullableText(form.lead_source),
+          status: form.status,
+          test_phone_number: nullableText(form.test_phone_number),
+          notes: form.notes,
+          do_not_contact: form.do_not_contact,
+        })
+      ).data as Prospect;
+    },
+    onSuccess: (updatedProspect) => {
+      toast.success("Clinica atualizada.");
+      onSaved(updatedProspect);
+      onOpenChange(false);
+    },
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel atualizar a clinica.")),
+  });
+
+  return (
+    <RightDrawer
+      open={open}
+      onOpenChange={onOpenChange}
+      title={prospect ? `Editar ${prospect.clinic_name}` : "Editar clinica"}
+      description="Atualize os dados comerciais usados no CRM e na demo."
+      widthClassName="w-full sm:max-w-3xl"
+    >
+      {prospect ? (
+        <form
+          className="space-y-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutation.mutate();
+          }}
+        >
+          <section className="rounded-2xl border border-stone-200 p-4">
+            <SectionIntro title="Identificacao" text="Nome, decisores e origem comercial desta clinica." />
+            <div className="mt-4 grid gap-3 lg:grid-cols-4">
+              <Field label="Nome da clinica" helper="Nome comercial usado na tabela e na demo." className="lg:col-span-2">
+                <Input
+                  required
+                  value={form.clinic_name}
+                  onChange={(event) => updateField("clinic_name", event.target.value)}
+                  disabled={mutation.isPending}
+                />
+              </Field>
+              <Field label="Dono" helper="Principal decisor, se ja conhecido.">
+                <Input value={form.owner_name} onChange={(event) => updateField("owner_name", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Gerente" helper="Contato operacional ou gerente.">
+                <Input value={form.manager_name} onChange={(event) => updateField("manager_name", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Origem do lead" helper="Canal ou busca que gerou o contato." className="lg:col-span-2">
+                <Input value={form.lead_source} onChange={(event) => updateField("lead_source", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Status" helper="Etapa atual do pipeline.">
+                <select
+                  className="h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm disabled:opacity-60"
+                  value={form.status}
+                  onChange={(event) => updateField("status", event.target.value)}
+                  disabled={mutation.isPending}
+                >
+                  {STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {humanize(status)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Nao contactar" helper="Bloqueia novas abordagens comerciais.">
+                <label className="flex h-10 items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.do_not_contact}
+                    onChange={(event) => updateField("do_not_contact", event.target.checked)}
+                    disabled={mutation.isPending}
+                  />
+                  Bloqueado
+                </label>
+              </Field>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-stone-200 p-4">
+            <SectionIntro title="Contato e localizacao" text="Dados usados para abordagem comercial, WhatsApp e proposta." />
+            <div className="mt-4 grid gap-3 lg:grid-cols-4">
+              <Field label="WhatsApp principal" helper="Numero preferencial para falar com a clinica.">
+                <Input value={form.whatsapp_phone} onChange={(event) => updateField("whatsapp_phone", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Telefone" helper="Telefone alternativo.">
+                <Input value={form.phone} onChange={(event) => updateField("phone", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="E-mail" helper="Usado em proposta ou follow-up.">
+                <Input type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Numero de teste" helper="Numero que o dono usa para testar a demo.">
+                <Input value={form.test_phone_number} onChange={(event) => updateField("test_phone_number", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Cidade" helper="Cidade da clinica.">
+                <Input value={form.city} onChange={(event) => updateField("city", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Estado" helper="UF ou estado.">
+                <Input value={form.state} onChange={(event) => updateField("state", event.target.value.toUpperCase())} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Site ou Instagram" helper="Referencia publica para revisar depois." className="lg:col-span-2">
+                <Input value={form.website} onChange={(event) => updateField("website", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Endereco principal" helper="Endereco usado na demo e no resumo comercial." className="lg:col-span-4">
+                <Input value={form.main_address} onChange={(event) => updateField("main_address", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-stone-200 p-4">
+            <SectionIntro title="Contexto comercial" text="Dor percebida e observacoes internas para o follow-up." />
+            <div className="mt-4 grid gap-3">
+              <Field label="Principal dor percebida" helper="Ex.: perde paciente no WhatsApp, agenda baguncada, retorno esquecido.">
+                <Input value={form.main_pain} onChange={(event) => updateField("main_pain", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field label="Observacoes internas" helper="Notas para abordagem, objecoes ou contexto da conversa.">
+                <textarea
+                  className="min-h-[140px] w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 disabled:opacity-60"
+                  value={form.notes}
+                  onChange={(event) => updateField("notes", event.target.value)}
+                  disabled={mutation.isPending}
+                />
+              </Field>
+            </div>
+          </section>
+
+          <div className="sticky bottom-0 -mx-4 border-t border-stone-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-5 sm:px-5 lg:-mx-6 lg:px-6">
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>
+                Cancelar
+              </Button>
+              <Button disabled={mutation.isPending || !form.clinic_name.trim()}>
+                <Pencil size={16} />
+                {mutation.isPending ? "Salvando..." : "Salvar alteracoes"}
+              </Button>
+            </div>
+          </div>
+        </form>
+      ) : null}
+    </RightDrawer>
+  );
+}
+
 function MiniStep({ number, title, text }: { number: string; title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
@@ -693,6 +943,8 @@ export default function AdmPage() {
   const [forcePasswordChange, setForcePasswordChange] = useState(false);
   const [activeSection, setActiveSection] = useState<AdmSection>("crm");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
+  const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [lastDemoLink, setLastDemoLink] = useState("");
@@ -892,6 +1144,11 @@ export default function AdmPage() {
 
   const prospects = prospectsQuery.data?.data ?? [];
   const overview = overviewQuery.data;
+  const openProspectEditor = (prospect: Prospect) => {
+    setSelectedId(prospect.id);
+    setEditingProspect(prospect);
+    setEditDrawerOpen(true);
+  };
 
   return (
     <main className="min-h-screen bg-stone-100 text-stone-950">
@@ -998,7 +1255,7 @@ export default function AdmPage() {
             </div>
 
             <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
-              <div className="grid grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.9fr_0.8fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500">
+              <div className="grid grid-cols-[1.2fr_0.8fr_0.75fr_0.6fr_0.75fr_1fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500">
                 <span>Clinica</span>
                 <span>Status</span>
                 <span>Temperatura</span>
@@ -1016,7 +1273,7 @@ export default function AdmPage() {
                       role="button"
                       tabIndex={0}
                       className={cn(
-                        "grid w-full grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.9fr_0.8fr] gap-3 border-b border-stone-100 px-4 py-3 text-left text-sm transition hover:bg-stone-50",
+                        "grid w-full grid-cols-[1.2fr_0.8fr_0.75fr_0.6fr_0.75fr_1fr] gap-3 border-b border-stone-100 px-4 py-3 text-left text-sm transition hover:bg-stone-50",
                         selectedProspect?.id === prospect.id && "bg-emerald-50/70",
                       )}
                       onClick={() => setSelectedId(prospect.id)}
@@ -1041,8 +1298,23 @@ export default function AdmPage() {
                       <span className="flex gap-1">
                         <Button
                           type="button"
-                          className="h-8 px-2"
+                          className="h-8 w-8 px-0"
                           variant="outline"
+                          title="Editar clinica"
+                          aria-label={`Editar ${prospect.clinic_name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openProspectEditor(prospect);
+                          }}
+                        >
+                          <Pencil size={14} />
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-8 w-8 px-0"
+                          variant="outline"
+                          title="Gerar demo"
+                          aria-label={`Gerar demo para ${prospect.clinic_name}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             generateDemoMutation.mutate(prospect.id);
@@ -1052,8 +1324,10 @@ export default function AdmPage() {
                         </Button>
                         <Button
                           type="button"
-                          className="h-8 px-2"
+                          className="h-8 w-8 px-0"
                           variant="outline"
+                          title="Copiar acesso"
+                          aria-label={`Copiar acesso de ${prospect.clinic_name}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             accessMutation.mutate(prospect.id);
@@ -1063,8 +1337,10 @@ export default function AdmPage() {
                         </Button>
                         <Button
                           type="button"
-                          className="h-8 px-2"
+                          className="h-8 w-8 px-0"
                           variant="outline"
+                          title="Iniciar automacao"
+                          aria-label={`Iniciar automacao para ${prospect.clinic_name}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             automationMutation.mutate(prospect.id);
@@ -1134,6 +1410,21 @@ export default function AdmPage() {
           </>
         ) : null}
       </div>
+      <EditProspectDrawer
+        prospect={editingProspect}
+        open={editDrawerOpen}
+        onOpenChange={(open) => {
+          setEditDrawerOpen(open);
+          if (!open) setEditingProspect(null);
+        }}
+        onSaved={(prospect) => {
+          setSelectedId(prospect.id);
+          setEditingProspect(prospect);
+          queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+          queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+          queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline", prospect.id] });
+        }}
+      />
     </main>
   );
 }
