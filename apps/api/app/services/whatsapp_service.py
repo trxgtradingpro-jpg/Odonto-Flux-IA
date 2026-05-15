@@ -21,6 +21,8 @@ from app.models import (
     OutboxMessage,
     Patient,
     PatientContact,
+    ProspectAccount,
+    Unit,
     WebhookInbox,
     WhatsAppAccount,
 )
@@ -201,6 +203,96 @@ def _build_provider_context(account: WhatsAppAccount) -> dict[str, str | None]:
         'phone_number_id': account.phone_number_id,
         'business_account_id': account.business_account_id,
     }
+
+
+def _is_demo_virtual_account(account: WhatsAppAccount | None) -> bool:
+    if not account:
+        return False
+    return str(account.phone_number_id or '').strip().startswith('demo_virtual_')
+
+
+def _assigned_demo_account_id_from_snapshot(snapshot: dict | None) -> str | None:
+    raw_snapshot = snapshot if isinstance(snapshot, dict) else {}
+    raw_demo = raw_snapshot.get("demo_whatsapp")
+    demo_settings = raw_demo if isinstance(raw_demo, dict) else {}
+    return str(demo_settings.get("account_id") or "").strip() or None
+
+
+def _resolve_demo_inbound_target(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+) -> tuple[UUID, UUID | None]:
+    account_id = str(account.id)
+    prospects = db.execute(
+        select(ProspectAccount).where(ProspectAccount.demo_tenant_id.is_not(None))
+    ).scalars().all()
+    for prospect in prospects:
+        if _assigned_demo_account_id_from_snapshot(prospect.proposal_snapshot) != account_id:
+            continue
+        if not prospect.demo_tenant_id:
+            continue
+        demo_unit_id = db.scalar(
+            select(Unit.id)
+            .where(Unit.tenant_id == prospect.demo_tenant_id, Unit.is_active.is_(True))
+            .order_by(Unit.created_at.asc())
+            .limit(1)
+        )
+        return prospect.demo_tenant_id, demo_unit_id
+    return account.tenant_id, account.unit_id
+
+
+def _resolve_dispatch_account_for_tenant(db: Session, *, tenant_id: UUID) -> WhatsAppAccount | None:
+    if is_demo_tenant(db, tenant_id=tenant_id):
+        try:
+            from app.services.sales_demo_service import resolve_demo_assigned_platform_account
+
+            assigned_account = resolve_demo_assigned_platform_account(db, tenant_id=tenant_id)
+        except Exception:
+            assigned_account = None
+        if assigned_account:
+            return assigned_account
+
+    account = db.scalar(
+        select(WhatsAppAccount)
+        .where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+    if account:
+        return account
+    if is_demo_tenant(db, tenant_id=tenant_id):
+        return ensure_demo_virtual_whatsapp_account(db, tenant_id=tenant_id)
+    return None
+
+
+def _resolve_message_for_status(
+    db: Session,
+    *,
+    provider_message_id: str,
+    fallback_tenant_id: UUID,
+) -> tuple[UUID, Message | None]:
+    msg = db.scalar(
+        select(Message).where(
+            Message.tenant_id == fallback_tenant_id,
+            Message.provider_message_id == provider_message_id,
+        )
+    )
+    if msg:
+        return msg.tenant_id, msg
+
+    matches = db.execute(
+        select(Message)
+        .where(Message.provider_message_id == provider_message_id)
+        .order_by(Message.created_at.desc())
+        .limit(2)
+    ).scalars().all()
+    if len(matches) == 1:
+        return matches[0].tenant_id, matches[0]
+    return fallback_tenant_id, None
 
 
 def _is_audio_content_type(content_type: str | None) -> bool:
@@ -456,18 +548,8 @@ def whatsapp_account_issues(
 
 
 def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) -> WhatsAppAccount:
-    account = db.scalar(
-        select(WhatsAppAccount)
-        .where(
-            WhatsAppAccount.tenant_id == tenant_id,
-            WhatsAppAccount.is_active.is_(True),
-        )
-        .order_by(WhatsAppAccount.created_at.desc())
-        .limit(1)
-    )
+    account = _resolve_dispatch_account_for_tenant(db, tenant_id=tenant_id)
     if not account:
-        if is_demo_tenant(db, tenant_id=tenant_id):
-            return ensure_demo_virtual_whatsapp_account(db, tenant_id=tenant_id)
         raise ApiError(
             status_code=400,
             code='WHATSAPP_ACCOUNT_NOT_CONFIGURED',
@@ -481,7 +563,7 @@ def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) 
         access_token=account.access_token_encrypted,
     )
     if issues:
-        if is_demo_tenant(db, tenant_id=tenant_id):
+        if _is_demo_virtual_account(account):
             return account
         raise ApiError(
             status_code=400,
@@ -1088,7 +1170,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
             if not account:
                 continue
 
-            tenant_id = account.tenant_id
+            tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
 
             for message in value.get('messages', []):
                 stats['received'] += 1
@@ -1126,13 +1208,13 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                         db,
                         tenant_id,
                         sender_phone,
-                        preferred_unit_id=account.unit_id,
+                        preferred_unit_id=preferred_demo_unit_id,
                     )
-                elif account.unit_id and not patient.unit_id:
-                    patient.unit_id = account.unit_id
+                elif preferred_demo_unit_id and not patient.unit_id:
+                    patient.unit_id = preferred_demo_unit_id
                     db.add(patient)
 
-                preferred_unit_id = account.unit_id or patient.unit_id
+                preferred_unit_id = preferred_demo_unit_id or patient.unit_id
                 conversation_id = _get_or_create_conversation(
                     db,
                     tenant_id,
@@ -1223,10 +1305,15 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 if not provider_id or not status_name:
                     continue
 
+                status_tenant_id, msg = _resolve_message_for_status(
+                    db,
+                    provider_message_id=provider_id,
+                    fallback_tenant_id=tenant_id,
+                )
                 event_id = f'{provider_id}:{status_name}'
                 db.add(
                     WebhookInbox(
-                        tenant_id=tenant_id,
+                        tenant_id=status_tenant_id,
                         provider='whatsapp',
                         event_id=_safe_webhook_event_id(event_id),
                         payload=status,
@@ -1241,12 +1328,6 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     stats['duplicates'] += 1
                     continue
 
-                msg = db.scalar(
-                    select(Message).where(
-                        Message.tenant_id == tenant_id,
-                        Message.provider_message_id == provider_id,
-                    )
-                )
                 if msg:
                     msg.status = status_name
                     if status_name == 'delivered':
@@ -1257,7 +1338,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
 
                 db.add(
                     MessageEvent(
-                        tenant_id=tenant_id,
+                        tenant_id=status_tenant_id,
                         message_id=msg.id if msg else None,
                         event_type=f'status_{status_name}',
                         payload=status,
@@ -1312,7 +1393,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         if not account:
             continue
 
-        tenant_id = account.tenant_id
+        tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
         provider_message_id = str(result.get('messageId') or result.get('pairedMessageId') or '').strip()
         sender_phone = str(result.get('from') or '').strip()
         message_block = result.get('message') if isinstance(result.get('message'), dict) else {}
@@ -1353,13 +1434,13 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                     db,
                     tenant_id,
                     sender_phone,
-                    preferred_unit_id=account.unit_id,
+                    preferred_unit_id=preferred_demo_unit_id,
                 )
-            elif account.unit_id and not patient.unit_id:
-                patient.unit_id = account.unit_id
+            elif preferred_demo_unit_id and not patient.unit_id:
+                patient.unit_id = preferred_demo_unit_id
                 db.add(patient)
 
-            preferred_unit_id = account.unit_id or patient.unit_id
+            preferred_unit_id = preferred_demo_unit_id or patient.unit_id
             conversation_id = _get_or_create_conversation(
                 db,
                 tenant_id,
@@ -1445,10 +1526,15 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
 
         if has_status and provider_message_id:
             normalized_status = _normalize_infobip_delivery_status(result.get('status'))
+            status_tenant_id, msg = _resolve_message_for_status(
+                db,
+                provider_message_id=provider_message_id,
+                fallback_tenant_id=tenant_id,
+            )
             event_id = f'infobip_status:{provider_message_id}:{normalized_status}'
             db.add(
                 WebhookInbox(
-                    tenant_id=tenant_id,
+                    tenant_id=status_tenant_id,
                     provider='infobip_whatsapp',
                     event_id=_safe_webhook_event_id(event_id),
                     payload=result,
@@ -1463,12 +1549,6 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
                 stats['duplicates'] += 1
                 continue
 
-            msg = db.scalar(
-                select(Message).where(
-                    Message.tenant_id == tenant_id,
-                    Message.provider_message_id == provider_message_id,
-                )
-            )
             if msg:
                 msg.status = normalized_status
                 if normalized_status == 'delivered':
@@ -1479,7 +1559,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
 
             db.add(
                 MessageEvent(
-                    tenant_id=tenant_id,
+                    tenant_id=status_tenant_id,
                     message_id=msg.id if msg else None,
                     event_type=f'status_{normalized_status}',
                     payload=result,
@@ -1526,7 +1606,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
     if not account:
         return stats
 
-    tenant_id = account.tenant_id
+    tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
     account_phone_normalized = _normalized_provider_phone(account.phone_number_id)
     from_phone_normalized = _normalized_provider_phone(from_phone)
     to_phone_normalized = _normalized_provider_phone(to_phone)
@@ -1571,13 +1651,13 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
                 db,
                 tenant_id,
                 sender_phone,
-                preferred_unit_id=account.unit_id,
+                preferred_unit_id=preferred_demo_unit_id,
             )
-        elif account.unit_id and not patient.unit_id:
-            patient.unit_id = account.unit_id
+        elif preferred_demo_unit_id and not patient.unit_id:
+            patient.unit_id = preferred_demo_unit_id
             db.add(patient)
 
-        preferred_unit_id = account.unit_id or patient.unit_id
+        preferred_unit_id = preferred_demo_unit_id or patient.unit_id
         conversation_id = _get_or_create_conversation(
             db,
             tenant_id,
@@ -1667,10 +1747,15 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
 
     has_status_update = bool(message_sid and normalized_status and normalized_status != 'received')
     if has_status_update:
+        status_tenant_id, msg = _resolve_message_for_status(
+            db,
+            provider_message_id=message_sid,
+            fallback_tenant_id=tenant_id,
+        )
         event_id = f'twilio_status:{message_sid}:{normalized_status}'
         db.add(
             WebhookInbox(
-                tenant_id=tenant_id,
+                tenant_id=status_tenant_id,
                 provider='twilio_whatsapp',
                 event_id=_safe_webhook_event_id(event_id),
                 payload=payload,
@@ -1685,12 +1770,6 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
             stats['duplicates'] += 1
             return stats
 
-        msg = db.scalar(
-            select(Message).where(
-                Message.tenant_id == tenant_id,
-                Message.provider_message_id == message_sid,
-            )
-        )
         if msg:
             msg.status = normalized_status
             if normalized_status == 'delivered':
@@ -1701,7 +1780,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
 
         db.add(
             MessageEvent(
-                tenant_id=tenant_id,
+                tenant_id=status_tenant_id,
                 message_id=msg.id if msg else None,
                 event_type=f'status_{normalized_status}',
                 payload=payload,
@@ -1857,19 +1936,7 @@ def _extract_provider_dispatch_error(*, provider_name: str | None, response: dic
 
 
 def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
-    if is_demo_tenant(db, tenant_id=item.tenant_id):
-        _dispatch_demo_virtual_outbox_item(db, item)
-        return
-
-    account = db.scalar(
-        select(WhatsAppAccount)
-        .where(
-            WhatsAppAccount.tenant_id == item.tenant_id,
-            WhatsAppAccount.is_active.is_(True),
-        )
-        .order_by(WhatsAppAccount.created_at.desc())
-        .limit(1)
-    )
+    account = _resolve_dispatch_account_for_tenant(db, tenant_id=item.tenant_id)
     if not account:
         item.status = OutboxStatus.FAILED.value
         item.last_error = 'Conta WhatsApp nao configurada'
@@ -1877,6 +1944,10 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
         item.next_retry_at = datetime.now(UTC) + timedelta(minutes=5)
         db.add(item)
         db.commit()
+        return
+
+    if _is_demo_virtual_account(account):
+        _dispatch_demo_virtual_outbox_item(db, item)
         return
 
     issues = whatsapp_account_issues(
@@ -1956,6 +2027,7 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
         payload_metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
         outbound_message_id = payload_metadata.get('outbound_message_id')
         linked_outbound_message = None
+        provider_context = _build_provider_context(account)
         if outbound_message_id:
             try:
                 outbound_uuid = UUID(outbound_message_id)
@@ -1977,6 +2049,7 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
             linked_outbound_message.payload = {
                 **existing_payload,
                 'provider_response': response,
+                'provider_context': provider_context,
             }
             db.add(linked_outbound_message)
         elif conversation_id:
@@ -1990,7 +2063,10 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
                     sender_type='automation',
                     body=payload.get('body') or '',
                     message_type=payload.get('message_type', 'text'),
-                    payload=response,
+                    payload={
+                        'provider_response': response,
+                        'provider_context': provider_context,
+                    },
                     status=MessageStatus.SENT.value,
                     sent_at=datetime.now(UTC),
                 )

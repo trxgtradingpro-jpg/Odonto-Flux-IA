@@ -185,6 +185,19 @@ type ProspectDemoAiSettings = {
   whatsapp_enabled: boolean;
 };
 
+type ProspectDemoWhatsAppSettings = {
+  account_id: string | null;
+};
+
+type PlatformWhatsAppAccountItem = {
+  id: string;
+  provider_name: string;
+  phone_number_id: string;
+  business_account_id: string;
+  display_phone?: string | null;
+  is_active: boolean;
+};
+
 type ProspectEditFormState = {
   clinic_name: string;
   owner_name: string;
@@ -200,6 +213,7 @@ type ProspectEditFormState = {
   lead_source: string;
   status: string;
   test_phone_number: string;
+  demo_whatsapp_account_id: string;
   demo_ai_enabled: boolean;
   demo_whatsapp_enabled: boolean;
   notes: string;
@@ -296,8 +310,24 @@ function getDemoAiSettingsSnapshot(prospect: Prospect): ProspectDemoAiSettings {
   };
 }
 
+function getDemoWhatsAppSettingsSnapshot(prospect: Prospect): ProspectDemoWhatsAppSettings {
+  const raw = prospect.proposal_snapshot?.demo_whatsapp;
+  const value = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const accountId = typeof value.account_id === "string" ? value.account_id.trim() : "";
+  return {
+    account_id: accountId || null,
+  };
+}
+
+function platformWhatsAppAccountLabel(account: PlatformWhatsAppAccountItem) {
+  const primary = (account.display_phone || "").trim() || account.phone_number_id;
+  const provider = humanize(account.provider_name || "numero");
+  return `${primary} - ${provider}`;
+}
+
 function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
   const demoAi = getDemoAiSettingsSnapshot(prospect);
+  const demoWhatsApp = getDemoWhatsAppSettingsSnapshot(prospect);
   return {
     clinic_name: prospect.clinic_name ?? "",
     owner_name: prospect.owner_name ?? "",
@@ -313,6 +343,7 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     lead_source: prospect.lead_source ?? "",
     status: prospect.status || "novo",
     test_phone_number: prospect.test_phone_number ?? "",
+    demo_whatsapp_account_id: demoWhatsApp.account_id ?? "",
     demo_ai_enabled: demoAi.enabled,
     demo_whatsapp_enabled: demoAi.whatsapp_enabled,
     notes: prospect.notes ?? "",
@@ -486,7 +517,15 @@ function ChangePasswordPanel({ onDone }: { onDone: () => void }) {
   );
 }
 
-function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => void }) {
+function CreateProspectForm({
+  onCreated,
+  platformAccounts,
+  platformAccountUsage,
+}: {
+  onCreated: (prospect: Prospect) => void;
+  platformAccounts: PlatformWhatsAppAccountItem[];
+  platformAccountUsage: Record<string, { prospectId: string; clinicName: string }>;
+}) {
   const [open, setOpen] = useState(false);
   const [clinicName, setClinicName] = useState("");
   const [ownerName, setOwnerName] = useState("");
@@ -499,6 +538,7 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
   const [mainPain, setMainPain] = useState("");
   const [leadSource, setLeadSource] = useState("Google/Maps manual");
   const [testPhoneNumber, setTestPhoneNumber] = useState("");
+  const [demoWhatsAppAccountId, setDemoWhatsAppAccountId] = useState("");
   const [demoAiEnabled, setDemoAiEnabled] = useState(true);
   const [demoWhatsappEnabled, setDemoWhatsappEnabled] = useState(true);
   const [services, setServices] = useState("Consulta inicial, Avaliacao clinica, Retorno");
@@ -527,6 +567,9 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
           uses_whatsapp_heavily: true,
           test_phone_number: testPhoneNumber || null,
           proposal_snapshot: {
+            demo_whatsapp: {
+              account_id: demoWhatsAppAccountId || null,
+            },
             demo_ai: {
               enabled: demoAiEnabled,
               whatsapp_enabled: demoWhatsappEnabled,
@@ -551,12 +594,13 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
       setMainPain("");
       setLeadSource("Google/Maps manual");
       setTestPhoneNumber("");
+      setDemoWhatsAppAccountId("");
       setDemoAiEnabled(true);
       setDemoWhatsappEnabled(true);
       setNotes("");
       onCreated(data);
     },
-    onError: () => toast.error("Nao foi possivel cadastrar a clinica."),
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel cadastrar a clinica.")),
   });
 
   if (!open) {
@@ -684,6 +728,30 @@ function CreateProspectForm({ onCreated }: { onCreated: (prospect: Prospect) => 
               <Field label="Numero de teste" helper="Numero que o dono pode usar para testar o fluxo. Se informar sem DDI, assumimos Brasil. Se for internacional, informe com + ou 00.">
                 <Input placeholder="(11) 98888-7777 ou +44 7786 004289" value={testPhoneNumber} onChange={(event) => setTestPhoneNumber(event.target.value)} />
               </Field>
+              <Field
+                label="Numero real da demo"
+                helper="Escolha o numero criado no WhatsApp do sistema que vai receber as mensagens desta demo. O numero de teste acima e quem envia a mensagem."
+                className="lg:col-span-3"
+              >
+                <select
+                  className="h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm"
+                  value={demoWhatsAppAccountId}
+                  onChange={(event) => setDemoWhatsAppAccountId(event.target.value)}
+                >
+                  <option value="">Sem numero real vinculado</option>
+                  {platformAccounts.map((account) => {
+                    const usage = platformAccountUsage[account.id];
+                    const disabled = Boolean(usage);
+                    return (
+                      <option key={account.id} value={account.id} disabled={disabled}>
+                        {platformWhatsAppAccountLabel(account)}
+                        {account.is_active ? "" : " (inativo)"}
+                        {usage ? ` - em uso por ${usage.clinicName}` : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
               <Field label="Controles da demo" helper="Essas chaves valem para o numero de teste da clinica quando a demo for gerada." className="lg:col-span-4">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
@@ -740,11 +808,15 @@ function EditProspectDrawer({
   open,
   onOpenChange,
   onSaved,
+  platformAccounts,
+  platformAccountUsage,
 }: {
   prospect: Prospect | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (prospect: Prospect) => void;
+  platformAccounts: PlatformWhatsAppAccountItem[];
+  platformAccountUsage: Record<string, { prospectId: string; clinicName: string }>;
 }) {
   const [form, setForm] = useState<ProspectEditFormState>(() =>
     prospect
@@ -764,6 +836,7 @@ function EditProspectDrawer({
           lead_source: "",
           status: "novo",
           test_phone_number: "",
+          demo_whatsapp_account_id: "",
           demo_ai_enabled: true,
           demo_whatsapp_enabled: true,
           notes: "",
@@ -802,6 +875,9 @@ function EditProspectDrawer({
           test_phone_number: nullableText(form.test_phone_number),
           proposal_snapshot: {
             ...(prospect.proposal_snapshot ?? {}),
+            demo_whatsapp: {
+              account_id: nullableText(form.demo_whatsapp_account_id),
+            },
             demo_ai: {
               enabled: form.demo_ai_enabled,
               whatsapp_enabled: form.demo_whatsapp_enabled,
@@ -898,6 +974,31 @@ function EditProspectDrawer({
               </Field>
               <Field label="Numero de teste" helper="Numero que o dono usa para testar a demo.">
                 <Input value={form.test_phone_number} onChange={(event) => updateField("test_phone_number", event.target.value)} disabled={mutation.isPending} />
+              </Field>
+              <Field
+                label="Numero real da demo"
+                helper="Esse numero do WhatsApp do sistema recebe as mensagens desta demo. O numero de teste acima continua sendo quem envia a mensagem."
+                className="lg:col-span-3"
+              >
+                <select
+                  className="h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm disabled:opacity-60"
+                  value={form.demo_whatsapp_account_id}
+                  onChange={(event) => updateField("demo_whatsapp_account_id", event.target.value)}
+                  disabled={mutation.isPending}
+                >
+                  <option value="">Sem numero real vinculado</option>
+                  {platformAccounts.map((account) => {
+                    const usage = platformAccountUsage[account.id];
+                    const disabled = Boolean(usage && usage.prospectId !== prospect.id);
+                    return (
+                      <option key={account.id} value={account.id} disabled={disabled}>
+                        {platformWhatsAppAccountLabel(account)}
+                        {account.is_active ? "" : " (inativo)"}
+                        {usage ? ` - em uso por ${usage.clinicName}` : ""}
+                      </option>
+                    );
+                  })}
+                </select>
               </Field>
               <Field label="Controles da demo" helper={prospect.demo_tenant_id ? "Ao salvar, atualiza a demo atual desta clinica." : "Sera aplicado quando a demo desta clinica for gerada."} className="lg:col-span-4">
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1044,10 +1145,39 @@ export default function AdmPage() {
     retry: false,
   });
 
+  const platformAccountsQuery = useQuery<{ data: PlatformWhatsAppAccountItem[] }>({
+    queryKey: ["adm-platform-whatsapp-accounts"],
+    queryFn: async () => (await api.get("/admin/platform/whatsapp/accounts")).data,
+    enabled: hasToken && !forcePasswordChange,
+    retry: false,
+  });
+
   const selectedProspect = useMemo(() => {
     const rows = prospectsQuery.data?.data ?? [];
     return rows.find((item) => item.id === selectedId) ?? rows[0] ?? null;
   }, [prospectsQuery.data?.data, selectedId]);
+
+  const platformAccounts = useMemo(
+    () =>
+      [...(platformAccountsQuery.data?.data ?? [])].sort((left, right) => {
+        if (left.is_active !== right.is_active) return left.is_active ? -1 : 1;
+        return platformWhatsAppAccountLabel(left).localeCompare(platformWhatsAppAccountLabel(right));
+      }),
+    [platformAccountsQuery.data?.data],
+  );
+
+  const platformAccountUsage = useMemo(() => {
+    const usage: Record<string, { prospectId: string; clinicName: string }> = {};
+    for (const prospect of prospectsQuery.data?.data ?? []) {
+      const accountId = getDemoWhatsAppSettingsSnapshot(prospect).account_id;
+      if (!accountId) continue;
+      usage[accountId] = {
+        prospectId: prospect.id,
+        clinicName: prospect.clinic_name,
+      };
+    }
+    return usage;
+  }, [prospectsQuery.data?.data]);
 
   useEffect(() => {
     if (!selectedId && selectedProspect) setSelectedId(selectedProspect.id);
@@ -1285,6 +1415,8 @@ export default function AdmPage() {
         {activeSection === "crm" ? (
           <>
         <CreateProspectForm
+          platformAccounts={platformAccounts}
+          platformAccountUsage={platformAccountUsage}
           onCreated={(prospect) => {
             setSelectedId(prospect.id);
             queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
@@ -1485,6 +1617,8 @@ export default function AdmPage() {
       <EditProspectDrawer
         prospect={editingProspect}
         open={editDrawerOpen}
+        platformAccounts={platformAccounts}
+        platformAccountUsage={platformAccountUsage}
         onOpenChange={(open) => {
           setEditDrawerOpen(open);
           if (!open) setEditingProspect(null);

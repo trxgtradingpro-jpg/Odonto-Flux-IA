@@ -706,6 +706,107 @@ def _demo_ai_settings(prospect: ProspectAccount) -> dict[str, bool]:
     return _normalize_demo_ai_settings(raw if isinstance(raw, dict) else None)
 
 
+def _normalize_demo_whatsapp_settings(value: dict | None) -> dict[str, str | None]:
+    raw = value if isinstance(value, dict) else {}
+    account_id = str(raw.get("account_id") or "").strip() or None
+    return {"account_id": account_id}
+
+
+def _demo_whatsapp_settings(prospect: ProspectAccount) -> dict[str, str | None]:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    raw = snapshot.get("demo_whatsapp")
+    return _normalize_demo_whatsapp_settings(raw if isinstance(raw, dict) else None)
+
+
+def _sanitize_demo_whatsapp_assignment(
+    db: Session,
+    *,
+    snapshot: dict | None,
+    current_prospect_id: UUID | None,
+) -> dict:
+    payload = dict(jsonable_encoder(snapshot or {}))
+    demo_whatsapp = _normalize_demo_whatsapp_settings(
+        payload.get("demo_whatsapp") if isinstance(payload.get("demo_whatsapp"), dict) else None
+    )
+    account_id = demo_whatsapp["account_id"]
+    if not account_id:
+        payload["demo_whatsapp"] = {"account_id": None}
+        return payload
+
+    try:
+        account_uuid = UUID(account_id)
+    except ValueError as exc:
+        raise ApiError(
+            status_code=400,
+            code="DEMO_WHATSAPP_ACCOUNT_INVALID",
+            message="Numero da demo invalido.",
+        ) from exc
+
+    account = db.get(WhatsAppAccount, account_uuid)
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    if (
+        not account
+        or not account.is_active
+        or account.tenant_id != sender_tenant.id
+        or str(account.phone_number_id or "").strip().startswith("demo_virtual_")
+    ):
+        raise ApiError(
+            status_code=400,
+            code="DEMO_WHATSAPP_ACCOUNT_INVALID",
+            message="Selecione um numero real criado na area de WhatsApp do sistema.",
+        )
+
+    candidates = db.execute(select(ProspectAccount)).scalars().all()
+    for candidate in candidates:
+        if current_prospect_id and candidate.id == current_prospect_id:
+            continue
+        if _demo_whatsapp_settings(candidate).get("account_id") != account_id:
+            continue
+        raise ApiError(
+            status_code=409,
+            code="DEMO_WHATSAPP_ACCOUNT_IN_USE",
+            message=f"Esse numero ja esta vinculado a demo de {candidate.clinic_name}.",
+        )
+
+    payload["demo_whatsapp"] = {"account_id": account_id}
+    return payload
+
+
+def resolve_demo_assigned_platform_account(
+    db: Session,
+    *,
+    prospect: ProspectAccount | None = None,
+    tenant_id: UUID | None = None,
+) -> WhatsAppAccount | None:
+    linked_prospect = prospect
+    if not linked_prospect and tenant_id:
+        linked_prospect = db.scalar(
+            select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1)
+        )
+    if not linked_prospect:
+        return None
+
+    account_id = _demo_whatsapp_settings(linked_prospect).get("account_id")
+    if not account_id:
+        return None
+
+    try:
+        account_uuid = UUID(account_id)
+    except ValueError:
+        return None
+
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    account = db.get(WhatsAppAccount, account_uuid)
+    if (
+        not account
+        or not account.is_active
+        or account.tenant_id != sender_tenant.id
+        or str(account.phone_number_id or "").strip().startswith("demo_virtual_")
+    ):
+        return None
+    return account
+
+
 def _outreach_snapshot(prospect: ProspectAccount) -> dict:
     snapshot = dict(prospect.proposal_snapshot or {})
     outreach = snapshot.get("outreach")
@@ -1558,6 +1659,12 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         if existing:
             raise ApiError(status_code=409, code="PROSPECT_DUPLICATE", message="Clinica prospectada possivelmente duplicada")
 
+    sanitized_snapshot = _sanitize_demo_whatsapp_assignment(
+        db,
+        snapshot=payload.proposal_snapshot,
+        current_prospect_id=None,
+    )
+
     prospect = ProspectAccount(
         clinic_name=payload.clinic_name,
         owner_name=payload.owner_name,
@@ -1578,7 +1685,7 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         main_pain=payload.main_pain,
         tags=payload.tags,
         test_phone_number=payload.test_phone_number,
-        proposal_snapshot=jsonable_encoder(payload.proposal_snapshot or {}),
+        proposal_snapshot=sanitized_snapshot,
         created_by=actor_id,
         updated_by=actor_id,
         tenant_seed_key=f"{_slugify(payload.clinic_name)}-{secrets.token_hex(3)}",
@@ -1628,6 +1735,12 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
 
 def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id: UUID | None) -> ProspectAccount:
     data = payload.model_dump(exclude_unset=True)
+    if "proposal_snapshot" in data:
+        data["proposal_snapshot"] = _sanitize_demo_whatsapp_assignment(
+            db,
+            snapshot=data.get("proposal_snapshot"),
+            current_prospect_id=prospect.id,
+        )
     for key, value in data.items():
         if key == "email" and value is not None:
             value = str(value)
@@ -2793,15 +2906,17 @@ def _build_demo_whatsapp_link(phone: str | None) -> str | None:
 
 
 def _resolve_demo_whatsapp_link(db: Session, *, tenant_id: UUID) -> str | None:
-    account = db.scalar(
-        select(WhatsAppAccount)
-        .where(
-            WhatsAppAccount.tenant_id == tenant_id,
-            WhatsAppAccount.is_active.is_(True),
+    account = resolve_demo_assigned_platform_account(db, tenant_id=tenant_id)
+    if not account:
+        account = db.scalar(
+            select(WhatsAppAccount)
+            .where(
+                WhatsAppAccount.tenant_id == tenant_id,
+                WhatsAppAccount.is_active.is_(True),
+            )
+            .order_by(WhatsAppAccount.created_at.desc())
+            .limit(1)
         )
-        .order_by(WhatsAppAccount.created_at.desc())
-        .limit(1)
-    )
     if not account:
         return None
 
