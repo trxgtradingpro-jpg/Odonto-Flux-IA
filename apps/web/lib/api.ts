@@ -11,8 +11,15 @@ import {
   setAdminAccessToken,
 } from './auth';
 
+const DIRECT_RENDER_API_BASE = 'https://odontoflux-api.onrender.com/api/v1';
+const DIRECT_API_HOSTNAMES = new Set(['clinicfluxai.com.br', 'www.clinicfluxai.com.br']);
+
 function resolveApiBase(): string {
   const configuredBase = process.env.NEXT_PUBLIC_API_URL;
+
+  if (typeof window !== 'undefined' && DIRECT_API_HOSTNAMES.has(window.location.hostname.toLowerCase())) {
+    return configuredBase || DIRECT_RENDER_API_BASE;
+  }
 
   // When running on Render with separate web/api services, prefer direct API URL.
   // This avoids depending on Next rewrites that may be baked with docker-build defaults.
