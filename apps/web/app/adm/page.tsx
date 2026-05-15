@@ -396,8 +396,8 @@ function sessionId() {
 }
 
 function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) {
-  const [email, setEmail] = useState("netmultiverso@gmail.com");
-  const [password, setPassword] = useState("Ia.123456789");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   const loginMutation = useMutation({
     mutationFn: async () => (await api.post("/admin/auth/login", { email, password })).data,
@@ -423,6 +423,9 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
           <CardHeader>
             <CardTitle>Entrar no CRM de demos</CardTitle>
             <p className="text-sm text-stone-600">{BRAND_TAGLINE}</p>
+            <p className="text-xs leading-5 text-stone-500">
+              Use exatamente as credenciais configuradas em <code>ADM_BOOTSTRAP_EMAIL</code> e <code>ADM_BOOTSTRAP_PASSWORD</code>.
+            </p>
           </CardHeader>
           <CardContent>
             <form
@@ -453,7 +456,7 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
 }
 
 function ChangePasswordPanel({ onDone }: { onDone: () => void }) {
-  const [currentPassword, setCurrentPassword] = useState("Ia.123456789");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 

@@ -283,6 +283,10 @@ ADM_INITIAL_PASSWORD_KEY = "adm_initial_password"
 ADM_BOOTSTRAP_DISPLAY_NAME = "Admin Comercial ClinicFlux AI"
 
 
+def _adm_bootstrap_credentials_configured() -> bool:
+    return bool(settings.adm_bootstrap_email and settings.adm_bootstrap_password)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -411,7 +415,7 @@ def _looks_like_bootstrap_user(
 
 
 def ensure_admin_bootstrap(db: Session) -> None:
-    if not settings.adm_bootstrap_email or not settings.adm_bootstrap_password:
+    if not _adm_bootstrap_credentials_configured():
         return
 
     email = settings.adm_bootstrap_email.lower().strip()
@@ -453,18 +457,19 @@ def ensure_admin_bootstrap(db: Session) -> None:
             missing_role = True
 
     permissions = _page_permissions(existing)
-    requires_rotation = (
+    should_revoke_tokens = (
         missing_role
         or not permissions.get(ADM_BOOTSTRAP_MANAGED_KEY)
         or str(permissions.get(ADM_BOOTSTRAP_VERSION_KEY) or "").strip() != bootstrap_version
+        or not verify_password(settings.adm_bootstrap_password, existing.hashed_password)
     )
-    if requires_rotation:
-        permissions[ADM_INITIAL_PASSWORD_KEY] = True
-        permissions[ADM_BOOTSTRAP_MANAGED_KEY] = True
-        permissions[ADM_BOOTSTRAP_VERSION_KEY] = bootstrap_version
-        existing.page_permissions = permissions
-        existing.hashed_password = hash_password(settings.adm_bootstrap_password)
-        existing.is_active = True
+    permissions.pop(ADM_INITIAL_PASSWORD_KEY, None)
+    permissions[ADM_BOOTSTRAP_MANAGED_KEY] = True
+    permissions[ADM_BOOTSTRAP_VERSION_KEY] = bootstrap_version
+    existing.page_permissions = permissions
+    existing.hashed_password = hash_password(settings.adm_bootstrap_password)
+    existing.is_active = True
+    if should_revoke_tokens:
         _revoke_user_refresh_tokens(db, user_id=existing.id)
 
     db.add(existing)
@@ -3053,7 +3058,12 @@ def get_insights(db: Session, prospect: ProspectAccount) -> dict:
 
 def admin_login(db: Session, *, email: str, password: str) -> dict:
     ensure_admin_bootstrap(db)
-    user = db.scalar(select(User).where(User.email == email.lower().strip()))
+    normalized_email = email.lower().strip()
+    if _adm_bootstrap_credentials_configured():
+        bootstrap_email = settings.adm_bootstrap_email.lower().strip()
+        if normalized_email != bootstrap_email:
+            raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Credenciais invalidas")
+    user = db.scalar(select(User).where(User.email == normalized_email))
     if not user or not verify_password(password, user.hashed_password):
         raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Credenciais invalidas")
     if not user.is_active:
@@ -3076,6 +3086,13 @@ def admin_login(db: Session, *, email: str, password: str) -> dict:
 
 
 def change_initial_admin_password(db: Session, *, user: User, current_password: str, new_password: str) -> None:
+    managed_email = (settings.adm_bootstrap_email or "").lower().strip()
+    if _adm_bootstrap_credentials_configured() and user.email.lower().strip() == managed_email:
+        raise ApiError(
+            status_code=400,
+            code="ADM_ENV_MANAGED_CREDENTIALS",
+            message="As credenciais do /adm sao gerenciadas por ADM_BOOTSTRAP_EMAIL e ADM_BOOTSTRAP_PASSWORD",
+        )
     if not verify_password(current_password, user.hashed_password):
         raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Senha atual invalida")
     validate_password_strength(new_password)
