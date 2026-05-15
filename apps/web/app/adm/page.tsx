@@ -227,6 +227,30 @@ const OUTREACH_LAB_SCENARIOS = [
 
 type AdmSection = "crm" | "whatsapp";
 
+function extractApiErrorMessage(error: unknown, fallback: string): string {
+  const response = (
+    error as {
+      response?: {
+        data?: {
+          error?: {
+            message?: string;
+            details?: { rules?: string[]; errors?: Array<{ msg?: string }> };
+          };
+        };
+      };
+    }
+  ).response;
+
+  const message = response?.data?.error?.message?.trim();
+  const rules = response?.data?.error?.details?.rules?.filter(Boolean) ?? [];
+  const validationErrors =
+    response?.data?.error?.details?.errors?.map((item) => item?.msg?.trim()).filter(Boolean) ?? [];
+
+  if (rules.length) return `${message || fallback}: ${rules.join(", ")}`;
+  if (validationErrors.length) return `${message || fallback}: ${validationErrors.join(", ")}`;
+  return message || fallback;
+}
+
 function humanize(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -286,7 +310,7 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
       toast.success(data.force_password_change ? "Troque a senha inicial para continuar." : "Acesso administrativo liberado.");
       onLogged(Boolean(data.force_password_change));
     },
-    onError: () => toast.error("Nao foi possivel entrar no /adm."),
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel entrar no /adm.")),
   });
 
   return (
