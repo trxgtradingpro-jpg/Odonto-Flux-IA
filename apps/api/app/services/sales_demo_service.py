@@ -761,18 +761,6 @@ def _sanitize_demo_whatsapp_assignment(
             message="Selecione um numero real criado na area de WhatsApp do sistema.",
         )
 
-    candidates = db.execute(select(ProspectAccount)).scalars().all()
-    for candidate in candidates:
-        if current_prospect_id and candidate.id == current_prospect_id:
-            continue
-        if _demo_whatsapp_settings(candidate).get("account_id") != account_id:
-            continue
-        raise ApiError(
-            status_code=409,
-            code="DEMO_WHATSAPP_ACCOUNT_IN_USE",
-            message=f"Esse numero ja esta vinculado a demo de {candidate.clinic_name}.",
-        )
-
     payload["demo_whatsapp"] = {"account_id": account_id}
     return payload
 

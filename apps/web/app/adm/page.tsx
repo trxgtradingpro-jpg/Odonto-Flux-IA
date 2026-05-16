@@ -1019,7 +1019,7 @@ function CreateProspectForm({
               </Field>
               <Field
                 label="Numero real da demo"
-                helper="Escolha o numero criado no WhatsApp do sistema que vai receber as mensagens desta demo. O numero de teste acima e quem envia a mensagem."
+                helper="Pode ser compartilhado por varias demos. O roteamento usa o numero de teste acima para cair no tenant correto."
                 className="lg:col-span-3"
               >
                 <select
@@ -1030,12 +1030,11 @@ function CreateProspectForm({
                   <option value="">Sem numero real vinculado</option>
                   {platformAccounts.map((account) => {
                     const usage = platformAccountUsage[account.id];
-                    const disabled = Boolean(usage);
                     return (
-                      <option key={account.id} value={account.id} disabled={disabled}>
+                      <option key={account.id} value={account.id}>
                         {platformWhatsAppAccountLabel(account)}
                         {account.is_active ? "" : " (inativo)"}
-                        {usage ? ` - em uso por ${usage.clinicName}` : ""}
+                        {usage ? ` - compartilhado com ${usage.clinicName}` : ""}
                       </option>
                     );
                   })}
@@ -1266,7 +1265,7 @@ function EditProspectDrawer({
               </Field>
               <Field
                 label="Numero real da demo"
-                helper="Esse numero do WhatsApp do sistema recebe as mensagens desta demo. O numero de teste acima continua sendo quem envia a mensagem."
+                helper="Pode ser compartilhado por varias demos. O roteamento usa o numero de teste acima para cair no tenant correto."
                 className="lg:col-span-3"
               >
                 <select
@@ -1278,12 +1277,11 @@ function EditProspectDrawer({
                   <option value="">Sem numero real vinculado</option>
                   {platformAccounts.map((account) => {
                     const usage = platformAccountUsage[account.id];
-                    const disabled = Boolean(usage && usage.prospectId !== prospect.id);
                     return (
-                      <option key={account.id} value={account.id} disabled={disabled}>
+                      <option key={account.id} value={account.id}>
                         {platformWhatsAppAccountLabel(account)}
                         {account.is_active ? "" : " (inativo)"}
-                        {usage ? ` - em uso por ${usage.clinicName}` : ""}
+                        {usage ? ` - compartilhado com ${usage.clinicName}` : ""}
                       </option>
                     );
                   })}

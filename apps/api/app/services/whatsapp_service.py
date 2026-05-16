@@ -218,27 +218,104 @@ def _assigned_demo_account_id_from_snapshot(snapshot: dict | None) -> str | None
     return str(demo_settings.get("account_id") or "").strip() or None
 
 
-def _resolve_demo_inbound_target(
-    db: Session,
-    *,
-    account: WhatsAppAccount,
-) -> tuple[UUID, UUID | None]:
+def _demo_unit_id_for_tenant(db: Session, *, tenant_id: UUID) -> UUID | None:
+    return db.scalar(
+        select(Unit.id)
+        .where(Unit.tenant_id == tenant_id, Unit.is_active.is_(True))
+        .order_by(Unit.created_at.asc())
+        .limit(1)
+    )
+
+
+def _assigned_demo_prospects_for_account(db: Session, *, account: WhatsAppAccount) -> list[ProspectAccount]:
     account_id = str(account.id)
     prospects = db.execute(
         select(ProspectAccount).where(ProspectAccount.demo_tenant_id.is_not(None))
     ).scalars().all()
+    return [
+        prospect
+        for prospect in prospects
+        if _assigned_demo_account_id_from_snapshot(prospect.proposal_snapshot) == account_id
+        and prospect.demo_tenant_id
+    ]
+
+
+def _lead_phone_matches(value: str | None, normalized_phone: str) -> bool:
+    return bool(normalized_phone and normalize_phone(value) == normalized_phone)
+
+
+def _find_demo_prospect_by_sender_phone(
+    db: Session,
+    *,
+    prospects: list[ProspectAccount],
+    sender_phone: str | None,
+) -> ProspectAccount | None:
+    normalized_sender = normalize_phone(sender_phone)
+    if not normalized_sender:
+        return None
+
+    test_phone_matches = [
+        prospect
+        for prospect in prospects
+        if normalize_phone(prospect.test_phone_number) == normalized_sender
+    ]
+    if len(test_phone_matches) == 1:
+        return test_phone_matches[0]
+
+    patient_matches: list[ProspectAccount] = []
     for prospect in prospects:
-        if _assigned_demo_account_id_from_snapshot(prospect.proposal_snapshot) != account_id:
-            continue
         if not prospect.demo_tenant_id:
             continue
-        demo_unit_id = db.scalar(
-            select(Unit.id)
-            .where(Unit.tenant_id == prospect.demo_tenant_id, Unit.is_active.is_(True))
-            .order_by(Unit.created_at.asc())
+        patient_exists = db.scalar(
+            select(Patient.id)
+            .where(
+                Patient.tenant_id == prospect.demo_tenant_id,
+                Patient.normalized_phone == normalized_sender,
+            )
             .limit(1)
         )
-        return prospect.demo_tenant_id, demo_unit_id
+        if patient_exists:
+            patient_matches.append(prospect)
+            continue
+
+        leads = db.execute(
+            select(Lead.phone).where(Lead.tenant_id == prospect.demo_tenant_id)
+        ).all()
+        if any(_lead_phone_matches(row[0], normalized_sender) for row in leads):
+            patient_matches.append(prospect)
+
+    if len(patient_matches) == 1:
+        return patient_matches[0]
+    return None
+
+
+def _resolve_demo_inbound_target(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    sender_phone: str | None = None,
+) -> tuple[UUID, UUID | None]:
+    prospects = _assigned_demo_prospects_for_account(db, account=account)
+    if not prospects:
+        return account.tenant_id, account.unit_id
+
+    matched_prospect = _find_demo_prospect_by_sender_phone(
+        db,
+        prospects=prospects,
+        sender_phone=sender_phone,
+    )
+    if matched_prospect and matched_prospect.demo_tenant_id:
+        return matched_prospect.demo_tenant_id, _demo_unit_id_for_tenant(db, tenant_id=matched_prospect.demo_tenant_id)
+
+    if len(prospects) == 1 and prospects[0].demo_tenant_id:
+        return prospects[0].demo_tenant_id, _demo_unit_id_for_tenant(db, tenant_id=prospects[0].demo_tenant_id)
+
+    logger.warning(
+        "whatsapp.demo_inbound_route_ambiguous",
+        account_id=str(account.id),
+        sender_phone=sender_phone,
+        assigned_prospect_ids=[str(prospect.id) for prospect in prospects],
+    )
     return account.tenant_id, account.unit_id
 
 
@@ -1170,13 +1247,17 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
             if not account:
                 continue
 
-            tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
-
             for message in value.get('messages', []):
                 stats['received'] += 1
                 event_id = message.get('id')
                 if not event_id:
                     continue
+                sender_phone = message.get('from', '')
+                tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+                    db,
+                    account=account,
+                    sender_phone=sender_phone,
+                )
 
                 inbox_event = WebhookInbox(
                     tenant_id=tenant_id,
@@ -1193,7 +1274,6 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     stats['duplicates'] += 1
                     continue
 
-                sender_phone = message.get('from', '')
                 normalized = normalize_phone(sender_phone)
                 patient = db.scalar(
                     select(Patient).where(
@@ -1304,6 +1384,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 status_name = status.get('status')
                 if not provider_id or not status_name:
                     continue
+                tenant_id, _preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
 
                 status_tenant_id, msg = _resolve_message_for_status(
                     db,
@@ -1393,7 +1474,6 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         if not account:
             continue
 
-        tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
         provider_message_id = str(result.get('messageId') or result.get('pairedMessageId') or '').strip()
         sender_phone = str(result.get('from') or '').strip()
         message_block = result.get('message') if isinstance(result.get('message'), dict) else {}
@@ -1404,6 +1484,11 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         is_inbound = bool(sender_phone and (inbound_text or media))
 
         if is_inbound:
+            tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+                db,
+                account=account,
+                sender_phone=sender_phone,
+            )
             stats['received'] += 1
             event_id = f'infobip_inbound:{provider_message_id or sender_phone}:{result.get("receivedAt") or ""}'
             inbox_event = WebhookInbox(
@@ -1525,6 +1610,7 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             continue
 
         if has_status and provider_message_id:
+            tenant_id, _preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
             normalized_status = _normalize_infobip_delivery_status(result.get('status'))
             status_tenant_id, msg = _resolve_message_for_status(
                 db,
@@ -1606,7 +1692,6 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
     if not account:
         return stats
 
-    tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
     account_phone_normalized = _normalized_provider_phone(account.phone_number_id)
     from_phone_normalized = _normalized_provider_phone(from_phone)
     to_phone_normalized = _normalized_provider_phone(to_phone)
@@ -1620,6 +1705,12 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
     )
 
     if is_inbound:
+        sender_phone = _strip_whatsapp_prefix(from_phone)
+        tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+            db,
+            account=account,
+            sender_phone=sender_phone,
+        )
         stats['received'] += 1
         event_id = f'twilio_inbound:{message_sid}'
         inbox_event = WebhookInbox(
@@ -1637,7 +1728,6 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
             stats['duplicates'] += 1
             return stats
 
-        sender_phone = _strip_whatsapp_prefix(from_phone)
         normalized = normalize_phone(sender_phone)
         patient = db.scalar(
             select(Patient).where(
@@ -1747,6 +1837,7 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
 
     has_status_update = bool(message_sid and normalized_status and normalized_status != 'received')
     if has_status_update:
+        tenant_id, _preferred_demo_unit_id = _resolve_demo_inbound_target(db, account=account)
         status_tenant_id, msg = _resolve_message_for_status(
             db,
             provider_message_id=message_sid,
