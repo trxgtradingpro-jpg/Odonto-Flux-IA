@@ -56,7 +56,11 @@ from app.services.service_duration_service import (
     resolve_appointment_end,
     resolve_service_duration_minutes,
 )
-from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
+from app.services.whatsapp_service import (
+    assert_whatsapp_account_ready_for_dispatch,
+    queue_outbound_message,
+    resolve_whatsapp_reply_route,
+)
 
 AI_AUTORESPONDER_PROMPT_VERSION = "v1.4"
 INACTIVE_CONVERSATION_RESTART_MINUTES = 20
@@ -2076,27 +2080,8 @@ def _booking_restart_requested(text: str) -> bool:
 
 
 def _conversation_destination_phone(db: Session, *, conversation: Conversation) -> str | None:
-    if conversation.patient_id:
-        patient = db.scalar(
-            select(Patient).where(
-                Patient.id == conversation.patient_id,
-                Patient.tenant_id == conversation.tenant_id,
-            )
-        )
-        if patient and patient.phone:
-            return patient.phone
-
-    if conversation.lead_id:
-        lead = db.scalar(
-            select(Lead).where(
-                Lead.id == conversation.lead_id,
-                Lead.tenant_id == conversation.tenant_id,
-            )
-        )
-        if lead and lead.phone:
-            return lead.phone
-
-    return None
+    destination, _provider_context = resolve_whatsapp_reply_route(db, conversation=conversation)
+    return destination
 
 
 def _is_appointment_lookup_request(text: str) -> bool:
@@ -8905,7 +8890,11 @@ def _queue_handoff_notice(
     if conversation.channel != "whatsapp" or reason in HANDOFF_NOTICE_SKIP_REASONS:
         return None, None, None, None
 
-    destination = _conversation_destination_phone(db, conversation=conversation)
+    destination, provider_context = resolve_whatsapp_reply_route(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
     if not destination:
         return None, None, None, "missing_contact_phone"
 
@@ -8949,6 +8938,7 @@ def _queue_handoff_notice(
             to=destination,
             body=body,
             message_type="text",
+            provider_context=provider_context,
             metadata={
                 "source": "ai_autoresponder",
                 "mode": "handoff_notice",
@@ -9354,7 +9344,11 @@ def process_inbound_message(
         )
 
     context = _recent_context(db, tenant_id=tenant_id, conversation_id=conversation.id)
-    destination = _conversation_destination_phone(db, conversation=conversation)
+    destination, provider_context = resolve_whatsapp_reply_route(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
     if not destination:
         return finish_without_reply(
             final_decision=DECISION_HANDOFF,
@@ -9546,6 +9540,7 @@ def process_inbound_message(
                 body=dispatch_body,
                 message_type=dispatch_message_type,
                 interactive=dispatch_interactive,
+                provider_context=provider_context,
                 metadata={
                     "source": "ai_autoresponder",
                     "mode": scheduling_response.get("mode"),
@@ -9593,6 +9588,7 @@ def process_inbound_message(
                     body=interactive_body,
                     message_type=interactive_message_type,
                     interactive=interactive_payload,
+                    provider_context=provider_context,
                     metadata={
                         "source": "ai_autoresponder",
                         "mode": scheduling_response.get("mode"),
@@ -9712,6 +9708,7 @@ def process_inbound_message(
                     body=followup_dispatch_body,
                     message_type=followup_type,
                     interactive=followup_dispatch_interactive,
+                    provider_context=provider_context,
                     metadata={
                         "source": "ai_autoresponder",
                         "mode": followup_response.get("mode"),
@@ -10060,6 +10057,18 @@ def process_inbound_message(
             interactive_payload=action_interactive_payload,
         )
 
+    destination, provider_context = resolve_whatsapp_reply_route(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
+    if not destination:
+        return finish_without_reply(
+            final_decision=DECISION_HANDOFF,
+            reason="missing_contact_phone",
+            handoff=True,
+        )
+
     try:
         outbound_message = Message(
             tenant_id=tenant_id,
@@ -10090,6 +10099,7 @@ def process_inbound_message(
             body=dispatch_body,
             message_type=dispatch_message_type,
             interactive=dispatch_interactive,
+            provider_context=provider_context,
             metadata={
                 "source": "ai_autoresponder",
                 "mode": contract_wizard_mode,

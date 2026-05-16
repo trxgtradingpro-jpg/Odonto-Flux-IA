@@ -22,6 +22,7 @@ from app.services.whatsapp_service import (
     assert_whatsapp_account_ready_for_dispatch,
     ensure_whatsapp_audio_media_stored,
     queue_outbound_message,
+    resolve_whatsapp_reply_route,
 )
 
 router = APIRouter(prefix='/messages', tags=['messages'])
@@ -127,6 +128,8 @@ def create_message(
         if lead:
             contact_phone = lead.phone
 
+    contact_phone, provider_context = resolve_whatsapp_reply_route(db, conversation=conversation)
+
     if not contact_phone:
         raise ApiError(
             status_code=400,
@@ -158,6 +161,7 @@ def create_message(
         to=contact_phone,
         body=payload.body,
         message_type=payload.message_type,
+        provider_context=provider_context,
         metadata={
             'created_by_user_id': str(principal.user.id),
             'source': 'manual_inbox',

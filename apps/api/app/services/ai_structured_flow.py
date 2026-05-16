@@ -42,7 +42,11 @@ from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_wh
 from app.services.llm_service import run_llm_task
 from app.services.service_catalog_service import get_service_catalog_items
 from app.services.service_duration_service import get_service_duration_catalog, resolve_service_duration_minutes
-from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
+from app.services.whatsapp_service import (
+    assert_whatsapp_account_ready_for_dispatch,
+    queue_outbound_message,
+    resolve_whatsapp_reply_route,
+)
 
 STRUCTURED_FLOW_SCHEMA_VERSION = "1.0"
 STRUCTURED_FLOW_PROMPT_VERSION = "structured-v1.0"
@@ -1645,7 +1649,11 @@ def _dispatch_patient_reply(
     extractor_payload: dict[str, Any] | None,
     reply_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    destination = _conversation_destination_phone(db, conversation=conversation)
+    destination, provider_context = resolve_whatsapp_reply_route(
+        db,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
     if not destination:
         return _handoff(
             db,
@@ -1694,6 +1702,7 @@ def _dispatch_patient_reply(
         body=patient_reply.message,
         message_type=message_type,
         interactive=interactive_payload,
+        provider_context=provider_context,
         metadata={
             "source": "ai_autoresponder",
             "structured_flow": True,
@@ -1913,7 +1922,11 @@ def _handoff(
     outbox_id: UUID | None = None
     generated_response = None
     if reply_text:
-        destination = _conversation_destination_phone(db, conversation=conversation)
+        destination, provider_context = resolve_whatsapp_reply_route(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
         if destination:
             outbound = Message(
                 tenant_id=tenant_id,
@@ -1940,6 +1953,7 @@ def _handoff(
                 to=destination,
                 body=reply_text,
                 message_type="text",
+                provider_context=provider_context,
                 metadata={
                     "source": "ai_autoresponder",
                     "structured_flow": True,
@@ -3205,15 +3219,8 @@ def _unit_payload(unit: Unit) -> dict[str, Any]:
 
 
 def _conversation_destination_phone(db: Session, *, conversation: Conversation) -> str | None:
-    if conversation.patient_id:
-        patient = db.get(Patient, conversation.patient_id)
-        if patient and patient.phone:
-            return patient.phone
-    if conversation.lead_id:
-        lead = db.get(Lead, conversation.lead_id)
-        if lead and lead.phone:
-            return lead.phone
-    return None
+    destination, _provider_context = resolve_whatsapp_reply_route(db, conversation=conversation)
+    return destination
 
 
 def _safe_llm_metadata(payload: dict[str, Any] | None) -> dict[str, Any] | None:

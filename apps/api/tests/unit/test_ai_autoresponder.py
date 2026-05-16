@@ -1026,6 +1026,74 @@ def test_prompt_includes_ai_lab_training_examples(monkeypatch, seeded_db, db_ses
     assert "Quanto custa clareamento?" in prompt
     assert "Ser consultivo" in prompt
 
+
+def test_process_inbound_message_replies_to_real_inbound_sender_phone(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi, quero saber sobre limpeza.",
+    )
+
+    patient = db_session.get(Patient, conversation.patient_id)
+    assert patient is not None
+    patient.phone = "5511911111111"
+    patient.normalized_phone = "5511911111111"
+
+    account = db_session.scalar(select(WhatsAppAccount).where(WhatsAppAccount.tenant_id == tenant_id))
+    assert account is not None
+    inbound.payload = {
+        "from": "5511988887777",
+        "provider_context": {
+            "whatsapp_account_id": str(account.id),
+            "provider_name": account.provider_name,
+            "phone_number_id": account.phone_number_id,
+            "business_account_id": account.business_account_id,
+        },
+    }
+    inbound.provider_message_id = "wamid.real.in.001"
+    db_session.add_all([patient, inbound])
+    db_session.commit()
+
+    from app.services import ai_autoresponder_service
+
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "run_llm_task",
+        lambda *args, **kwargs: {
+            "output": (
+                '{"reply_text":"Posso te ajudar com a limpeza e ja verifico os horarios.",'
+                '"next_action":"none","action_payload":{},"confidence":0.92}'
+            ),
+            "metadata": {"provider": "mock", "model": "mock"},
+        },
+    )
+    monkeypatch.setattr(
+        ai_autoresponder_service,
+        "classify_intent",
+        lambda *args, **kwargs: {"output": '{"intent":"informacao","confidence":0.91}'},
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbox = db_session.scalar(
+        select(OutboxMessage)
+        .where(OutboxMessage.tenant_id == tenant_id)
+        .order_by(OutboxMessage.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert outbox is not None
+    assert (outbox.payload or {}).get("to") == "5511988887777"
+    assert ((outbox.payload or {}).get("provider_context") or {}).get("whatsapp_account_id") == str(account.id)
+
+
 def test_scheduling_slots_message_is_structured_as_numbered_list(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

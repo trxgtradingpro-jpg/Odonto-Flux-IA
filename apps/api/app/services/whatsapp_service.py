@@ -244,6 +244,51 @@ def _lead_phone_matches(value: str | None, normalized_phone: str) -> bool:
     return bool(normalized_phone and normalize_phone(value) == normalized_phone)
 
 
+def _is_simulated_inbound_payload(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return bool(payload.get("simulated_patient") or payload.get("source") == "demo_whatsapp_simulation")
+
+
+def _extract_sender_phone_from_message_payload(payload: dict | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    sender_candidates = [
+        payload.get("from"),
+        payload.get("From"),
+    ]
+    for candidate in sender_candidates:
+        normalized = normalize_phone(_strip_whatsapp_prefix(str(candidate or "").strip()))
+        if normalized:
+            return normalized
+    return None
+
+
+def _conversation_entity_phone(db: Session, *, conversation: Conversation) -> str | None:
+    if conversation.patient_id:
+        patient = db.scalar(
+            select(Patient).where(
+                Patient.id == conversation.patient_id,
+                Patient.tenant_id == conversation.tenant_id,
+            )
+        )
+        if patient and patient.phone:
+            return patient.phone
+
+    if conversation.lead_id:
+        lead = db.scalar(
+            select(Lead).where(
+                Lead.id == conversation.lead_id,
+                Lead.tenant_id == conversation.tenant_id,
+            )
+        )
+        if lead and lead.phone:
+            return lead.phone
+
+    return None
+
+
 def _find_demo_prospect_by_sender_phone(
     db: Session,
     *,
@@ -370,6 +415,51 @@ def _resolve_message_for_status(
     if len(matches) == 1:
         return matches[0].tenant_id, matches[0]
     return fallback_tenant_id, None
+
+
+def resolve_whatsapp_reply_route(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_message: Message | None = None,
+) -> tuple[str | None, dict[str, str | None] | None]:
+    candidates: list[Message] = []
+    if inbound_message and inbound_message.channel == "whatsapp":
+        candidates.append(inbound_message)
+
+    recent_inbound_messages = db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.INBOUND.value,
+            Message.channel == "whatsapp",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(20)
+    ).scalars().all()
+
+    seen_message_ids: set[UUID] = set()
+    for message in [*candidates, *recent_inbound_messages]:
+        if not message or message.id in seen_message_ids:
+            continue
+        seen_message_ids.add(message.id)
+
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        if _is_simulated_inbound_payload(payload):
+            continue
+
+        sender_phone = _extract_sender_phone_from_message_payload(payload)
+        provider_context = payload.get("provider_context") if isinstance(payload.get("provider_context"), dict) else None
+        if not sender_phone:
+            continue
+        if not provider_context:
+            return sender_phone, None
+
+        account = _dispatch_account_from_provider_context(db, provider_context)
+        return sender_phone, _build_provider_context(account) if account else provider_context
+
+    return _conversation_entity_phone(db, conversation=conversation), None
 
 
 def _is_audio_content_type(content_type: str | None) -> bool:
@@ -1905,6 +1995,7 @@ def queue_outbound_message(
     message_type: str = 'text',
     template: dict | None = None,
     interactive: dict | None = None,
+    provider_context: dict | None = None,
     metadata: dict | None = None,
     immediate_dispatch: bool | None = None,
     commit: bool = True,
@@ -1940,6 +2031,7 @@ def queue_outbound_message(
             'message_type': message_type,
             'template': template,
             'interactive': interactive,
+            'provider_context': provider_context if isinstance(provider_context, dict) else None,
             'metadata': metadata or {},
         },
         retry_count=0,
@@ -2085,6 +2177,12 @@ def _resolve_dispatch_account_from_conversation(
 
 def _resolve_dispatch_account_for_outbox_item(db: Session, item: OutboxMessage) -> WhatsAppAccount | None:
     payload = item.payload if isinstance(item.payload, dict) else {}
+    provider_context = payload.get('provider_context') if isinstance(payload.get('provider_context'), dict) else {}
+    if provider_context:
+        account = _dispatch_account_from_provider_context(db, provider_context)
+        if account:
+            return account
+
     conversation_id = payload.get('conversation_id')
     if conversation_id:
         try:
