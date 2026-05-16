@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -33,7 +33,7 @@ import { EmptyState, RightDrawer } from "@/components/premium";
 import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
 import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
-import { formatDateTimeBR, numberFormatter } from "@/lib/formatters";
+import { formatDateTimeBR, formatRelativeTime, initials, numberFormatter } from "@/lib/formatters";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, cn } from "@odontoflux/ui";
 
 type Prospect = {
@@ -266,7 +266,47 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
 
-type AdmSection = "crm" | "whatsapp";
+type AdmSection = "crm" | "adm_whatsapp" | "whatsapp_settings";
+
+type AdmWhatsappConversation = {
+  id: string;
+  source: "demo" | "comercial" | string;
+  prospect_id: string;
+  prospect_name: string;
+  demo_tenant_id?: string | null;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+  patient_id?: string | null;
+  lead_id?: string | null;
+  channel: string;
+  status: string;
+  tags: string[];
+  ai_summary?: string | null;
+  ai_autoresponder_enabled?: boolean | null;
+  last_message_at?: string | null;
+  last_message_preview?: string | null;
+  last_message_direction?: string | null;
+  message_count: number;
+  simulated_patient_messages: number;
+  created_at: string;
+};
+
+type AdmWhatsappMessage = {
+  id: string;
+  tenant_id: string;
+  conversation_id: string;
+  direction: string;
+  provider_message_id?: string | null;
+  status: string;
+  body: string;
+  message_type: string;
+  sender_type: string;
+  payload?: Record<string, unknown>;
+  sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  created_at: string;
+};
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   const response = (
@@ -517,6 +557,252 @@ function ChangePasswordPanel({ onDone }: { onDone: () => void }) {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+function admWhatsappSourceLabel(source: string) {
+  if (source === "demo") return "Demo";
+  if (source === "comercial") return "Comercial";
+  return humanize(source);
+}
+
+function messageAuthorLabel(message: AdmWhatsappMessage) {
+  if (message.direction === "inbound") return message.sender_type === "patient" ? "Paciente simulado" : "Cliente";
+  if (message.sender_type === "ai") return "IA";
+  if (message.sender_type === "automation") return "Automacao";
+  return "Atendimento";
+}
+
+function AdmWhatsAppInbox({
+  selectedProspectId,
+  onClearProspectFilter,
+}: {
+  selectedProspectId: string | null;
+  onClearProspectFilter: () => void;
+}) {
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  const [search, setSearch] = useState("");
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedConversationId(null);
+  }, [selectedProspectId]);
+
+  const conversationsQuery = useQuery<{ data: AdmWhatsappConversation[]; meta: { total: number } }>({
+    queryKey: ["adm-whatsapp-conversations", selectedProspectId, search],
+    queryFn: async () =>
+      (
+        await api.get("/admin/whatsapp/conversations", {
+          params: {
+            prospect_id: selectedProspectId || undefined,
+            q: search || undefined,
+            limit: 300,
+          },
+        })
+      ).data,
+    retry: false,
+  });
+
+  const conversations = useMemo(() => conversationsQuery.data?.data ?? [], [conversationsQuery.data?.data]);
+  const selectedConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === selectedConversationId) ?? conversations[0] ?? null,
+    [conversations, selectedConversationId],
+  );
+
+  useEffect(() => {
+    if (!selectedConversationId && selectedConversation) setSelectedConversationId(selectedConversation.id);
+  }, [selectedConversation, selectedConversationId]);
+
+  const messagesQuery = useQuery<{ data: AdmWhatsappMessage[]; conversation: AdmWhatsappConversation }>({
+    queryKey: ["adm-whatsapp-messages", selectedConversation?.id],
+    queryFn: async () =>
+      (await api.get(`/admin/whatsapp/conversations/${selectedConversation?.id}/messages`, { params: { limit: 300 } })).data,
+    enabled: Boolean(selectedConversation?.id),
+    retry: false,
+  });
+
+  const messages = messagesQuery.data?.data ?? [];
+
+  useEffect(() => {
+    const node = threadRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight });
+  }, [messages.length, selectedConversation?.id]);
+
+  return (
+    <Card className="overflow-hidden border-stone-200 bg-white">
+      <CardContent className="p-0">
+        <div className="grid min-h-[720px] lg:grid-cols-[360px_1fr]">
+          <aside className="border-b border-stone-200 bg-stone-50/70 lg:border-b-0 lg:border-r">
+            <div className="space-y-3 border-b border-stone-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Inbox /adm</p>
+                  <h2 className="mt-1 text-2xl font-black text-stone-950">WhatsApp</h2>
+                </div>
+                <Badge className="bg-emerald-100 text-emerald-800">{conversationsQuery.data?.meta?.total ?? conversations.length}</Badge>
+              </div>
+
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                <Input
+                  className="pl-9"
+                  placeholder="Pesquisar conversa"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+
+              {selectedProspectId ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                  <span className="font-semibold">Clinica selecionada</span>
+                  <Button className="h-8 px-3 text-xs" variant="outline" onClick={onClearProspectFilter}>
+                    Ver todos
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="max-h-[610px] space-y-2 overflow-y-auto p-3">
+              {conversationsQuery.isLoading ? (
+                <div className="rounded-lg border border-stone-200 bg-white p-4 text-sm text-stone-500">Carregando conversas...</div>
+              ) : conversations.length ? (
+                conversations.map((conversation) => {
+                  const active = selectedConversation?.id === conversation.id;
+                  return (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className={cn(
+                        "w-full rounded-lg border bg-white p-3 text-left transition hover:border-emerald-200 hover:bg-emerald-50/60",
+                        active ? "border-emerald-300 bg-emerald-50 shadow-sm" : "border-stone-200",
+                      )}
+                      onClick={() => setSelectedConversationId(conversation.id)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-stone-100 text-xs font-black text-stone-700">
+                          {initials(conversation.contact_name || conversation.prospect_name)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-stone-950">{conversation.contact_name || conversation.prospect_name}</p>
+                              <p className="truncate text-xs text-stone-500">{conversation.prospect_name}</p>
+                            </div>
+                            <span className="shrink-0 text-[11px] text-stone-500">
+                              {conversation.last_message_at ? formatRelativeTime(conversation.last_message_at) : "sem data"}
+                            </span>
+                          </div>
+                          <p className="mt-2 line-clamp-2 text-xs leading-5 text-stone-600">
+                            {conversation.last_message_preview || conversation.ai_summary || "Sem mensagens ainda."}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            <Badge className={conversation.source === "demo" ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
+                              {admWhatsappSourceLabel(conversation.source)}
+                            </Badge>
+                            <Badge className="bg-white text-stone-600">{humanize(conversation.status)}</Badge>
+                            {conversation.simulated_patient_messages ? (
+                              <Badge className="bg-violet-100 text-violet-800">Paciente simulado</Badge>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="rounded-lg border border-dashed border-stone-300 bg-white p-6">
+                  <EmptyState title="Nenhuma conversa" description="As conversas das demos e do comercial aparecem aqui." />
+                </div>
+              )}
+            </div>
+          </aside>
+
+          <section className="flex min-h-[720px] flex-col bg-[#f7f8f5]">
+            {selectedConversation ? (
+              <>
+                <div className="flex flex-col gap-3 border-b border-stone-200 bg-white p-4 md:flex-row md:items-center md:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-stone-100 text-sm font-black text-stone-700">
+                      {initials(selectedConversation.contact_name || selectedConversation.prospect_name)}
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="truncate text-base font-black text-stone-950">
+                        {selectedConversation.contact_name || selectedConversation.prospect_name}
+                      </h3>
+                      <p className="truncate text-xs text-stone-500">
+                        {selectedConversation.prospect_name}
+                        {selectedConversation.contact_phone ? ` - ${selectedConversation.contact_phone}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className={selectedConversation.source === "demo" ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
+                      {admWhatsappSourceLabel(selectedConversation.source)}
+                    </Badge>
+                    <Badge className="bg-white text-stone-700">{numberFormatter.format(selectedConversation.message_count)} mensagens</Badge>
+                    <Badge className="bg-white text-stone-700">{humanize(selectedConversation.status)}</Badge>
+                  </div>
+                </div>
+
+                {selectedConversation.ai_summary ? (
+                  <div className="border-b border-emerald-100 bg-emerald-50 px-5 py-3 text-sm leading-6 text-emerald-950">
+                    <strong>Resumo IA:</strong> {selectedConversation.ai_summary}
+                  </div>
+                ) : null}
+
+                <div ref={threadRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-5 md:px-8">
+                  {messagesQuery.isLoading ? (
+                    <div className="rounded-lg border border-stone-200 bg-white p-4 text-sm text-stone-500">Carregando mensagens...</div>
+                  ) : messages.length ? (
+                    messages.map((message) => {
+                      const outbound = message.direction === "outbound";
+                      const simulated = Boolean(message.payload?.simulated_patient);
+                      return (
+                        <div key={message.id} className={cn("flex", outbound ? "justify-end" : "justify-start")}>
+                          <div
+                            className={cn(
+                              "max-w-[min(760px,88%)] rounded-2xl px-4 py-3 text-sm shadow-sm",
+                              outbound
+                                ? "rounded-br-md bg-emerald-600 text-white"
+                                : "rounded-bl-md border border-stone-200 bg-white text-stone-800",
+                            )}
+                          >
+                            <div className={cn("mb-1 text-[11px] font-bold uppercase tracking-wide", outbound ? "text-white/75" : "text-stone-500")}>
+                              {messageAuthorLabel(message)}
+                              {simulated ? " - simulado" : ""}
+                            </div>
+                            <p className="whitespace-pre-wrap leading-6">{message.body}</p>
+                            <div className={cn("mt-2 text-right text-[11px]", outbound ? "text-white/75" : "text-stone-500")}>
+                              {formatDateTimeBR(message.created_at)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-stone-300 bg-white p-8">
+                      <EmptyState title="Sem mensagens" description="Quando houver troca no WhatsApp da demo, ela aparece neste painel." />
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-stone-200 bg-white p-4">
+                  <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-sm text-stone-500">
+                    <MessageSquareText size={16} />
+                    Visualizacao do /adm. O envio continua sendo feito nos fluxos comerciais e nas demos das clinicas.
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="grid flex-1 place-items-center p-8">
+                <EmptyState title="Selecione uma conversa" description="Abra uma conversa da lista para acompanhar o historico." />
+              </div>
+            )}
+          </section>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1118,6 +1404,7 @@ export default function AdmPage() {
   const [hasToken, setHasToken] = useState(false);
   const [forcePasswordChange, setForcePasswordChange] = useState(false);
   const [activeSection, setActiveSection] = useState<AdmSection>("crm");
+  const [admWhatsappProspectId, setAdmWhatsappProspectId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [editDrawerOpen, setEditDrawerOpen] = useState(false);
@@ -1207,6 +1494,7 @@ export default function AdmPage() {
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
     },
     onError: () => toast.error("Nao foi possivel gerar a demo."),
   });
@@ -1219,6 +1507,7 @@ export default function AdmPage() {
       toast.success("Link de demo copiado.");
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
     },
     onError: () => toast.error("Nao foi possivel emitir acesso."),
   });
@@ -1231,6 +1520,7 @@ export default function AdmPage() {
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
     },
   });
 
@@ -1284,6 +1574,7 @@ export default function AdmPage() {
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
     },
     onError: (error: unknown) => {
       const response = (error as { response?: { data?: { error?: { message?: string } } } }).response;
@@ -1303,6 +1594,7 @@ export default function AdmPage() {
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
     },
     onError: (error: unknown) => {
       const response = (error as { response?: { data?: { error?: { message?: string } } } }).response;
@@ -1349,6 +1641,11 @@ export default function AdmPage() {
 
   const prospects = prospectsQuery.data?.data ?? [];
   const overview = overviewQuery.data;
+  const openAdmWhatsappForProspect = (prospect: Prospect) => {
+    setSelectedId(prospect.id);
+    setAdmWhatsappProspectId(prospect.id);
+    setActiveSection("adm_whatsapp");
+  };
   const openProspectEditor = (prospect: Prospect) => {
     setSelectedId(prospect.id);
     setEditingProspect(prospect);
@@ -1364,7 +1661,11 @@ export default function AdmPage() {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Admin comercial</p>
               <h1 className="text-lg font-bold">
-                {activeSection === "crm" ? "Prospeccao e demos personalizadas" : "WhatsApp oficial do sistema"}
+                {activeSection === "crm"
+                  ? "Prospeccao e demos personalizadas"
+                  : activeSection === "adm_whatsapp"
+                    ? "WhatsApp do /adm"
+                    : "Configuracao do WhatsApp oficial"}
               </h1>
             </div>
           </div>
@@ -1389,7 +1690,7 @@ export default function AdmPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</p>
               <h2 className="mt-1 text-xl font-black text-stone-950">Escolha a area que quer operar agora</h2>
               <p className="mt-1 text-sm text-stone-600">
-                Alterne entre o CRM comercial e a configuracao do WhatsApp oficial da plataforma sem sair da pagina administrativa.
+                Alterne entre o CRM comercial, as conversas das demos e a configuracao do WhatsApp oficial da plataforma.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1402,9 +1703,20 @@ export default function AdmPage() {
                 CRM comercial
               </Button>
               <Button
-                variant={activeSection === "whatsapp" ? "default" : "outline"}
-                className={cn(activeSection === "whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                onClick={() => setActiveSection("whatsapp")}
+                variant={activeSection === "adm_whatsapp" ? "default" : "outline"}
+                className={cn(activeSection === "adm_whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                onClick={() => {
+                  setAdmWhatsappProspectId(null);
+                  setActiveSection("adm_whatsapp");
+                }}
+              >
+                <MessageSquareText size={16} />
+                WhatsApp do /adm
+              </Button>
+              <Button
+                variant={activeSection === "whatsapp_settings" ? "default" : "outline"}
+                className={cn(activeSection === "whatsapp_settings" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                onClick={() => setActiveSection("whatsapp_settings")}
               >
                 <SlidersHorizontal size={16} />
                 WhatsApp do sistema
@@ -1413,7 +1725,11 @@ export default function AdmPage() {
           </CardContent>
         </Card>
 
-        {activeSection === "whatsapp" ? <PlatformWhatsAppSettings /> : null}
+        {activeSection === "adm_whatsapp" ? (
+          <AdmWhatsAppInbox selectedProspectId={admWhatsappProspectId} onClearProspectFilter={() => setAdmWhatsappProspectId(null)} />
+        ) : null}
+
+        {activeSection === "whatsapp_settings" ? <PlatformWhatsAppSettings /> : null}
 
         {activeSection === "crm" ? (
           <>
@@ -1533,6 +1849,19 @@ export default function AdmPage() {
                           type="button"
                           className="h-8 w-8 px-0"
                           variant="outline"
+                          title="Abrir WhatsApp /adm"
+                          aria-label={`Abrir WhatsApp /adm de ${prospect.clinic_name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openAdmWhatsappForProspect(prospect);
+                          }}
+                        >
+                          <MessageSquareText size={14} />
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-8 w-8 px-0"
+                          variant="outline"
                           title="Copiar acesso"
                           aria-label={`Copiar acesso de ${prospect.clinic_name}`}
                           onClick={(event) => {
@@ -1553,7 +1882,7 @@ export default function AdmPage() {
                             automationMutation.mutate(prospect.id);
                           }}
                         >
-                          <MessageSquareText size={14} />
+                          <ArrowRight size={14} />
                         </Button>
                       </span>
                     </div>

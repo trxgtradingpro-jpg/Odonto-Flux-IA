@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.exceptions import ApiError
 from app.core.security import TokenError, decode_token
 from app.db.session import get_db
-from app.models import DemoActivityEvent, ProspectAccount, ProspectNote, ProspectService, ProspectTimelineEvent, ProspectUnit
+from app.models import Conversation, DemoActivityEvent, Lead, Message, Patient, ProspectAccount, ProspectNote, ProspectService, ProspectTimelineEvent, ProspectUnit
 from app.schemas.admin_sales import (
     AdminChangeInitialPasswordInput,
     AdminLoginInput,
@@ -107,6 +107,109 @@ def _require_demo_prospect(principal, db: Session) -> ProspectAccount:
     return prospect
 
 
+def _prospect_id_from_tags(tags: list[str] | None) -> UUID | None:
+    for tag in tags or []:
+        value = str(tag or "").strip()
+        if not value.startswith("prospect_id:"):
+            continue
+        try:
+            return UUID(value.split(":", 1)[1].strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _conversation_contact(db: Session, conversation: Conversation) -> dict[str, str | None]:
+    patient = db.get(Patient, conversation.patient_id) if conversation.patient_id else None
+    if patient:
+        return {
+            "name": patient.full_name,
+            "phone": patient.phone,
+        }
+    lead = db.get(Lead, conversation.lead_id) if conversation.lead_id else None
+    if lead:
+        return {
+            "name": lead.name,
+            "phone": lead.phone,
+        }
+    return {
+        "name": None,
+        "phone": None,
+    }
+
+
+def _serialize_admin_whatsapp_conversation(
+    db: Session,
+    *,
+    prospect: ProspectAccount,
+    conversation: Conversation,
+    source: str,
+) -> dict:
+    contact = _conversation_contact(db, conversation)
+    latest_message = db.scalar(
+        select(Message)
+        .where(Message.tenant_id == conversation.tenant_id, Message.conversation_id == conversation.id)
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    message_count = db.scalar(
+        select(func.count())
+        .select_from(Message)
+        .where(Message.tenant_id == conversation.tenant_id, Message.conversation_id == conversation.id)
+    ) or 0
+    simulated_count = db.scalar(
+        select(func.count())
+        .select_from(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.payload["simulated_patient"].astext == "true",
+        )
+    ) or 0
+    return {
+        "id": str(conversation.id),
+        "source": source,
+        "prospect_id": str(prospect.id),
+        "prospect_name": prospect.clinic_name,
+        "demo_tenant_id": str(prospect.demo_tenant_id) if prospect.demo_tenant_id else None,
+        "contact_name": contact["name"] or prospect.owner_name or prospect.manager_name or prospect.clinic_name,
+        "contact_phone": contact["phone"] or prospect.whatsapp_phone or prospect.phone,
+        "patient_id": str(conversation.patient_id) if conversation.patient_id else None,
+        "lead_id": str(conversation.lead_id) if conversation.lead_id else None,
+        "channel": conversation.channel,
+        "status": conversation.status,
+        "tags": conversation.tags or [],
+        "ai_summary": conversation.ai_summary,
+        "ai_autoresponder_enabled": conversation.ai_autoresponder_enabled,
+        "last_message_at": conversation.last_message_at,
+        "last_message_preview": latest_message.body if latest_message else None,
+        "last_message_direction": latest_message.direction if latest_message else None,
+        "message_count": message_count,
+        "simulated_patient_messages": simulated_count,
+        "created_at": conversation.created_at,
+    }
+
+
+def _resolve_admin_whatsapp_conversation(db: Session, conversation_id: UUID) -> tuple[ProspectAccount, Conversation, str]:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation:
+        raise ApiError(status_code=404, code="ADM_WHATSAPP_CONVERSATION_NOT_FOUND", message="Conversa nao encontrada no /adm")
+
+    prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_tenant_id == conversation.tenant_id))
+    if prospect:
+        return prospect, conversation, "demo"
+
+    sender_tenant = sales.ensure_sales_outreach_sender_tenant(db)
+    if conversation.tenant_id == sender_tenant.id:
+        prospect_id = _prospect_id_from_tags(conversation.tags)
+        if prospect_id:
+            prospect = db.get(ProspectAccount, prospect_id)
+            if prospect:
+                return prospect, conversation, "comercial"
+
+    raise ApiError(status_code=404, code="ADM_WHATSAPP_CONVERSATION_NOT_FOUND", message="Conversa nao vinculada a um prospect do /adm")
+
+
 @router.post("/admin/auth/login", response_model=AdminLoginOutput)
 def admin_login(payload: AdminLoginInput, request: Request, db: Session = Depends(get_db)):
     _rate_limit_login(request, payload.email)
@@ -131,6 +234,132 @@ def change_initial_password(
         new_password=payload.new_password,
     )
     return {"message": "Senha atualizada com sucesso."}
+
+
+@router.get("/admin/whatsapp/conversations")
+def list_admin_whatsapp_conversations(
+    prospect_id: UUID | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_principal(principal)
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    prospect_stmt = select(ProspectAccount)
+    if prospect_id:
+        prospect_stmt = prospect_stmt.where(ProspectAccount.id == prospect_id)
+    prospects = db.execute(prospect_stmt).scalars().all()
+    prospect_by_id = {item.id: item for item in prospects}
+    prospect_by_demo_tenant = {item.demo_tenant_id: item for item in prospects if item.demo_tenant_id}
+
+    items: list[dict] = []
+    if prospect_by_demo_tenant:
+        demo_conversations = db.execute(
+            select(Conversation)
+            .where(
+                Conversation.tenant_id.in_(tuple(prospect_by_demo_tenant.keys())),
+                Conversation.channel == "whatsapp",
+            )
+            .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+        ).scalars().all()
+        for conversation in demo_conversations:
+            prospect = prospect_by_demo_tenant.get(conversation.tenant_id)
+            if prospect:
+                items.append(_serialize_admin_whatsapp_conversation(db, prospect=prospect, conversation=conversation, source="demo"))
+
+    sender_tenant = sales.ensure_sales_outreach_sender_tenant(db)
+    outreach_conversations = db.execute(
+        select(Conversation)
+        .where(
+            Conversation.tenant_id == sender_tenant.id,
+            Conversation.channel == "whatsapp",
+        )
+        .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+    ).scalars().all()
+    for conversation in outreach_conversations:
+        linked_prospect_id = _prospect_id_from_tags(conversation.tags)
+        if not linked_prospect_id:
+            continue
+        prospect = prospect_by_id.get(linked_prospect_id)
+        if prospect:
+            items.append(_serialize_admin_whatsapp_conversation(db, prospect=prospect, conversation=conversation, source="comercial"))
+
+    if q:
+        term = q.lower().strip()
+        items = [
+            item
+            for item in items
+            if term
+            in " ".join(
+                str(value or "")
+                for value in [
+                    item.get("prospect_name"),
+                    item.get("contact_name"),
+                    item.get("contact_phone"),
+                    item.get("last_message_preview"),
+                    item.get("ai_summary"),
+                ]
+            ).lower()
+        ]
+
+    items.sort(key=lambda item: item.get("last_message_at") or item.get("created_at") or datetime.min.replace(tzinfo=UTC), reverse=True)
+    total = len(items)
+    return {
+        "data": items[offset : offset + limit],
+        "meta": {"total": total, "limit": limit, "offset": offset},
+    }
+
+
+@router.get("/admin/whatsapp/conversations/{conversation_id}/messages")
+def list_admin_whatsapp_messages(
+    conversation_id: UUID,
+    limit: int = 200,
+    offset: int = 0,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_principal(principal)
+    _prospect, conversation, source = _resolve_admin_whatsapp_conversation(db, conversation_id)
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    stmt = select(Message).where(
+        Message.tenant_id == conversation.tenant_id,
+        Message.conversation_id == conversation.id,
+    )
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = list(
+        reversed(
+            db.execute(stmt.order_by(Message.created_at.desc()).offset(offset).limit(limit)).scalars().all()
+        )
+    )
+    return {
+        "data": [
+            {
+                "id": str(message.id),
+                "tenant_id": str(message.tenant_id),
+                "conversation_id": str(message.conversation_id),
+                "direction": message.direction,
+                "provider_message_id": message.provider_message_id,
+                "status": message.status,
+                "body": message.body,
+                "message_type": message.message_type,
+                "sender_type": message.sender_type,
+                "payload": message.payload or {},
+                "sent_at": message.sent_at,
+                "delivered_at": message.delivered_at,
+                "read_at": message.read_at,
+                "created_at": message.created_at,
+            }
+            for message in rows
+        ],
+        "conversation": _serialize_admin_whatsapp_conversation(db, prospect=_prospect, conversation=conversation, source=source),
+        "meta": {"total": total, "limit": limit, "offset": offset},
+    }
 
 
 @router.get("/admin/prospects/overview", response_model=ProspectOverviewOutput)
