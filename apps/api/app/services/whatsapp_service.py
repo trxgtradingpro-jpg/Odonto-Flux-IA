@@ -2026,8 +2026,82 @@ def _extract_provider_dispatch_error(*, provider_name: str | None, response: dic
     return None
 
 
+def _dispatch_account_from_provider_context(db: Session, provider_context: dict | None) -> WhatsAppAccount | None:
+    context = provider_context if isinstance(provider_context, dict) else {}
+    account_id = str(context.get('whatsapp_account_id') or '').strip()
+    if account_id:
+        try:
+            account = db.get(WhatsAppAccount, UUID(account_id))
+        except (ValueError, TypeError):
+            account = None
+        if account and account.is_active and not _is_demo_virtual_account(account):
+            return account
+
+    provider_name = normalize_whatsapp_provider_name(context.get('provider_name'))
+    phone_number_id = str(context.get('phone_number_id') or '').strip()
+    if not phone_number_id:
+        return None
+
+    account = None
+    if _is_meta_provider(provider_name):
+        account = _get_meta_account_by_phone_number_id(db, phone_number_id)
+    elif _is_infobip_provider(provider_name):
+        account = _get_infobip_account_by_sender(db, phone_number_id)
+    elif _is_twilio_provider(provider_name):
+        account = _get_twilio_account_by_destination(db, phone_number_id)
+
+    if account and account.is_active and not _is_demo_virtual_account(account):
+        return account
+    return None
+
+
+def _resolve_dispatch_account_from_conversation(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+) -> WhatsAppAccount | None:
+    messages = db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation_id,
+            Message.direction == MessageDirection.INBOUND.value,
+            Message.channel == 'whatsapp',
+        )
+        .order_by(Message.created_at.desc())
+        .limit(20)
+    ).scalars().all()
+    for message in messages:
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        if payload.get('simulated_patient') or payload.get('source') == 'demo_whatsapp_simulation':
+            continue
+        provider_context = payload.get('provider_context') if isinstance(payload.get('provider_context'), dict) else {}
+        account = _dispatch_account_from_provider_context(db, provider_context)
+        if account:
+            return account
+    return None
+
+
+def _resolve_dispatch_account_for_outbox_item(db: Session, item: OutboxMessage) -> WhatsAppAccount | None:
+    payload = item.payload if isinstance(item.payload, dict) else {}
+    conversation_id = payload.get('conversation_id')
+    if conversation_id:
+        try:
+            account = _resolve_dispatch_account_from_conversation(
+                db,
+                tenant_id=item.tenant_id,
+                conversation_id=UUID(str(conversation_id)),
+            )
+        except (ValueError, TypeError):
+            account = None
+        if account:
+            return account
+    return _resolve_dispatch_account_for_tenant(db, tenant_id=item.tenant_id)
+
+
 def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
-    account = _resolve_dispatch_account_for_tenant(db, tenant_id=item.tenant_id)
+    account = _resolve_dispatch_account_for_outbox_item(db, item)
     if not account:
         item.status = OutboxStatus.FAILED.value
         item.last_error = 'Conta WhatsApp nao configurada'

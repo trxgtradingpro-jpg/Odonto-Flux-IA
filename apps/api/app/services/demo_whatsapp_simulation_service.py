@@ -65,6 +65,39 @@ def ensure_demo_virtual_whatsapp_account(db: Session, *, tenant_id: UUID) -> Wha
     return account
 
 
+def _message_came_from_real_whatsapp_provider(message: Message) -> bool:
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    if payload.get("simulated_patient") or payload.get("source") == DEMO_SIMULATION_SOURCE:
+        return False
+
+    provider_context = payload.get("provider_context") if isinstance(payload.get("provider_context"), dict) else {}
+    if provider_context:
+        provider_name = str(provider_context.get("provider_name") or "").strip().lower()
+        phone_number_id = str(provider_context.get("phone_number_id") or "").strip()
+        if provider_name and provider_name != "demo_virtual" and not phone_number_id.startswith("demo_virtual_"):
+            return True
+
+    provider_message_id = str(message.provider_message_id or "").strip()
+    return bool(provider_message_id and not provider_message_id.startswith("demo_virtual_"))
+
+
+def _conversation_has_real_whatsapp_inbound(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation_id: UUID,
+) -> bool:
+    inbound_messages = db.execute(
+        select(Message).where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation_id,
+            Message.direction == MessageDirection.INBOUND.value,
+            Message.channel == "whatsapp",
+        )
+    ).scalars().all()
+    return any(_message_came_from_real_whatsapp_provider(message) for message in inbound_messages)
+
+
 def maybe_schedule_demo_whatsapp_reply_simulation(
     db: Session,
     *,
@@ -95,6 +128,8 @@ def maybe_schedule_demo_whatsapp_reply_simulation(
         return {"status": "ignored", "reason": "channel_is_not_whatsapp"}
     if str(outbound_message.sender_type or "").strip().lower() not in {"user", "ai", "automation"}:
         return {"status": "ignored", "reason": "unsupported_sender"}
+    if _conversation_has_real_whatsapp_inbound(db, tenant_id=tenant_id, conversation_id=conversation_id):
+        return {"status": "ignored", "reason": "real_whatsapp_conversation"}
 
     payload = dict(outbound_message.payload or {})
     simulation_meta = payload.get("demo_simulation") if isinstance(payload.get("demo_simulation"), dict) else {}
@@ -170,6 +205,8 @@ def process_demo_whatsapp_reply_simulation(
         return {"status": "ignored", "reason": "context_not_found"}
     if str(outbound_message.sender_type or "").strip().lower() not in {"user", "ai", "automation"}:
         return {"status": "ignored", "reason": "unsupported_sender"}
+    if _conversation_has_real_whatsapp_inbound(db, tenant_id=tenant_id, conversation_id=conversation_id):
+        return {"status": "ignored", "reason": "real_whatsapp_conversation"}
 
     outbound_payload = dict(outbound_message.payload or {})
     simulation_meta = outbound_payload.get("demo_simulation") if isinstance(outbound_payload.get("demo_simulation"), dict) else {}
