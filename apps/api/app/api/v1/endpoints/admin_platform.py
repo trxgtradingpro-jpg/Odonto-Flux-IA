@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -12,7 +13,7 @@ from app.db.session import get_db
 from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
 from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
 from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
-from app.models import OutboxMessage, WhatsAppAccount
+from app.models import OutboxMessage, ProspectAccount, WhatsAppAccount
 from app.models.enums import OutboxStatus
 from app.services import sales_demo_service as sales
 from app.services.audit_service import record_audit
@@ -208,6 +209,70 @@ def list_system_whatsapp_accounts(db: Session = Depends(get_db)):
         .order_by(WhatsAppAccount.created_at.desc())
     ).scalars().all()
     return {"data": [_serialize_account(item) for item in rows]}
+
+
+@router.delete("/whatsapp/accounts/{account_id}")
+def delete_system_whatsapp_account(
+    account_id: UUID,
+    principal: Principal = Depends(require_roles("admin_platform", "sales_admin")),
+    db: Session = Depends(get_db),
+):
+    tenant = _system_whatsapp_tenant(db)
+    account = db.scalar(
+        select(WhatsAppAccount).where(
+            WhatsAppAccount.id == account_id,
+            WhatsAppAccount.tenant_id == tenant.id,
+        )
+    )
+    if not account:
+        raise ApiError(
+            status_code=404,
+            code="SYSTEM_WHATSAPP_ACCOUNT_NOT_FOUND",
+            message="Conta WhatsApp do sistema nao encontrada",
+        )
+
+    cleared_demo_assignments = 0
+    account_id_text = str(account.id)
+    prospects = db.execute(select(ProspectAccount)).scalars().all()
+    for prospect in prospects:
+        snapshot = dict(prospect.proposal_snapshot or {})
+        demo_whatsapp = snapshot.get("demo_whatsapp") if isinstance(snapshot.get("demo_whatsapp"), dict) else {}
+        assigned_account_id = str(demo_whatsapp.get("account_id") or "").strip()
+        if assigned_account_id != account_id_text:
+            continue
+        snapshot["demo_whatsapp"] = {"account_id": None}
+        prospect.proposal_snapshot = snapshot
+        db.add(prospect)
+        cleared_demo_assignments += 1
+
+    removed_active_account = bool(account.is_active)
+    removed_account_payload = _serialize_account(account)
+    db.delete(account)
+    db.commit()
+
+    record_audit(
+        db,
+        action="admin_platform.whatsapp.account.delete",
+        entity_type="whatsapp_account",
+        entity_id=account_id_text,
+        tenant_id=tenant.id,
+        user_id=principal.user.id,
+        metadata={
+            "scope": "system",
+            "tenant_slug": tenant.slug,
+            "provider_name": removed_account_payload["provider_name"],
+            "phone_number_id": removed_account_payload["phone_number_id"],
+            "removed_active_account": removed_active_account,
+            "cleared_demo_assignments": cleared_demo_assignments,
+        },
+    )
+
+    return {
+        "status": "deleted",
+        "id": account_id_text,
+        "removed_active_account": removed_active_account,
+        "cleared_demo_assignments": cleared_demo_assignments,
+    }
 
 
 @router.get("/whatsapp/health", dependencies=[Depends(require_roles("admin_platform", "sales_admin", "sales_viewer"))])

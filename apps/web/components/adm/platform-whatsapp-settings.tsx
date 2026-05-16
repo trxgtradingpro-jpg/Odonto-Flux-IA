@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Radio, ShieldCheck, Smartphone } from "lucide-react";
+import { AlertTriangle, Radio, ShieldCheck, Smartphone, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/premium/confirm-dialog";
 import { StatusBadge } from "@/components/premium";
 import { api } from "@/lib/api";
 import { maskToken } from "@/lib/formatters";
@@ -82,6 +83,7 @@ export default function PlatformWhatsAppSettings() {
   const [accessToken, setAccessToken] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
   const [testResult, setTestResult] = useState<WhatsAppTestResult | null>(null);
+  const [accountPendingDelete, setAccountPendingDelete] = useState<PlatformWhatsAppAccountItem | null>(null);
 
   const contextQuery = useQuery<PlatformWhatsAppContext>({
     queryKey: ["adm-platform-whatsapp-context"],
@@ -150,6 +152,29 @@ export default function PlatformWhatsAppSettings() {
     onError: (error) => {
       setTestResult(null);
       toast.error(extractApiErrorMessage(error, "Nao foi possivel validar o WhatsApp do sistema."));
+    },
+  });
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: async (accountId: string) => (await api.delete(`/admin/platform/whatsapp/accounts/${accountId}`)).data,
+    onSuccess: (data) => {
+      setAccountPendingDelete(null);
+      setTestResult(null);
+      queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-context"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-health"] });
+      const removedActiveAccount = Boolean(data?.removed_active_account);
+      const clearedDemoAssignments = Number(data?.cleared_demo_assignments || 0);
+      const extra =
+        clearedDemoAssignments > 0 ? ` ${clearedDemoAssignments} demo(s) tiveram o numero desvinculado.` : "";
+      toast.success(
+        removedActiveAccount
+          ? `Numero oficial removido. O WhatsApp do sistema ficara sem numero ativo ate conectar outro.${extra}`
+          : `Numero removido da lista com sucesso.${extra}`,
+      );
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel apagar o numero do sistema."));
     },
   });
 
@@ -385,12 +410,48 @@ export default function PlatformWhatsAppSettings() {
                   <p className="mt-1 text-xs text-stone-500">Sender/ID: {maskToken(account.phone_number_id)}</p>
                   <p className="mt-1 text-xs text-stone-500">Conta/URL base: {maskToken(account.business_account_id)}</p>
                 </div>
-                <StatusBadge value={account.is_active ? "ativo" : "inativo"} />
+                <div className="flex flex-col items-end gap-2">
+                  <StatusBadge value={account.is_active ? "ativo" : "inativo"} />
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="h-8 px-3"
+                    onClick={() => setAccountPendingDelete(account)}
+                  >
+                    <Trash2 size={14} />
+                    Apagar
+                  </Button>
+                </div>
               </div>
             </div>
           ))}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={Boolean(accountPendingDelete)}
+        onOpenChange={(open) => {
+          if (!deleteAccountMutation.isPending) {
+            setAccountPendingDelete(open ? accountPendingDelete : null);
+          }
+        }}
+        title="Apagar numero do sistema"
+        description={
+          accountPendingDelete
+            ? accountPendingDelete.is_active
+              ? `Deseja apagar ${accountPendingDelete.display_phone || "este numero"}? Ele e o numero ativo do sistema e o canal oficial ficara sem numero conectado ate voce salvar outro.`
+              : `Deseja apagar ${accountPendingDelete.display_phone || "este numero"} da lista de numeros conectados ao sistema?`
+            : ""
+        }
+        confirmLabel="Apagar numero"
+        cancelLabel="Cancelar"
+        destructive
+        loading={deleteAccountMutation.isPending}
+        onConfirm={() => {
+          if (!accountPendingDelete) return;
+          deleteAccountMutation.mutate(accountPendingDelete.id);
+        }}
+      />
     </div>
   );
 }

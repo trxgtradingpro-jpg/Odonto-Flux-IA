@@ -7,6 +7,7 @@ from app.models import (
     Message,
     OutboxMessage,
     Patient,
+    ProspectAccount,
     Setting,
     WebhookInbox,
     WhatsAppAccount,
@@ -308,6 +309,62 @@ def test_platform_admin_whatsapp_settings_use_system_sender_tenant(client, auth_
     assert health.status_code == 200
     assert health.json()['status'] == 'ok'
     assert health.json()['active_account']['phone_number_id'] == '1101713436353674'
+
+
+def test_platform_admin_can_delete_system_whatsapp_account_and_clear_demo_assignment(
+    client,
+    auth_headers,
+    seeded_db,
+    db_session,
+    monkeypatch,
+):
+    from app.api.v1.endpoints import admin_platform
+    from app.services import sales_demo_service
+
+    monkeypatch.setattr(sales_demo_service.settings, 'sales_outreach_sender_tenant_slug', '')
+    monkeypatch.setattr(admin_platform.settings, 'sales_outreach_sender_tenant_slug', '')
+
+    created = client.post(
+        '/api/v1/admin/platform/whatsapp/accounts',
+        json={
+            'provider_name': 'meta_cloud',
+            'phone_number_id': '1101713436353674',
+            'business_account_id': '936994182588219',
+            'access_token': 'EAAa' + ('x' * 60),
+            'display_phone': '+55 11 4000-4000',
+        },
+        headers=auth_headers['admin'],
+    )
+    assert created.status_code == 200
+    account_id = created.json()['id']
+
+    prospect = ProspectAccount(
+        clinic_name='Clinica Demo Vinculada',
+        proposal_snapshot={'demo_whatsapp': {'account_id': account_id}},
+    )
+    db_session.add(prospect)
+    db_session.commit()
+
+    deleted = client.delete(
+        f'/api/v1/admin/platform/whatsapp/accounts/{account_id}',
+        headers=auth_headers['admin'],
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()['status'] == 'deleted'
+    assert deleted.json()['removed_active_account'] is True
+    assert deleted.json()['cleared_demo_assignments'] == 1
+
+    accounts = client.get('/api/v1/admin/platform/whatsapp/accounts', headers=auth_headers['admin'])
+    assert accounts.status_code == 200
+    assert accounts.json()['data'] == []
+
+    health = client.get('/api/v1/admin/platform/whatsapp/health', headers=auth_headers['admin'])
+    assert health.status_code == 200
+    assert health.json()['active_account'] is None
+
+    refreshed_prospect = db_session.get(ProspectAccount, prospect.id)
+    assert refreshed_prospect is not None
+    assert ((refreshed_prospect.proposal_snapshot or {}).get('demo_whatsapp') or {}).get('account_id') is None
 
 
 def test_webhook_inbound_triggers_ai_decision_and_outbox_dispatch(
