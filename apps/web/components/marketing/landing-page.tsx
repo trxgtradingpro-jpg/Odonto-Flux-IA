@@ -1077,6 +1077,16 @@ export function LandingPage() {
                       Ativar minha IA
                     </Link>
                   </p>
+                  <p>
+                    <Link href="/politica-de-privacidade" className="transition hover:text-white">
+                      Politica de privacidade
+                    </Link>
+                  </p>
+                  <p>
+                    <Link href="/termos-de-uso" className="transition hover:text-white">
+                      Termos de uso
+                    </Link>
+                  </p>
                 </div>
               </div>
 
@@ -1086,6 +1096,17 @@ export function LandingPage() {
                   <p>Implantacao assistida com escopo inicial claro.</p>
                   <p>Fluxo completo de lead, agenda, comparecimento e retorno.</p>
                   <p>Configuracoes de seguranca, LGPD e operacao ja previstas no produto.</p>
+                  <p>
+                    Documentos legais publicos para consulta:{" "}
+                    <Link href="/politica-de-privacidade" className="font-semibold text-white transition hover:text-emerald-200">
+                      privacidade
+                    </Link>{" "}
+                    e{" "}
+                    <Link href="/termos-de-uso" className="font-semibold text-white transition hover:text-emerald-200">
+                      termos
+                    </Link>
+                    .
+                  </p>
                 </div>
               </div>
             </div>

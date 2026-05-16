@@ -143,6 +143,15 @@ function LoginFormCard({
             Use credenciais demo: <strong>owner@sorrisosul.com</strong> /{" "}
             <strong>Odonto@123</strong>
           </div>
+
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-stone-600">
+            <Link href="/politica-de-privacidade" className="font-semibold text-primary hover:underline">
+              Politica de privacidade
+            </Link>
+            <Link href="/termos-de-uso" className="font-semibold text-primary hover:underline">
+              Termos de uso
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

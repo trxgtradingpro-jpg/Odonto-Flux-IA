@@ -9,3 +9,5 @@ export const BRAND_LONG_DESCRIPTION =
 export const BRAND_PLATFORM_LABEL = "Plataforma ClinicFlux AI";
 export const BRAND_SUPPORT_LABEL = "Suporte IA ClinicFlux AI";
 export const BRAND_SALES_TEAM = "Time ClinicFlux AI";
+export const BRAND_LEGAL_ENTITY = "ClinicFlux AI Comercial LTDA";
+export const BRAND_SUPPORT_EMAIL = "suporte@clinicfluxai.com.br";
