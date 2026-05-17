@@ -183,6 +183,7 @@ type OutreachLabResult = {
 type ProspectDemoAiSettings = {
   enabled: boolean;
   whatsapp_enabled: boolean;
+  max_consecutive_auto_replies: number;
 };
 
 type ProspectDemoWhatsAppSettings = {
@@ -216,6 +217,7 @@ type ProspectEditFormState = {
   demo_whatsapp_account_id: string;
   demo_ai_enabled: boolean;
   demo_whatsapp_enabled: boolean;
+  demo_max_consecutive_auto_replies: number;
   notes: string;
   do_not_contact: boolean;
 };
@@ -344,9 +346,12 @@ function nullableText(value: string) {
 function getDemoAiSettingsSnapshot(prospect: Prospect): ProspectDemoAiSettings {
   const raw = prospect.proposal_snapshot?.demo_ai;
   const value = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const parsedMaxConsecutive = Number(value.max_consecutive_auto_replies ?? 3);
   return {
     enabled: value.enabled !== false,
     whatsapp_enabled: value.whatsapp_enabled !== false,
+    max_consecutive_auto_replies:
+      Number.isFinite(parsedMaxConsecutive) && parsedMaxConsecutive > 0 ? Math.min(Math.max(parsedMaxConsecutive, 1), 20) : 3,
   };
 }
 
@@ -386,6 +391,7 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     demo_whatsapp_account_id: demoWhatsApp.account_id ?? "",
     demo_ai_enabled: demoAi.enabled,
     demo_whatsapp_enabled: demoAi.whatsapp_enabled,
+    demo_max_consecutive_auto_replies: demoAi.max_consecutive_auto_replies,
     notes: prospect.notes ?? "",
     do_not_contact: Boolean(prospect.do_not_contact),
   };
@@ -830,6 +836,7 @@ function CreateProspectForm({
   const [demoWhatsAppAccountId, setDemoWhatsAppAccountId] = useState("");
   const [demoAiEnabled, setDemoAiEnabled] = useState(true);
   const [demoWhatsappEnabled, setDemoWhatsappEnabled] = useState(true);
+  const [demoMaxConsecutiveAutoReplies, setDemoMaxConsecutiveAutoReplies] = useState(10);
   const [services, setServices] = useState("Consulta inicial, Avaliacao clinica, Retorno");
   const [notes, setNotes] = useState("");
 
@@ -862,6 +869,7 @@ function CreateProspectForm({
             demo_ai: {
               enabled: demoAiEnabled,
               whatsapp_enabled: demoWhatsappEnabled,
+              max_consecutive_auto_replies: Math.min(Math.max(demoMaxConsecutiveAutoReplies, 1), 20),
             },
           },
           notes,
@@ -886,6 +894,7 @@ function CreateProspectForm({
       setDemoWhatsAppAccountId("");
       setDemoAiEnabled(true);
       setDemoWhatsappEnabled(true);
+      setDemoMaxConsecutiveAutoReplies(10);
       setNotes("");
       onCreated(data);
     },
@@ -1041,7 +1050,7 @@ function CreateProspectForm({
                 </select>
               </Field>
               <Field label="Controles da demo" helper="Essas chaves valem para o numero de teste da clinica quando a demo for gerada." className="lg:col-span-4">
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 lg:grid-cols-3">
                   <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
                     <input type="checkbox" checked={demoAiEnabled} onChange={(event) => setDemoAiEnabled(event.target.checked)} />
                     IA da demo ligada
@@ -1050,6 +1059,20 @@ function CreateProspectForm({
                     <input type="checkbox" checked={demoWhatsappEnabled} onChange={(event) => setDemoWhatsappEnabled(event.target.checked)} />
                     WhatsApp de teste ligado
                   </label>
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      Limite de respostas da IA
+                    </label>
+                    <Input
+                      className="mt-2"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={String(demoMaxConsecutiveAutoReplies)}
+                      onChange={(event) => setDemoMaxConsecutiveAutoReplies(Number(event.target.value || 10))}
+                    />
+                    <p className="mt-2 text-xs text-stone-500">Para teste, 10 costuma evitar handoff cedo demais.</p>
+                  </div>
                 </div>
               </Field>
               <Field label="Servicos da clinica" helper="Separe por virgula. A demo usa isso para equipe, agenda e IA." className="lg:col-span-4">
@@ -1127,6 +1150,7 @@ function EditProspectDrawer({
           demo_whatsapp_account_id: "",
           demo_ai_enabled: true,
           demo_whatsapp_enabled: true,
+          demo_max_consecutive_auto_replies: 10,
           notes: "",
           do_not_contact: false,
         },
@@ -1169,6 +1193,7 @@ function EditProspectDrawer({
             demo_ai: {
               enabled: form.demo_ai_enabled,
               whatsapp_enabled: form.demo_whatsapp_enabled,
+              max_consecutive_auto_replies: Math.min(Math.max(form.demo_max_consecutive_auto_replies, 1), 20),
             },
           },
           notes: form.notes,
@@ -1288,7 +1313,7 @@ function EditProspectDrawer({
                 </select>
               </Field>
               <Field label="Controles da demo" helper={prospect.demo_tenant_id ? "Ao salvar, atualiza a demo atual desta clinica." : "Sera aplicado quando a demo desta clinica for gerada."} className="lg:col-span-4">
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 lg:grid-cols-3">
                   <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
                     <input
                       type="checkbox"
@@ -1307,6 +1332,23 @@ function EditProspectDrawer({
                     />
                     WhatsApp de teste ligado
                   </label>
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      Limite de respostas da IA
+                    </label>
+                    <Input
+                      className="mt-2"
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={String(form.demo_max_consecutive_auto_replies)}
+                      onChange={(event) =>
+                        updateField("demo_max_consecutive_auto_replies", Number(event.target.value || 10))
+                      }
+                      disabled={mutation.isPending}
+                    />
+                    <p className="mt-2 text-xs text-stone-500">Ao atingir esse numero, a conversa vai para handoff humano.</p>
+                  </div>
                 </div>
               </Field>
               <Field label="Cidade" helper="Cidade da clinica.">

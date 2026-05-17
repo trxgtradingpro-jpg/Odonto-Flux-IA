@@ -81,6 +81,7 @@ PROSPECT_STATUSES = {
 DEMO_AI_DEFAULT_SETTINGS = {
     "enabled": True,
     "whatsapp_enabled": True,
+    "max_consecutive_auto_replies": 3,
 }
 
 SCORE_RULES = {
@@ -697,15 +698,17 @@ def _update_outreach_snapshot(prospect: ProspectAccount, *, patch: dict) -> None
     prospect.proposal_snapshot = snapshot
 
 
-def _normalize_demo_ai_settings(value: dict | None) -> dict[str, bool]:
+def _normalize_demo_ai_settings(value: dict | None) -> dict[str, bool | int]:
     raw = value if isinstance(value, dict) else {}
+    max_consecutive = int(raw.get("max_consecutive_auto_replies") or DEMO_AI_DEFAULT_SETTINGS["max_consecutive_auto_replies"])
     return {
         "enabled": bool(raw.get("enabled", DEMO_AI_DEFAULT_SETTINGS["enabled"])),
         "whatsapp_enabled": bool(raw.get("whatsapp_enabled", DEMO_AI_DEFAULT_SETTINGS["whatsapp_enabled"])),
+        "max_consecutive_auto_replies": max(1, min(max_consecutive, 20)),
     }
 
 
-def _demo_ai_settings(prospect: ProspectAccount) -> dict[str, bool]:
+def _demo_ai_settings(prospect: ProspectAccount) -> dict[str, bool | int]:
     snapshot = dict(prospect.proposal_snapshot or {})
     raw = snapshot.get("demo_ai")
     return _normalize_demo_ai_settings(raw if isinstance(raw, dict) else None)
@@ -2041,16 +2044,22 @@ def ensure_demo_ai_autoresponder_ready(
 
     desired_enabled = bool(desired_demo_ai["enabled"])
     desired_whatsapp_enabled = bool(desired_demo_ai["whatsapp_enabled"])
+    desired_max_consecutive = int(
+        desired_demo_ai["max_consecutive_auto_replies"] or DEMO_AI_DEFAULT_SETTINGS["max_consecutive_auto_replies"]
+    )
     config_changed = bool(
         config_item is None
         or bool(current_config.get("enabled")) != desired_enabled
         or bool(channels.get("whatsapp", False)) != desired_whatsapp_enabled
+        or int(current_config.get("max_consecutive_auto_replies") or DEMO_AI_DEFAULT_SETTINGS["max_consecutive_auto_replies"])
+        != desired_max_consecutive
     )
     if config_changed:
         merged_config = {
             **current_config,
             "enabled": desired_enabled,
             "channels": {**channels, "whatsapp": desired_whatsapp_enabled},
+            "max_consecutive_auto_replies": desired_max_consecutive,
         }
         _upsert_setting(db, tenant_id=tenant_id, key="ai_autoresponder.global", value=merged_config)
 
