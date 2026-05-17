@@ -81,6 +81,7 @@ export default function PlatformWhatsAppSettings() {
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [businessAccountId, setBusinessAccountId] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [verifyToken, setVerifyToken] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
   const [testResult, setTestResult] = useState<WhatsAppTestResult | null>(null);
   const [accountPendingDelete, setAccountPendingDelete] = useState<PlatformWhatsAppAccountItem | null>(null);
@@ -120,12 +121,16 @@ export default function PlatformWhatsAppSettings() {
           phone_number_id: phoneNumberId,
           business_account_id: businessAccountId,
           access_token: accessToken,
+          verify_token: provider === "meta_cloud" ? verifyToken || undefined : undefined,
           display_phone: displayPhone || null,
         })
       ).data,
     onSuccess: () => {
       toast.success("Numero oficial do sistema salvo com sucesso.");
       setAccessToken("");
+      if (provider !== "meta_cloud") {
+        setVerifyToken("");
+      }
       queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-context"] });
       queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-accounts"] });
       queryClient.invalidateQueries({ queryKey: ["adm-platform-whatsapp-health"] });
@@ -211,6 +216,7 @@ export default function PlatformWhatsAppSettings() {
     : isTwilioProvider
       ? "Cole o Auth Token da Twilio"
       : "Cole o access token da Meta";
+  const providerVerifyTokenPlaceholder = "Ex.: clinicflux-meta-2026";
 
   const accounts = accountsQuery.data?.data ?? [];
   const health = healthQuery.data;
@@ -337,6 +343,23 @@ export default function PlatformWhatsAppSettings() {
               <Input placeholder={providerTokenPlaceholder} value={accessToken} onChange={(event) => setAccessToken(event.target.value)} />
             </div>
           </div>
+
+          {!isInfobipProvider && !isTwilioProvider ? (
+            <div className="grid gap-3 md:grid-cols-[1fr_1.4fr]">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Verify token do webhook</label>
+                <Input
+                  placeholder={providerVerifyTokenPlaceholder}
+                  value={verifyToken}
+                  onChange={(event) => setVerifyToken(event.target.value)}
+                />
+              </div>
+              <p className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
+                Esse valor nao e o access token da Meta. Escolha um texto simples, salve no sistema e use exatamente o
+                mesmo valor no campo <strong>Verificar token</strong> da tela de webhook da Meta.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-3 md:grid-cols-[1fr_1.2fr]">
             <Input
