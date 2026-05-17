@@ -9349,6 +9349,16 @@ def process_inbound_message(
         conversation=conversation,
         inbound_message=inbound_message,
     )
+    logger.info(
+        "ai_autoresponder.reply_route_selected",
+        tenant_id=str(tenant_id),
+        conversation_id=str(conversation.id),
+        inbound_message_id=str(inbound_message.id),
+        destination=destination,
+        provider_name=str((provider_context or {}).get("provider_name") or "").strip() or None,
+        phone_number_id=str((provider_context or {}).get("phone_number_id") or "").strip() or None,
+        whatsapp_account_id=str((provider_context or {}).get("whatsapp_account_id") or "").strip() or None,
+    )
     if not destination:
         return finish_without_reply(
             final_decision=DECISION_HANDOFF,
@@ -10113,6 +10123,19 @@ def process_inbound_message(
         outbound_payload["queued_outbox_id"] = str(outbox.id)
         outbound_message.payload = outbound_payload
         db.add(outbound_message)
+        logger.info(
+            "ai_autoresponder.outbox_created",
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation.id),
+            inbound_message_id=str(inbound_message.id),
+            outbound_message_id=str(outbound_message.id),
+            outbox_id=str(outbox.id),
+            destination=destination,
+            provider_name=str((provider_context or {}).get("provider_name") or "").strip() or None,
+            phone_number_id=str((provider_context or {}).get("phone_number_id") or "").strip() or None,
+            whatsapp_account_id=str((provider_context or {}).get("whatsapp_account_id") or "").strip() or None,
+            next_action=contract_next_action,
+        )
 
         llm_metadata = llm_payload.get("metadata") if llm_payload else {}
         if isinstance(llm_metadata, dict) and "latency_ms" not in llm_metadata:

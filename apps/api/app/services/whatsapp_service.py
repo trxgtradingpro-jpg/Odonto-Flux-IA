@@ -206,6 +206,16 @@ def _build_provider_context(account: WhatsAppAccount) -> dict[str, str | None]:
     }
 
 
+def _provider_context_log_fields(provider_context: dict | None) -> dict[str, str | None]:
+    context = provider_context if isinstance(provider_context, dict) else {}
+    return {
+        'provider_name': str(context.get('provider_name') or '').strip() or None,
+        'phone_number_id': str(context.get('phone_number_id') or '').strip() or None,
+        'business_account_id': str(context.get('business_account_id') or '').strip() or None,
+        'whatsapp_account_id': str(context.get('whatsapp_account_id') or '').strip() or None,
+    }
+
+
 def _is_demo_virtual_account(account: WhatsAppAccount | None) -> bool:
     if not account:
         return False
@@ -455,12 +465,36 @@ def resolve_whatsapp_reply_route(
         if not sender_phone:
             continue
         if not provider_context:
+            logger.info(
+                "whatsapp.reply_route_resolved",
+                conversation_id=str(conversation.id),
+                tenant_id=str(conversation.tenant_id),
+                destination=sender_phone,
+                route_source="recent_inbound_without_provider_context",
+            )
             return sender_phone, None
 
         account = _dispatch_account_from_provider_context(db, provider_context)
-        return sender_phone, _build_provider_context(account) if account else provider_context
+        resolved_provider_context = _build_provider_context(account) if account else provider_context
+        logger.info(
+            "whatsapp.reply_route_resolved",
+            conversation_id=str(conversation.id),
+            tenant_id=str(conversation.tenant_id),
+            destination=sender_phone,
+            route_source="recent_real_inbound",
+            **_provider_context_log_fields(resolved_provider_context),
+        )
+        return sender_phone, resolved_provider_context
 
-    return _conversation_entity_phone(db, conversation=conversation), None
+    fallback_destination = _conversation_entity_phone(db, conversation=conversation)
+    logger.info(
+        "whatsapp.reply_route_resolved",
+        conversation_id=str(conversation.id),
+        tenant_id=str(conversation.tenant_id),
+        destination=fallback_destination,
+        route_source="conversation_entity_fallback",
+    )
+    return fallback_destination, None
 
 
 def _is_audio_content_type(content_type: str | None) -> bool:
@@ -1441,6 +1475,19 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 db.add(inbox_event)
                 db.commit()
                 stats['processed'] += 1
+                logger.info(
+                    'whatsapp.meta_inbound_processed',
+                    tenant_id=str(tenant_id),
+                    conversation_id=str(conversation_id),
+                    inbound_message_id=str(inbound_message.id),
+                    provider_message_id=event_id,
+                    sender_phone=normalize_phone(sender_phone) or sender_phone,
+                    inbound_type=inbound_type,
+                    preferred_unit_id=str(preferred_unit_id) if preferred_unit_id else None,
+                    account_id=str(account.id),
+                    account_provider=account.provider_name,
+                    account_phone_number_id=account.phone_number_id,
+                )
 
                 emit_event(
                     db,
@@ -1518,6 +1565,17 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 )
                 db.commit()
                 stats['status_updates'] += 1
+                logger.info(
+                    'whatsapp.meta_status_processed',
+                    tenant_id=str(status_tenant_id),
+                    provider_message_id=provider_id,
+                    status_name=status_name,
+                    mapped_message_id=str(msg.id) if msg else None,
+                    conversation_id=str(msg.conversation_id) if msg else None,
+                    recipient_id=str(status.get('recipient_id') or '').strip() or None,
+                    account_id=str(account.id),
+                    account_phone_number_id=account.phone_number_id,
+                )
 
     return stats
 
@@ -2044,6 +2102,16 @@ def queue_outbound_message(
         db.refresh(outbox)
     else:
         db.flush()
+    logger.info(
+        'whatsapp.outbox_queued',
+        outbox_id=str(outbox.id),
+        tenant_id=str(tenant_id),
+        conversation_id=str(conversation_id) if conversation_id else None,
+        destination=normalized_to,
+        message_type=message_type,
+        metadata_source=str((metadata or {}).get('source') or '').strip() or None,
+        **_provider_context_log_fields(provider_context),
+    )
     should_dispatch_inline = (
         settings.whatsapp_inline_dispatch_on_queue
         if immediate_dispatch is None
@@ -2289,6 +2357,17 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
 
     payload = item.payload or {}
     provider = _provider_for_account(account)
+    logger.info(
+        'whatsapp.dispatch_started',
+        outbox_id=str(item.id),
+        tenant_id=str(item.tenant_id),
+        destination=str(payload.get('to') or '').strip() or None,
+        message_type=str(payload.get('message_type') or 'text'),
+        account_id=str(account.id),
+        account_provider=account.provider_name,
+        account_phone_number_id=account.phone_number_id,
+        metadata_source=str(((payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}) or {}).get('source') or '').strip() or None,
+    )
     try:
         response: dict
         if payload.get('message_type') == 'template' and payload.get('template'):
@@ -2393,6 +2472,16 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
         item.last_error = None
         db.add(item)
         db.commit()
+        logger.info(
+            'whatsapp.dispatch_succeeded',
+            outbox_id=str(item.id),
+            tenant_id=str(item.tenant_id),
+            destination=str(payload.get('to') or '').strip() or None,
+            provider_message_id=provider_message_id,
+            account_id=str(account.id),
+            account_provider=account.provider_name,
+            account_phone_number_id=account.phone_number_id,
+        )
     except Exception as exc:
         error_message = str(exc)
         non_retryable_dispatch = False
@@ -2451,6 +2540,19 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
                 item.next_retry_at = datetime.now(UTC) + timedelta(minutes=(2**item.retry_count))
         db.add(item)
         db.commit()
+        logger.warning(
+            'whatsapp.dispatch_finalized_with_error',
+            outbox_id=str(item.id),
+            tenant_id=str(item.tenant_id),
+            destination=str(payload.get('to') or '').strip() or None,
+            final_status=item.status,
+            retry_count=item.retry_count,
+            next_retry_at=item.next_retry_at.isoformat() if item.next_retry_at else None,
+            account_id=str(account.id) if account else None,
+            account_provider=account.provider_name if account else None,
+            account_phone_number_id=account.phone_number_id if account else None,
+            error=item.last_error,
+        )
 
 
 def _dispatch_outbox_item_inline(db: Session, *, outbox_id: UUID) -> None:
