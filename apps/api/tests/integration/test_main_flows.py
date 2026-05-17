@@ -1,5 +1,6 @@
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.models import (
     AIAutoresponderDecision,
     Conversation,
@@ -13,6 +14,40 @@ from app.models import (
     WhatsAppAccount,
 )
 from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
+
+
+def test_meta_webhook_verification_returns_plain_challenge_for_env_token(client, monkeypatch):
+    monkeypatch.setattr(settings, 'whatsapp_verify_token', 'env-token-123')
+
+    response = client.get(
+        '/api/v1/webhooks/whatsapp',
+        params={
+            'hub.mode': 'subscribe',
+            'hub.verify_token': 'env-token-123',
+            'hub.challenge': 'challenge-abc',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == 'challenge-abc'
+    assert response.headers['content-type'].startswith('text/plain')
+
+
+def test_meta_webhook_verification_accepts_active_account_verify_token(client, seeded_db, monkeypatch):
+    monkeypatch.setattr(settings, 'whatsapp_verify_token', 'different-env-token')
+
+    response = client.get(
+        '/api/v1/webhooks/whatsapp',
+        params={
+            'hub.mode': 'subscribe',
+            'hub.verify_token': 'verify-token-dev',
+            'hub.challenge': '123456',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.text == '123456'
+    assert response.headers['content-type'].startswith('text/plain')
 
 
 def test_whatsapp_webhook_creates_lead_conversation_and_message(client, auth_headers, seeded_db, db_session):
