@@ -3,6 +3,7 @@ from hashlib import sha1
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -2084,7 +2085,29 @@ def _extract_provider_message_id(response: dict | None) -> str | None:
 
 
 def _extract_provider_dispatch_error(*, provider_name: str | None, response: dict | None) -> str | None:
-    if normalize_whatsapp_provider_name(provider_name) != 'infobip':
+    normalized_provider = normalize_whatsapp_provider_name(provider_name)
+    if normalized_provider == 'meta_cloud':
+        if not isinstance(response, dict):
+            return None
+        error = response.get('error')
+        if not isinstance(error, dict):
+            return None
+        code = error.get('code')
+        message = str(error.get('message') or '').strip()
+        details = ""
+        error_data = error.get('error_data')
+        if isinstance(error_data, dict):
+            details = str(error_data.get('details') or '').strip()
+        if code in {190, 131030}:
+            parts = [f'code={code}']
+            if message:
+                parts.append(message)
+            if details:
+                parts.append(details)
+            return ' | '.join(parts)
+        return None
+
+    if normalized_provider != 'infobip':
         return None
     if not isinstance(response, dict):
         return None
@@ -2115,6 +2138,38 @@ def _extract_provider_dispatch_error(*, provider_name: str | None, response: dic
                 if part
             ]
             return ' | '.join(parts) or 'Infobip rejeitou a mensagem.'
+    return None
+
+
+def _extract_non_retryable_dispatch_error_from_exception(
+    *,
+    provider_name: str | None,
+    exc: Exception,
+) -> str | None:
+    if normalize_whatsapp_provider_name(provider_name) != 'meta_cloud':
+        return None
+
+    response = getattr(exc, 'response', None)
+    if not isinstance(response, httpx.Response):
+        return None
+
+    try:
+        response_payload = response.json()
+    except ValueError:
+        response_payload = None
+
+    parsed = _extract_provider_dispatch_error(
+        provider_name=provider_name,
+        response=response_payload if isinstance(response_payload, dict) else None,
+    )
+    if parsed:
+        return parsed
+
+    message = str(exc)
+    if 'code=190' in message or 'Authentication Error' in message:
+        return message
+    if 'code=131030' in message or 'Recipient phone number not in allowed list' in message:
+        return message
     return None
 
 
@@ -2344,6 +2399,12 @@ def _dispatch_outbox_item(db: Session, item: OutboxMessage) -> None:
         if error_message.startswith('NON_RETRYABLE_DISPATCH:'):
             non_retryable_dispatch = True
             error_message = error_message.split(':', 1)[1].strip()
+        elif parsed_provider_error := _extract_non_retryable_dispatch_error_from_exception(
+            provider_name=account.provider_name if account else None,
+            exc=exc,
+        ):
+            non_retryable_dispatch = True
+            error_message = parsed_provider_error
 
         response = getattr(exc, 'response', None)
         if response is not None:

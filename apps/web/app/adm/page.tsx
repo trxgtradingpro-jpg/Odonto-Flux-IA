@@ -572,8 +572,14 @@ function admWhatsappSourceLabel(source: string) {
   return humanize(source);
 }
 
-function messageAuthorLabel(message: AdmWhatsappMessage) {
-  if (message.direction === "inbound") return message.sender_type === "patient" ? "Paciente simulado" : "Cliente";
+function messageAuthorLabel(message: AdmWhatsappMessage, conversationSource: string, simulated: boolean) {
+  if (message.direction === "inbound") {
+    if (message.sender_type === "patient") {
+      if (simulated) return "Paciente simulado";
+      return conversationSource === "comercial" ? "Cliente" : "Paciente";
+    }
+    return "Cliente";
+  }
   if (message.sender_type === "ai") return "IA";
   if (message.sender_type === "automation") return "Automacao";
   return "Atendimento";
@@ -775,8 +781,7 @@ function AdmWhatsAppInbox({
                             )}
                           >
                             <div className={cn("mb-1 text-[11px] font-bold uppercase tracking-wide", outbound ? "text-white/75" : "text-stone-500")}>
-                              {messageAuthorLabel(message)}
-                              {simulated ? " - simulado" : ""}
+                              {messageAuthorLabel(message, selectedConversation.source, simulated)}
                             </div>
                             <p className="whitespace-pre-wrap leading-6">{message.body}</p>
                             <div className={cn("mt-2 text-right text-[11px]", outbound ? "text-white/75" : "text-stone-500")}>

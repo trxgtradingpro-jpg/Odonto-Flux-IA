@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
@@ -8,6 +9,7 @@ from app.core.exceptions import ApiError
 from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, WhatsAppAccount
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
 from app.services import sales_demo_service
+from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
 
 
 def _create_sender_tenant(db_session):
@@ -188,6 +190,93 @@ def test_send_sales_outreach_step_raises_when_inline_dispatch_fails(monkeypatch,
     assert exc_info.value.code == "SALES_OUTREACH_DISPATCH_FAILED"
     assert outreach.get("last_dispatch_status") == OutboxStatus.DEAD_LETTER.value
     assert outreach.get("last_dispatch_error") == "REJECTED_NOT_ENOUGH_CREDITS"
+
+
+def test_meta_allowed_list_error_moves_outbox_to_dead_letter_without_retry(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=sender_tenant.id,
+        conversation_id=None,
+        to="5515551902123",
+        body="Teste allow list",
+        message_type="text",
+        immediate_dispatch=False,
+        commit=True,
+    )
+
+    from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
+
+    def _fake_send_text_message(self, *, phone_number_id, access_token, to, body):
+        request = httpx.Request("POST", f"https://graph.facebook.com/v19.0/{phone_number_id}/messages")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={
+                "error": {
+                    "message": "(#131030) Recipient phone number not in allowed list",
+                    "code": 131030,
+                    "type": "OAuthException",
+                    "error_data": {
+                        "details": "O numero de telefone do destinatario nao esta na lista de permissao.",
+                    },
+                }
+            },
+        )
+        raise httpx.HTTPStatusError("WhatsApp API request failed (400): code=131030", request=request, response=response)
+
+    monkeypatch.setattr(WhatsAppCloudProvider, "send_text_message", _fake_send_text_message)
+
+    result = process_outbox_batch(db_session, batch_size=20)
+    refreshed = db_session.get(OutboxMessage, outbox.id)
+
+    assert result["processed"] >= 1
+    assert refreshed is not None
+    assert refreshed.status == OutboxStatus.DEAD_LETTER.value
+    assert refreshed.retry_count == refreshed.max_retries
+    assert "131030" in (refreshed.last_error or "")
+
+
+def test_meta_auth_error_moves_outbox_to_dead_letter_without_retry(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=sender_tenant.id,
+        conversation_id=None,
+        to="5511940431906",
+        body="Teste auth",
+        message_type="text",
+        immediate_dispatch=False,
+        commit=True,
+    )
+
+    from app.integrations.whatsapp.cloud_api import WhatsAppCloudProvider
+
+    def _fake_send_text_message(self, *, phone_number_id, access_token, to, body):
+        request = httpx.Request("POST", f"https://graph.facebook.com/v19.0/{phone_number_id}/messages")
+        response = httpx.Response(
+            401,
+            request=request,
+            json={
+                "error": {
+                    "message": "Authentication Error",
+                    "code": 190,
+                    "type": "OAuthException",
+                }
+            },
+        )
+        raise httpx.HTTPStatusError("WhatsApp API request failed (401): code=190 | Authentication Error", request=request, response=response)
+
+    monkeypatch.setattr(WhatsAppCloudProvider, "send_text_message", _fake_send_text_message)
+
+    result = process_outbox_batch(db_session, batch_size=20)
+    refreshed = db_session.get(OutboxMessage, outbox.id)
+
+    assert result["processed"] >= 1
+    assert refreshed is not None
+    assert refreshed.status == OutboxStatus.DEAD_LETTER.value
+    assert refreshed.retry_count == refreshed.max_retries
+    assert "190" in (refreshed.last_error or "")
 
 
 def test_sync_prospect_outreach_reply_advances_automation_sequence(monkeypatch, seeded_db, db_session):
