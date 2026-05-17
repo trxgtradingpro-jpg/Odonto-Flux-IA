@@ -63,6 +63,31 @@ def _safe_webhook_event_id(raw_event_id: str | None) -> str:
     return f'{value[:prefix_size]}:{digest}'
 
 
+def _meta_status_error_log_fields(status: dict) -> dict[str, object | None]:
+    errors = status.get('errors')
+    if not isinstance(errors, list) or not errors:
+        return {
+            'error_code': None,
+            'error_title': None,
+            'error_message': None,
+            'error_details': None,
+            'error_type': None,
+            'error_count': 0,
+        }
+
+    first_error = errors[0] if isinstance(errors[0], dict) else {}
+    error_data = first_error.get('error_data') if isinstance(first_error.get('error_data'), dict) else {}
+    details = error_data.get('details') or first_error.get('details')
+    return {
+        'error_code': first_error.get('code'),
+        'error_title': first_error.get('title'),
+        'error_message': first_error.get('message'),
+        'error_details': details,
+        'error_type': first_error.get('type'),
+        'error_count': len(errors),
+    }
+
+
 def _audio_media_suffix(*, mime_type: str | None, file_name: str | None) -> str:
     file_suffix = Path(file_name or "").suffix.strip().lower()
     if file_suffix:
@@ -1565,6 +1590,7 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 )
                 db.commit()
                 stats['status_updates'] += 1
+                status_error_fields = _meta_status_error_log_fields(status)
                 logger.info(
                     'whatsapp.meta_status_processed',
                     tenant_id=str(status_tenant_id),
@@ -1575,6 +1601,9 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     recipient_id=str(status.get('recipient_id') or '').strip() or None,
                     account_id=str(account.id),
                     account_phone_number_id=account.phone_number_id,
+                    conversation=status.get('conversation'),
+                    pricing=status.get('pricing'),
+                    **status_error_fields,
                 )
 
     return stats
