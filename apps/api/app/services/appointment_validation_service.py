@@ -100,6 +100,37 @@ def appointment_effective_end(
         service_catalog=service_catalog,
         default_minutes=DEFAULT_SLOT_DURATION_MINUTES,
     )
+
+
+def find_duplicate_active_patient_appointment(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    patient_id: UUID,
+    unit_id: UUID,
+    starts_at: datetime,
+    exclude_appointment_id: UUID | None = None,
+    lock: bool = False,
+) -> Appointment | None:
+    stmt = (
+        select(Appointment)
+        .where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == patient_id,
+            Appointment.unit_id == unit_id,
+            Appointment.starts_at == starts_at,
+            Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+        )
+        .order_by(Appointment.created_at.asc(), Appointment.id.asc())
+        .limit(1)
+    )
+    if exclude_appointment_id:
+        stmt = stmt.where(Appointment.id != exclude_appointment_id)
+    if lock:
+        stmt = stmt.with_for_update()
+    return db.scalar(stmt)
+
+
 def _labels_match(left: str | None, right: str | None) -> bool:
     return labels_match(left, right)
 

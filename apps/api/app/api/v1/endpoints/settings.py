@@ -28,6 +28,13 @@ from app.services.audit_service import record_audit
 from app.services.appointment_validation_service import (
     sync_future_appointments_with_service_catalog,
 )
+from app.services.link_flow_service import (
+    IntakeConfigInput,
+    get_intake_config,
+    get_system_whatsapp_account,
+    is_link_flow_enabled,
+    upsert_intake_config,
+)
 from app.services.service_catalog_service import get_service_catalog_items, set_service_catalog_items
 from app.services.whatsapp_service import normalize_whatsapp_provider_name, whatsapp_account_issues
 
@@ -90,10 +97,144 @@ def _upsert_setting_record(db: Session, *, tenant_id, key: str, value, is_secret
     return item
 
 
+def _active_whatsapp_account_for_tenant(db: Session, *, tenant_id) -> WhatsAppAccount | None:
+    return db.scalar(
+        select(WhatsAppAccount)
+        .where(
+            WhatsAppAccount.tenant_id == tenant_id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+
+
+def _whatsapp_account_readiness(account: WhatsAppAccount | None) -> dict:
+    if not account:
+        return {
+            "configured": False,
+            "healthy": False,
+            "provider_name": None,
+            "display_phone": None,
+            "issues": ["Conta WhatsApp ativa nao configurada."],
+        }
+    issues = whatsapp_account_issues(
+        provider_name=account.provider_name,
+        phone_number_id=account.phone_number_id,
+        business_account_id=account.business_account_id,
+        access_token=account.access_token_encrypted,
+    )
+    return {
+        "configured": True,
+        "healthy": not issues,
+        "provider_name": account.provider_name,
+        "display_phone": account.display_phone,
+        "issues": issues,
+    }
+
+
+def _intake_status_payload(db: Session, *, tenant_id) -> dict:
+    config = get_intake_config(db, tenant_id=tenant_id)
+    mode = str(config.get("mode") or "official_api")
+    link_flow_config = config.get("link_flow") if isinstance(config.get("link_flow"), dict) else {}
+    cta_mode = str(link_flow_config.get("cta_mode") or "whatsapp_redirect")
+    link_flow_enabled = is_link_flow_enabled(config)
+    own_account = _whatsapp_account_readiness(_active_whatsapp_account_for_tenant(db, tenant_id=tenant_id))
+    shared_sender = _whatsapp_account_readiness(get_system_whatsapp_account(db))
+    link_flow_needs_shared_sender = cta_mode == "whatsapp_redirect"
+
+    mode_requirements = {
+        "official_api": {
+            "own_whatsapp_account": True,
+            "shared_sender": False,
+            "link_flow_enabled": False,
+        },
+        "link_flow": {
+            "own_whatsapp_account": False,
+            "shared_sender": link_flow_needs_shared_sender,
+            "link_flow_enabled": True,
+        },
+        "hybrid": {
+            "own_whatsapp_account": True,
+            "shared_sender": link_flow_needs_shared_sender,
+            "link_flow_enabled": True,
+        },
+    }
+    requirements = mode_requirements.get(mode, mode_requirements["official_api"])
+    issues: list[str] = []
+    if requirements["own_whatsapp_account"] and not own_account["healthy"]:
+        issues.append("Conta oficial propria da clinica indisponivel.")
+    if requirements["shared_sender"] and not shared_sender["healthy"]:
+        issues.append("Sender compartilhado do sistema indisponivel.")
+    if requirements["link_flow_enabled"] and not link_flow_enabled:
+        issues.append("Link Flow desabilitado na configuracao.")
+
+    operational = not issues
+    return {
+        "config": config,
+        "mode": mode,
+        "cta_mode": cta_mode,
+        "link_flow_enabled": link_flow_enabled,
+        "current_mode_operational": operational,
+        "readiness": {
+            "own_whatsapp_account": own_account,
+            "shared_sender": shared_sender,
+        },
+        "requirements": requirements,
+        "issues": issues,
+        "message": (
+            "Modo de entrada operacional."
+            if operational
+            else "Modo de entrada com pendencias operacionais."
+        ),
+    }
+
+
 @router.get('')
 def list_settings(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
     rows = db.execute(select(Setting).where(Setting.tenant_id == tenant_id)).scalars().all()
     return {'data': [{'id': str(item.id), 'key': item.key, 'value': item.value, 'is_secret': item.is_secret} for item in rows]}
+
+
+@router.get('/intake/config')
+def get_intake_config_endpoint(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
+    return get_intake_config(db, tenant_id=tenant_id)
+
+
+@router.put('/intake/config')
+def upsert_intake_config_endpoint(
+    payload: IntakeConfigInput,
+    db: Session = Depends(get_db),
+    tenant_id=Depends(get_tenant_id),
+    principal: Principal = Depends(get_current_principal),
+):
+    item = upsert_intake_config(
+        db,
+        tenant_id=tenant_id,
+        payload=payload.model_dump(mode="json"),
+    )
+    db.commit()
+    db.refresh(item)
+    record_audit(
+        db,
+        action='settings.intake_config.update',
+        entity_type='setting',
+        entity_id=str(item.id),
+        tenant_id=tenant_id,
+        user_id=principal.user.id,
+        metadata={
+            'mode': item.value.get('mode') if isinstance(item.value, dict) else None,
+            'link_flow_enabled': bool((item.value.get('link_flow') or {}).get('enabled'))
+            if isinstance(item.value, dict)
+            else False,
+        },
+    )
+    return get_intake_config(db, tenant_id=tenant_id)
+
+
+@router.get('/intake/status')
+def get_intake_status_endpoint(db: Session = Depends(get_db), tenant_id=Depends(get_tenant_id)):
+    return _intake_status_payload(db, tenant_id=tenant_id)
 
 
 @router.put('/{key}')

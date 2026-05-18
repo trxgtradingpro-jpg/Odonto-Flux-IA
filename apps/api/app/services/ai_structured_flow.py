@@ -7,8 +7,17 @@ from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, TypeAdapter, ValidationError, field_validator, model_validator
-from sqlalchemy import or_, select
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,18 +42,28 @@ from app.models.enums import AppointmentStatus, JobStatus, MessageDirection, Mes
 from app.services.appointment_validation_service import (
     appointment_effective_end,
     eligible_professionals_for_procedure,
+    find_duplicate_active_patient_appointment,
     list_active_professionals_for_unit,
     professional_is_available_on_day,
 )
 from app.services.audit_service import record_audit
 from app.services.automation_service import emit_event
-from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_whatsapp_reply_simulation
+from app.services.channel_dispatch_service import dispatch_patient_message
+from app.services.demo_whatsapp_simulation_service import (
+    maybe_schedule_demo_whatsapp_reply_simulation,
+)
 from app.services.llm_service import run_llm_task
+from app.services.link_flow_service import (
+    record_link_flow_appointment_result,
+    record_link_flow_booking_attempt_started,
+)
 from app.services.service_catalog_service import get_service_catalog_items
-from app.services.service_duration_service import get_service_duration_catalog, resolve_service_duration_minutes
+from app.services.service_duration_service import (
+    get_service_duration_catalog,
+    resolve_service_duration_minutes,
+)
 from app.services.whatsapp_service import (
-    assert_whatsapp_account_ready_for_dispatch,
-    queue_outbound_message,
+    assert_whatsapp_route_ready_for_dispatch,
     resolve_whatsapp_reply_route,
 )
 
@@ -164,6 +183,7 @@ class BusinessHoursContext(StrictModel):
 class AutoresponderRulesContext(StrictModel):
     enabled: bool
     channel_whatsapp_enabled: bool
+    channel_webchat_enabled: bool = True
     business_hours: BusinessHoursContext
     outside_business_hours_mode: str
     max_consecutive_auto_replies: int
@@ -182,7 +202,7 @@ class RecentMessageContext(StrictModel):
 
 class ConversationContext(StrictModel):
     conversation_id: str
-    channel: Literal["whatsapp"]
+    channel: Literal["whatsapp", "webchat"]
     status: str
     patient_id: str | None = None
     lead_id: str | None = None
@@ -332,7 +352,7 @@ class FieldUpdate(StrictModel):
     reason: str
 
     @model_validator(mode="after")
-    def validate_allowed_field(self) -> "FieldUpdate":
+    def validate_allowed_field(self) -> FieldUpdate:
         if self.field not in ALLOWED_UPDATE_FIELDS.get(self.target, set()):
             raise ValueError(f"field_updates.{self.target}.{self.field} is not allowed")
         return self
@@ -621,6 +641,7 @@ def build_ai_conversation_context(
         autoresponder_rules=AutoresponderRulesContext(
             enabled=bool(config.get("enabled")),
             channel_whatsapp_enabled=bool((config.get("channels") or {}).get("whatsapp")),
+            channel_webchat_enabled=bool((config.get("channels") or {}).get("webchat", True)),
             business_hours=BusinessHoursContext(
                 timezone=str(business_hours.get("timezone") or timezone),
                 weekdays=[str(day) for day in (business_hours.get("weekdays") or [])],
@@ -635,7 +656,7 @@ def build_ai_conversation_context(
         ),
         conversation_context=ConversationContext(
             conversation_id=str(conversation.id),
-            channel="whatsapp",
+            channel=str(conversation.channel or "whatsapp"),
             status=str(conversation.status),
             patient_id=str(conversation.patient_id) if conversation.patient_id else None,
             lead_id=str(conversation.lead_id) if conversation.lead_id else None,
@@ -765,8 +786,13 @@ def process_structured_inbound_message(
         )
 
     if conversation.channel == "whatsapp":
+        _destination, provider_context = resolve_whatsapp_reply_route(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
         try:
-            assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+            assert_whatsapp_route_ready_for_dispatch(db, tenant_id=tenant_id, provider_context=provider_context)
         except Exception:
             return _handoff(
                 db,
@@ -1649,31 +1675,38 @@ def _dispatch_patient_reply(
     extractor_payload: dict[str, Any] | None,
     reply_payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    destination, provider_context = resolve_whatsapp_reply_route(
-        db,
-        conversation=conversation,
-        inbound_message=inbound_message,
-    )
-    if not destination:
-        return _handoff(
+    destination = None
+    provider_context = None
+    if conversation.channel == "whatsapp":
+        destination, provider_context = resolve_whatsapp_reply_route(
             db,
-            tenant_id=tenant_id,
             conversation=conversation,
             inbound_message=inbound_message,
-            dedupe_key=dedupe_key,
-            config=config,
-            reason="missing_contact_phone",
-            guardrail=None,
-            extractor_payload=extractor_payload,
-            reply_payload=reply_payload,
         )
+        if not destination:
+            return _handoff(
+                db,
+                tenant_id=tenant_id,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                dedupe_key=dedupe_key,
+                config=config,
+                reason="missing_contact_phone",
+                guardrail=None,
+                extractor_payload=extractor_payload,
+                reply_payload=reply_payload,
+            )
     patient_reply = _prepend_structured_first_reply_greeting_if_needed(
         patient_reply=patient_reply,
         context=context,
     )
 
-    message_type = "interactive_list" if patient_reply.message_type == "interactive" else "text"
-    interactive_payload = patient_reply.interactive_payload if patient_reply.message_type == "interactive" else None
+    message_type = "interactive_list" if patient_reply.message_type == "interactive" and conversation.channel == "whatsapp" else "text"
+    interactive_payload = (
+        patient_reply.interactive_payload
+        if patient_reply.message_type == "interactive" and conversation.channel == "whatsapp"
+        else None
+    )
     outbound_message = Message(
         tenant_id=tenant_id,
         conversation_id=conversation.id,
@@ -1694,14 +1727,16 @@ def _dispatch_patient_reply(
     )
     db.add(outbound_message)
     db.flush()
-    outbox = queue_outbound_message(
+    dispatch_result = dispatch_patient_message(
         db,
         tenant_id=tenant_id,
-        conversation_id=conversation.id,
-        to=destination,
+        conversation=conversation,
+        inbound_message=inbound_message,
+        outbound_message=outbound_message,
         body=patient_reply.message,
         message_type=message_type,
         interactive=interactive_payload,
+        destination=destination,
         provider_context=provider_context,
         metadata={
             "source": "ai_autoresponder",
@@ -1711,9 +1746,6 @@ def _dispatch_patient_reply(
             "intent": decision.intent,
         },
     )
-    outbound_payload = outbound_message.payload if isinstance(outbound_message.payload, dict) else {}
-    outbound_payload["queued_outbox_id"] = str(outbox.id)
-    outbound_message.payload = outbound_payload
 
     conversation.ai_autoresponder_last_decision = "responded"
     conversation.ai_autoresponder_last_reason = patient_reply.decision_reason
@@ -1749,7 +1781,11 @@ def _dispatch_patient_reply(
             tenant_id=tenant_id,
             message_id=outbound_message.id,
             event_type="ai_structured_response_queued",
-            payload={"outbox_id": str(outbox.id), "decision_id": str(decision_row.id)},
+            payload={
+                "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
+                "decision_id": str(decision_row.id),
+                "channel": dispatch_result.channel,
+            },
         )
     )
     try:
@@ -1761,13 +1797,14 @@ def _dispatch_patient_reply(
             return {"status": "duplicate", "decision_id": str(existing.id), "reason": existing.decision_reason}
         raise
 
-    maybe_schedule_demo_whatsapp_reply_simulation(
-        db,
-        tenant_id=tenant_id,
-        conversation_id=conversation.id,
-        outbound_message_id=outbound_message.id,
-        source="ai_autoresponder",
-    )
+    if conversation.channel == "whatsapp":
+        maybe_schedule_demo_whatsapp_reply_simulation(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            outbound_message_id=outbound_message.id,
+            source="ai_autoresponder",
+        )
     record_audit(
         db,
         action="ai_autoresponder.structured_response_sent",
@@ -1777,16 +1814,17 @@ def _dispatch_patient_reply(
         user_id=None,
         metadata={
             "decision_id": str(decision_row.id),
-            "outbox_id": str(outbox.id),
+            "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
             "inbound_message_id": str(inbound_message.id),
             "outbound_message_id": str(outbound_message.id),
             "intent": decision.intent,
+            "channel": dispatch_result.channel,
         },
     )
     return {
         "status": "responded",
         "decision_id": str(decision_row.id),
-        "outbox_id": str(outbox.id),
+        "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
         "outbound_message_id": str(outbound_message.id),
         "reason": patient_reply.decision_reason,
         "structured_flow": True,
@@ -1922,12 +1960,15 @@ def _handoff(
     outbox_id: UUID | None = None
     generated_response = None
     if reply_text:
-        destination, provider_context = resolve_whatsapp_reply_route(
-            db,
-            conversation=conversation,
-            inbound_message=inbound_message,
-        )
-        if destination:
+        destination = None
+        provider_context = None
+        if conversation.channel == "whatsapp":
+            destination, provider_context = resolve_whatsapp_reply_route(
+                db,
+                conversation=conversation,
+                inbound_message=inbound_message,
+            )
+        if destination or conversation.channel == "webchat":
             outbound = Message(
                 tenant_id=tenant_id,
                 conversation_id=conversation.id,
@@ -1946,13 +1987,15 @@ def _handoff(
             )
             db.add(outbound)
             db.flush()
-            outbox = queue_outbound_message(
+            dispatch_result = dispatch_patient_message(
                 db,
                 tenant_id=tenant_id,
-                conversation_id=conversation.id,
-                to=destination,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                outbound_message=outbound,
                 body=reply_text,
                 message_type="text",
+                destination=destination,
                 provider_context=provider_context,
                 metadata={
                     "source": "ai_autoresponder",
@@ -1962,11 +2005,8 @@ def _handoff(
                     "outbound_message_id": str(outbound.id),
                 },
             )
-            outbound_payload = outbound.payload if isinstance(outbound.payload, dict) else {}
-            outbound_payload["queued_outbox_id"] = str(outbox.id)
-            outbound.payload = outbound_payload
             outbound_message_id = outbound.id
-            outbox_id = outbox.id
+            outbox_id = dispatch_result.outbox_id
             generated_response = reply_text
 
     decision = _create_structured_decision(
@@ -2488,17 +2528,52 @@ def _confirm_appointment(
 ) -> dict[str, Any]:
     if not conversation.patient_id:
         return {"action": "confirm_appointment", "status": "missing_patient", "handoff_required": False}
+    record_link_flow_booking_attempt_started(
+        db,
+        conversation=conversation,
+        payload={"source": "ai_structured_flow", "action": "confirm_appointment"},
+    )
     validation = _validate_slot(db, tenant_id=tenant_id, decision=decision, params=params, context=context)
     if validation.get("status") != "available":
         return {"action": "confirm_appointment", **validation}
+    starts_at = datetime.fromisoformat(validation["starts_at"])
+    ends_at = datetime.fromisoformat(validation["ends_at"])
+    unit_id = UUID(validation["unit_id"])
+    professional_id = UUID(validation["professional_id"])
+    duplicate = find_duplicate_active_patient_appointment(
+        db,
+        tenant_id=tenant_id,
+        patient_id=conversation.patient_id,
+        unit_id=unit_id,
+        starts_at=starts_at,
+        lock=True,
+    )
+    if duplicate:
+        record_link_flow_appointment_result(
+            db,
+            conversation=conversation,
+            appointment_id=duplicate.id,
+            event_name="appointment_duplicate_detected",
+            payload={
+                "source": "ai_structured_flow",
+                "unit_id": str(unit_id),
+                "starts_at": duplicate.starts_at.isoformat(),
+            },
+        )
+        return {
+            "action": "confirm_appointment",
+            **validation,
+            "status": "duplicate",
+            "appointment_id": str(duplicate.id),
+        }
     appointment = Appointment(
         tenant_id=tenant_id,
         patient_id=conversation.patient_id,
-        unit_id=UUID(validation["unit_id"]),
-        professional_id=UUID(validation["professional_id"]),
+        unit_id=unit_id,
+        professional_id=professional_id,
         procedure_type=validation["procedure_type"],
-        starts_at=datetime.fromisoformat(validation["starts_at"]),
-        ends_at=datetime.fromisoformat(validation["ends_at"]),
+        starts_at=starts_at,
+        ends_at=ends_at,
         status=AppointmentStatus.SCHEDULED.value,
         origin="ai_structured",
         notes="",
@@ -2525,6 +2600,17 @@ def _confirm_appointment(
             "patient_id": str(conversation.patient_id),
             "starts_at": appointment.starts_at.isoformat(),
             "status": appointment.status,
+        },
+    )
+    record_link_flow_appointment_result(
+        db,
+        conversation=conversation,
+        appointment_id=appointment.id,
+        event_name="appointment_created",
+        payload={
+            "source": "ai_structured_flow",
+            "unit_id": str(unit_id),
+            "starts_at": appointment.starts_at.isoformat(),
         },
     )
     return {"action": "confirm_appointment", **validation, "status": "created", "appointment_id": str(appointment.id)}
