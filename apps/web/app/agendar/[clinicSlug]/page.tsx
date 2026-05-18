@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CheckCircle2,
   ClipboardList,
+  Info,
   Mail,
   MapPinHouse,
   MessageCircle,
@@ -544,17 +545,7 @@ function BookingSummaryPanel({
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
-          <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
-          Agendamento automatico
-        </div>
-        <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${statusToneClass}`}>
-          {summary?.status.label || "Preparando"}
-        </div>
-      </div>
-
-      <div className="mt-4">
+      <div>
         <p className="text-lg font-semibold leading-tight text-stone-950 sm:text-xl">Resumo do atendimento</p>
         <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
           {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
@@ -563,16 +554,24 @@ function BookingSummaryPanel({
 
       <div className="mt-4 rounded-[22px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-stone-900">
               {summary ? `${summary.progress.complete_count}/${summary.progress.total_count} itens prontos` : "Lendo a sessao..."}
             </p>
-            <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
-              Cada item salvo automaticamente pela IA ou manualmente aqui fica destacado em verde.
-            </p>
+            <div className="mt-1 flex items-center gap-2">
+              <div className="group relative inline-flex">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition group-hover:border-[var(--booking-primary)] group-hover:text-[var(--booking-primary)]">
+                  <Info className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="pointer-events-none absolute left-0 top-full z-10 mt-2 w-56 rounded-2xl border border-stone-200 bg-white px-3 py-2 text-xs leading-5 text-stone-600 opacity-0 shadow-[0_16px_40px_rgba(15,23,42,0.14)] transition duration-150 group-hover:opacity-100">
+                  Cada item salvo automaticamente pela IA ou manualmente aqui fica destacado em verde.
+                </div>
+              </div>
+              <p className="truncate text-xs text-[var(--booking-muted)]">Passe no icone para ver a dica.</p>
+            </div>
           </div>
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
-            <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
+          <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${statusToneClass}`}>
+            {summary?.status.label || "Preparando"}
           </div>
         </div>
       </div>
