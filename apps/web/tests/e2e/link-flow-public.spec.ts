@@ -256,6 +256,24 @@ test.describe('public link flow landing', () => {
     await expect(page.getByText('Assistente de agendamento', { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
     await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
+    await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
+    await expect(page.getByRole('button', { name: /Abrir resumo do atendimento/i })).toBeVisible();
+
+    const summaryHandle = page.getByTestId('booking-summary-mobile-handle');
+    const handleBox = await summaryHandle.boundingBox();
+    if (!handleBox) {
+      throw new Error('Nao foi possivel localizar a aba do resumo mobile.');
+    }
+
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2 + 140, handleBox.y + handleBox.height / 2, { steps: 12 });
+    await page.mouse.up();
+
+    await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'open');
+    await expect(page.getByText('Resumo do atendimento')).toBeVisible();
+    await page.getByRole('button', { name: /Fechar resumo do atendimento/i }).click();
+    await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
 
     const [hasHorizontalOverflow, pageScrolled] = await page.evaluate(() => {
       const hasX = document.documentElement.scrollWidth > window.innerWidth + 1;

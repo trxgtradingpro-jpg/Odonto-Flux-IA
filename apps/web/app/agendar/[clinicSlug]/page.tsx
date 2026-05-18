@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   ArrowRight,
   CalendarCheck2,
   CalendarDays,
+  ChevronRight,
   CheckCircle2,
   ClipboardList,
   Mail,
@@ -16,9 +17,11 @@ import {
   ShieldCheck,
   Sparkles,
   UserRound,
+  X,
 } from "lucide-react";
 import Image from "next/image";
 import { useParams } from "next/navigation";
+import { cn } from "@odontoflux/ui";
 
 import { publicApiFetch } from "@/lib/public-api";
 
@@ -451,12 +454,14 @@ function BookingSummaryPanel({
   loading,
   saving,
   onSave,
+  className,
 }: {
   clinicName: string;
   summary: PublicBookingSummary | null;
   loading: boolean;
   saving: boolean;
   onSave: (draft: PublicBookingSummaryDraft) => Promise<void>;
+  className?: string;
 }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<PublicBookingSummaryDraft>(() => buildSummaryDraft(summary));
@@ -533,7 +538,12 @@ function BookingSummaryPanel({
   }
 
   return (
-    <aside className="flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
+    <aside
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/70 bg-white/84 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:rounded-[30px] sm:p-5",
+        className,
+      )}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="inline-flex items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
           <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
@@ -545,13 +555,13 @@ function BookingSummaryPanel({
       </div>
 
       <div className="mt-4">
-        <p className="text-xl font-semibold leading-tight text-stone-950">Resumo do atendimento</p>
+        <p className="text-lg font-semibold leading-tight text-stone-950 sm:text-xl">Resumo do atendimento</p>
         <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
           {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
         </p>
       </div>
 
-      <div className="mt-4 rounded-[24px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
+      <div className="mt-4 rounded-[22px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-stone-900">
@@ -567,127 +577,133 @@ function BookingSummaryPanel({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2.5">
-        {cards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <div
-              key={card.key}
-              className={[
-                "rounded-[20px] border px-3 py-3 transition",
-                card.complete
-                  ? "border-emerald-200 bg-emerald-50/90 shadow-[0_10px_24px_rgba(16,185,129,0.10)]"
-                  : "border-stone-200 bg-white/92",
-              ].join(" ")}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={[
-                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
-                    card.complete ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500",
-                  ].join(" ")}
-                >
-                  <Icon className="h-4 w-4" aria-hidden="true" />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--booking-muted)]">{card.label}</p>
-                  <p className={`mt-1 text-sm font-medium leading-5 ${card.complete ? "text-emerald-900" : "text-stone-700"}`}>
-                    {card.value}
-                  </p>
+      <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+          {cards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={card.key}
+                className={[
+                  "rounded-[18px] border px-3 py-3 transition sm:rounded-[20px]",
+                  card.complete
+                    ? "border-emerald-200 bg-emerald-50/90 shadow-[0_10px_24px_rgba(16,185,129,0.10)]"
+                    : "border-stone-200 bg-white/92",
+                ].join(" ")}
+              >
+                <div className="flex items-start gap-2">
+                  <span
+                    className={[
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
+                      card.complete ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500",
+                    ].join(" ")}
+                  >
+                    <Icon className="h-4 w-4" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--booking-muted)] sm:text-[11px]">
+                      {card.label}
+                    </p>
+                    <p
+                      className={`mt-1 break-words text-[13px] font-medium leading-5 sm:text-sm ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                    >
+                      {card.value}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 rounded-[24px] border border-dashed border-stone-200 bg-white/70 p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-stone-900">Complementar manualmente</p>
-            <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
-              {missingCount
-                ? `${missingCount} campos ainda podem ser preenchidos por aqui sem sair da pagina.`
-                : "Tudo essencial ja esta preenchido. Voce ainda pode revisar os dados manualmente."}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setEditorOpen((current) => !current)}
-            className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
-          >
-            <PencilLine className="mr-2 h-4 w-4" aria-hidden="true" />
-            {editorOpen ? "Fechar" : "Editar"}
-          </button>
+            );
+          })}
         </div>
 
-        {editorOpen ? (
-          <form onSubmit={handleSubmit} className="mt-3 grid gap-2.5">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <input
-                value={draft.full_name}
-                onChange={(event) => setDraft((current) => ({ ...current, full_name: event.target.value }))}
-                placeholder="Nome completo"
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              />
-              <input
-                value={draft.email}
-                onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
-                placeholder="E-mail"
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              />
+        <div className="mt-4 rounded-[22px] border border-dashed border-stone-200 bg-white/70 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-stone-900">Complementar manualmente</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
+                {missingCount
+                  ? `${missingCount} campos ainda podem ser preenchidos por aqui sem sair da pagina.`
+                  : "Tudo essencial ja esta preenchido. Voce ainda pode revisar os dados manualmente."}
+              </p>
             </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              <input
-                type="date"
-                value={draft.birth_date}
-                onChange={(event) => setDraft((current) => ({ ...current, birth_date: event.target.value }))}
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              />
-              <select
-                value={draft.unit_id}
-                onChange={(event) => setDraft((current) => ({ ...current, unit_id: event.target.value }))}
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              >
-                <option value="">Selecionar unidade</option>
-                {summary?.options.units.map((unit) => (
-                  <option key={unit.id} value={unit.id}>
-                    {unit.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              <input
-                value={draft.procedure_type}
-                onChange={(event) => setDraft((current) => ({ ...current, procedure_type: event.target.value }))}
-                placeholder="Servico desejado"
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              />
-              <input
-                type="date"
-                value={draft.preferred_date}
-                onChange={(event) => setDraft((current) => ({ ...current, preferred_date: event.target.value }))}
-                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-              />
-            </div>
-
             <button
-              type="submit"
-              disabled={saving}
-              className="mt-1 inline-flex h-11 items-center justify-center rounded-full bg-[var(--booking-primary)] px-4 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              onClick={() => setEditorOpen((current) => !current)}
+              className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
             >
-              {saving ? "Salvando..." : "Salvar dados do agendamento"}
+              <PencilLine className="mr-2 h-4 w-4" aria-hidden="true" />
+              {editorOpen ? "Fechar" : "Editar"}
             </button>
-          </form>
+          </div>
+
+          {editorOpen ? (
+            <form onSubmit={handleSubmit} className="mt-3 grid gap-2.5">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  value={draft.full_name}
+                  onChange={(event) => setDraft((current) => ({ ...current, full_name: event.target.value }))}
+                  placeholder="Nome completo"
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                />
+                <input
+                  value={draft.email}
+                  onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="E-mail"
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                />
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  type="date"
+                  value={draft.birth_date}
+                  onChange={(event) => setDraft((current) => ({ ...current, birth_date: event.target.value }))}
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                />
+                <select
+                  value={draft.unit_id}
+                  onChange={(event) => setDraft((current) => ({ ...current, unit_id: event.target.value }))}
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                >
+                  <option value="">Selecionar unidade</option>
+                  {summary?.options.units.map((unit) => (
+                    <option key={unit.id} value={unit.id}>
+                      {unit.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  value={draft.procedure_type}
+                  onChange={(event) => setDraft((current) => ({ ...current, procedure_type: event.target.value }))}
+                  placeholder="Servico desejado"
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                />
+                <input
+                  type="date"
+                  value={draft.preferred_date}
+                  onChange={(event) => setDraft((current) => ({ ...current, preferred_date: event.target.value }))}
+                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="mt-1 inline-flex h-11 items-center justify-center rounded-full bg-[var(--booking-primary)] px-4 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? "Salvando..." : "Salvar dados do agendamento"}
+              </button>
+            </form>
+          ) : null}
+        </div>
+
+        {loading && !summary ? (
+          <p className="mt-3 text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
         ) : null}
       </div>
-
-      {loading && !summary ? (
-        <p className="mt-3 text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
-      ) : null}
     </aside>
   );
 }
@@ -797,6 +813,8 @@ export default function PublicBookingPage() {
   const [summary, setSummary] = useState<PublicBookingSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [savingSummary, setSavingSummary] = useState(false);
+  const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
+  const mobileSummaryGestureRef = useRef<{ startX: number; action: "open" | "close" } | null>(null);
 
   useEffect(() => {
     if (!clinicSlug || bootstrappedRef.current) return;
@@ -983,6 +1001,49 @@ export default function PublicBookingPage() {
         "Agendamento por link indisponivel no momento. Entre em contato com a clinica pelo canal oficial."
       : null;
 
+  const handleMobileSummaryGestureStart = useCallback(
+    (event: ReactPointerEvent<HTMLElement>, action: "open" | "close") => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      mobileSummaryGestureRef.current = { startX: event.clientX, action };
+    },
+    [],
+  );
+
+  const handleMobileSummaryGestureEnd = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const gesture = mobileSummaryGestureRef.current;
+      if (!gesture) return;
+
+      const deltaX = event.clientX - gesture.startX;
+      if (gesture.action === "open" && deltaX > 48) {
+        setMobileSummaryOpen(true);
+      }
+      if (gesture.action === "close" && deltaX < -48) {
+        setMobileSummaryOpen(false);
+      }
+
+      mobileSummaryGestureRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+
+  const handleMobileSummaryGestureCancel = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    mobileSummaryGestureRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isWebchat) {
+      setMobileSummaryOpen(false);
+    }
+  }, [isWebchat]);
+
   async function handleSaveSummary(draft: PublicBookingSummaryDraft) {
     if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
     setSavingSummary(true);
@@ -1046,20 +1107,104 @@ export default function PublicBookingPage() {
           </div>
         </header>
 
-        <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden p-4 sm:p-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-1 lg:p-6">
+        <section className="relative flex min-h-0 flex-1 overflow-hidden p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6">
           {isWebchat ? (
-            <BookingSummaryPanel
-              clinicName={clinicName}
-              summary={summary}
-              loading={loadingSummary}
-              saving={savingSummary}
-              onSave={handleSaveSummary}
-            />
-          ) : (
-            <WhatsAppOverviewPanel />
-          )}
+            <>
+              <div
+                className={cn(
+                  "absolute inset-0 z-20 bg-stone-950/18 backdrop-blur-[1px] transition-opacity duration-300 lg:hidden",
+                  mobileSummaryOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+                )}
+                aria-hidden="true"
+                onClick={() => setMobileSummaryOpen(false)}
+              />
 
-          <div className="flex min-h-0">
+              <div className="pointer-events-none absolute inset-y-4 left-4 z-30 flex lg:hidden">
+                <div
+                  data-testid="booking-summary-mobile-drawer"
+                  data-state={mobileSummaryOpen ? "open" : "closed"}
+                  className="pointer-events-auto relative h-full w-[min(88vw,360px)] min-w-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                  style={{
+                    transform: mobileSummaryOpen ? "translateX(0)" : "translateX(calc(-100% - 1rem))",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setMobileSummaryOpen(false)}
+                    aria-label="Fechar resumo do atendimento"
+                    className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <div
+                    className="absolute inset-x-12 top-3 z-10 flex justify-center touch-pan-y"
+                    onPointerDown={(event) => handleMobileSummaryGestureStart(event, "close")}
+                    onPointerUp={handleMobileSummaryGestureEnd}
+                    onPointerCancel={handleMobileSummaryGestureCancel}
+                  >
+                    <div className="h-1.5 w-16 rounded-full bg-stone-300/90 shadow-sm" aria-hidden="true" />
+                  </div>
+                  <BookingSummaryPanel
+                    clinicName={clinicName}
+                    summary={summary}
+                    loading={loadingSummary}
+                    saving={savingSummary}
+                    onSave={handleSaveSummary}
+                    className="h-full pt-14"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                data-testid="booking-summary-mobile-handle"
+                aria-label="Abrir resumo do atendimento"
+                className={cn(
+                  "absolute left-0 top-1/2 z-30 -translate-y-1/2 touch-pan-y rounded-r-[26px] border border-white/80 bg-white/92 px-2 py-4 text-[var(--booking-primary)] shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur lg:hidden",
+                  mobileSummaryOpen ? "pointer-events-none opacity-0" : "opacity-100",
+                )}
+                onClick={() => setMobileSummaryOpen(true)}
+                onPointerDown={(event) => handleMobileSummaryGestureStart(event, "open")}
+                onPointerUp={handleMobileSummaryGestureEnd}
+                onPointerCancel={handleMobileSummaryGestureCancel}
+              >
+                <span className="flex items-center gap-2">
+                  <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
+                    style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
+                  >
+                    Resumo
+                  </span>
+                </span>
+              </button>
+
+              <div
+                className="absolute inset-y-0 left-0 z-10 w-5 touch-pan-y lg:hidden"
+                aria-hidden="true"
+                onPointerDown={(event) => handleMobileSummaryGestureStart(event, "open")}
+                onPointerUp={handleMobileSummaryGestureEnd}
+                onPointerCancel={handleMobileSummaryGestureCancel}
+              />
+            </>
+          ) : null}
+
+          <div className="hidden min-h-0 lg:flex">
+            {isWebchat ? (
+              <BookingSummaryPanel
+                clinicName={clinicName}
+                summary={summary}
+                loading={loadingSummary}
+                saving={savingSummary}
+                onSave={handleSaveSummary}
+                className="h-full"
+              />
+            ) : (
+              <WhatsAppOverviewPanel />
+            )}
+          </div>
+
+          <div className="flex min-h-0 flex-1">
             {profile?.link_flow.operational && session && isWebchat ? (
               <PublicWebchat
                 clinicSlug={clinicSlug}
