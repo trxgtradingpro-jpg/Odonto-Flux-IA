@@ -79,7 +79,7 @@ test.describe('public link flow landing', () => {
     await page.goto('/agendar/tenant-a');
 
     await expect(page.getByRole('button', { name: /Continuar pelo WhatsApp/i })).toBeVisible();
-    await expect(page.getByText('Seu link de atendimento esta pronto para continuar.')).toBeVisible();
+    await expect(page.getByText('Seu link oficial esta pronto para abrir o WhatsApp da operacao.')).toBeVisible();
   });
 
   test('renders webchat, sends a message and polls assistant replies', async ({ page }) => {
@@ -167,5 +167,59 @@ test.describe('public link flow landing', () => {
     await page.getByRole('button', { name: /Enviar mensagem/i }).click();
 
     await expect(page.getByText('Claro, posso ajudar com seu agendamento.')).toBeVisible();
+  });
+
+  test('keeps the public webchat layout usable on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000004',
+          expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'webchat',
+          whatsapp_url: null,
+          public_access_token: 'public-token-mobile',
+          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
+      await route.fulfill({ json: { id: 'evt-webchat-mobile', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
+      await route.fulfill({
+        json: {
+          data: [],
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
+      await route.fulfill({
+        json: {
+          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A', logo_data_url: null },
+          branding,
+          link_flow: {
+            enabled: true,
+            operational: true,
+            cta_mode: 'webchat',
+            headline: 'Agende com a ClÃ­nica A',
+            trust_message: 'Atendimento oficial pela pagina.',
+            button_label: 'Iniciar chat',
+            unavailable_message: null,
+          },
+        },
+      });
+    });
+
+    await page.goto('/agendar/tenant-a');
+
+    await expect(page.getByText('Atendimento online')).toBeVisible();
+    await expect(page.getByText('Assistente de agendamento', { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
+
+    const hasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    expect(hasHorizontalOverflow).toBeFalsy();
   });
 });

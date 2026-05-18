@@ -334,7 +334,9 @@ def test_public_webchat_creates_conversation_and_returns_safe_messages(monkeypat
     _enable_link_flow(db_session, tenant, cta_mode="webchat")
     db_session.commit()
 
-    def fake_process_inbound_message(db, *, tenant_id, conversation, inbound_message):
+    def fake_process_inbound_message(db, *, tenant_id, conversation_id, inbound_message_id):
+        conversation = db.get(Conversation, conversation_id)
+        inbound_message = db.get(Message, inbound_message_id)
         outbound = Message(
             tenant_id=tenant_id,
             conversation_id=conversation.id,

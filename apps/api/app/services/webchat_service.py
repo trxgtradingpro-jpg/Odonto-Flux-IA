@@ -484,8 +484,8 @@ def post_public_webchat_message(
         ai_result = process_inbound_message(
             db,
             tenant_id=tenant.id,
-            conversation=conversation,
-            inbound_message=inbound,
+            conversation_id=conversation.id,
+            inbound_message_id=inbound.id,
         )
     except Exception as exc:
         db.rollback()
