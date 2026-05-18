@@ -219,7 +219,12 @@ test.describe('public link flow landing', () => {
     await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
     await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
 
-    const hasHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    const [hasHorizontalOverflow, pageScrolled] = await page.evaluate(() => {
+      const hasX = document.documentElement.scrollWidth > window.innerWidth + 1;
+      window.scrollTo(0, 9999);
+      return [hasX, window.scrollY > 0];
+    });
     expect(hasHorizontalOverflow).toBeFalsy();
+    expect(pageScrolled).toBeFalsy();
   });
 });

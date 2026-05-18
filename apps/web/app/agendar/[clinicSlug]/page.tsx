@@ -232,7 +232,7 @@ function PublicWebchat({
   }
 
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
       <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white/92 px-4 py-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--booking-primary)] text-white shadow-sm">
@@ -349,7 +349,7 @@ function WhatsAppCtaPanel({
   handleOpenWhatsApp: () => void;
 }) {
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
       <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white/92 px-4 py-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--booking-primary)] text-white shadow-sm">
@@ -495,6 +495,25 @@ export default function PublicBookingPage() {
     void bootstrap();
   }, [clinicSlug]);
 
+  useEffect(() => {
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverscroll = document.documentElement.style.overscrollBehavior;
+    const previousBodyOverscroll = document.body.style.overscrollBehavior;
+
+    document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overscrollBehavior = "none";
+    document.body.style.overscrollBehavior = "none";
+
+    return () => {
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overscrollBehavior = previousHtmlOverscroll;
+      document.body.style.overscrollBehavior = previousBodyOverscroll;
+    };
+  }, []);
+
   const pageStyle = useMemo(() => {
     const branding = profile?.branding;
     return {
@@ -538,10 +557,10 @@ export default function PublicBookingPage() {
 
   return (
     <main
-      className="min-h-screen bg-[var(--booking-background)] px-4 py-5 text-[var(--booking-text)] sm:px-6 sm:py-6 lg:px-10"
+      className="box-border h-[100dvh] overflow-hidden bg-[var(--booking-background)] px-4 py-4 text-[var(--booking-text)] sm:px-6 sm:py-5 lg:px-10"
       style={pageStyle}
     >
-      <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] w-full max-w-7xl flex-col overflow-hidden rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur">
+      <div className="box-border mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur">
         <header className="border-b border-white/60 px-5 py-5 sm:px-7">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex min-w-0 items-center gap-3">
@@ -570,8 +589,8 @@ export default function PublicBookingPage() {
           </div>
         </header>
 
-        <section className="grid min-h-0 flex-1 gap-4 p-4 sm:p-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:p-6">
-          <aside className="flex flex-col justify-between rounded-[30px] border border-white/70 bg-white/84 p-5 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-6">
+        <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden p-4 sm:p-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-1 lg:p-6">
+          <aside className="flex min-h-0 flex-col justify-between overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-5 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-6">
             <div>
               <div className="inline-flex items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
                 <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
@@ -615,7 +634,7 @@ export default function PublicBookingPage() {
             </div>
           </aside>
 
-          <div className="flex min-h-[560px]">
+          <div className="flex min-h-0">
             {profile?.link_flow.operational && session && isWebchat ? (
               <PublicWebchat
                 clinicSlug={clinicSlug}
@@ -637,7 +656,7 @@ export default function PublicBookingPage() {
               />
             ) : null}
             {!profile?.link_flow.operational || !session ? (
-              <div className="flex min-h-[560px] w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
                 <div className="max-w-md">
                   <p className="text-lg font-semibold text-stone-900">Nao foi possivel iniciar o atendimento agora.</p>
                   <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
