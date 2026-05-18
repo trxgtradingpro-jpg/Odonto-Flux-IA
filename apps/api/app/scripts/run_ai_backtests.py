@@ -705,14 +705,14 @@ def _html_report(payload: dict[str, Any]) -> str:
         )
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8" />
-<title>Backtest IA OdontoFlux</title>
+<title>Backtest IA ClinicFlux AI</title>
 <style>
 body{{font-family:Segoe UI,Arial,sans-serif;background:#eef3ef;margin:0;color:#16302b}}
 header{{position:sticky;top:0;background:#0f6f65;color:#fff;padding:18px 28px;box-shadow:0 8px 24px #0002}}
 main{{max-width:1180px;margin:24px auto;padding:0 18px}}.card{{background:#fff;border:1px solid #d7e2dd;border-radius:18px;margin:18px 0;padding:22px;box-shadow:0 10px 30px #0f302014}}
 .chat{{display:grid;gap:10px;margin-top:14px}}.msg{{max-width:78%;border-radius:16px;padding:12px 14px}}.msg small{{display:block;opacity:.65;margin-top:2px}}.msg p{{margin:6px 0 0;white-space:pre-wrap}}
 .patient{{justify-self:start;background:#e8f0ff}}.ai{{justify-self:end;background:#dcf8ed}}.pill{{display:inline-block;background:#dcf8ed;color:#07594f;border-radius:999px;padding:5px 10px;margin-right:8px}}
-</style></head><body><header><h1>Backtest IA OdontoFlux</h1>
+</style></head><body><header><h1>Backtest IA ClinicFlux AI</h1>
 <p><span class="pill">status: {html.escape(str(payload.get('status')))}</span><span class="pill">conversas: {html.escape(str(payload.get('scenarios_count')))}</span><span class="pill">aprovadas: {html.escape(str(payload.get('passed_count')))}</span></p>
 </header><main>{''.join(cards)}</main></body></html>"""
 

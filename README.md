@@ -1,4 +1,4 @@
-# Odonto-Flux-IA
+# ClinicFlux AI
 
 Plataforma SaaS multi-tenant para operacao comercial e administrativa de clinicas odontologicas.
 
@@ -51,7 +51,7 @@ make seed
 ## Credenciais demo
 - owner tenant A: `owner@sorrisosul.com` / `Odonto@123`
 - manager tenant B: `manager@oralprime.com` / `Odonto@123`
-- admin plataforma: `admin@odontoflux.com` / `Odonto@123`
+- admin plataforma: `clinicfluxai@gmail.com` / `Odonto@123`
 
 ## IA Auto-Responder (operacao)
 1. Acesse **Configuracoes**.

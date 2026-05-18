@@ -1,18 +1,18 @@
 import type { Metadata } from 'next';
 
-import { BRAND_DESCRIPTION, BRAND_DOMAIN, BRAND_NAME, BRAND_TAGLINE } from '@/lib/brand';
+import { BRAND_DESCRIPTION, BRAND_NAME, BRAND_SITE_URL, BRAND_TAGLINE } from '@/lib/brand';
 import { Providers } from '@/components/providers';
 
 import './globals.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL(`https://${BRAND_DOMAIN}`),
+  metadataBase: new URL(BRAND_SITE_URL),
   title: BRAND_NAME,
   description: BRAND_DESCRIPTION,
   openGraph: {
     title: BRAND_NAME,
     description: BRAND_TAGLINE,
-    url: `https://${BRAND_DOMAIN}`,
+    url: BRAND_SITE_URL,
     siteName: BRAND_NAME,
     locale: 'pt_BR',
     type: 'website',
