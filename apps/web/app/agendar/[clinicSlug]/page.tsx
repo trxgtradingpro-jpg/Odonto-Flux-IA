@@ -2,7 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
-import { ArrowRight, CalendarCheck2, CheckCircle2, MessageCircle, SendHorizontal, ShieldCheck } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarCheck2,
+  CalendarDays,
+  CheckCircle2,
+  ClipboardList,
+  Mail,
+  MapPinHouse,
+  MessageCircle,
+  PencilLine,
+  SendHorizontal,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 import Image from "next/image";
 import { useParams } from "next/navigation";
 
@@ -55,11 +69,83 @@ type PublicWebchatMessage = {
   status: string;
 };
 
+type PublicBookingSummaryField = {
+  value: string | null;
+  complete: boolean;
+  source: string | null;
+  unit_id?: string | null;
+};
+
+type PublicBookingSummary = {
+  session_status: string;
+  progress: {
+    complete_count: number;
+    total_count: number;
+  };
+  status: {
+    label: string;
+    tone: "success" | "progress" | "pending";
+    appointment_created: boolean;
+  };
+  fields: {
+    patient_name: PublicBookingSummaryField;
+    email: PublicBookingSummaryField;
+    birth_date: PublicBookingSummaryField;
+    unit: PublicBookingSummaryField;
+    procedure: PublicBookingSummaryField;
+    preferred_date: PublicBookingSummaryField;
+    confirmed_slot: PublicBookingSummaryField;
+  };
+  appointment: {
+    id: string | null;
+    starts_at: string | null;
+    confirmation_status: string | null;
+  };
+  options: {
+    units: Array<{ id: string; name: string }>;
+  };
+};
+
+type PublicBookingSummaryDraft = {
+  full_name: string;
+  email: string;
+  birth_date: string;
+  procedure_type: string;
+  unit_id: string;
+  preferred_date: string;
+};
+
 function formatPublicMessageTime(value: string | null): string {
   if (!value) return "agora";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "agora";
   return new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatPublicDate(value: string | null): string {
+  if (!value) return "Pendente";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const [year, month, day] = value.split("-");
+    return year && month && day ? `${day}/${month}/${year}` : value;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatPublicDateTime(value: string | null): string {
+  if (!value) return "Pendente";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
@@ -90,6 +176,17 @@ function getUtmPayload(): Record<string, string> {
 
 function webchatSessionStorageKey(clinicSlug: string): string {
   return `clinicflux.link_flow.webchat.${clinicSlug}`;
+}
+
+function shouldInvalidatePublicSession(message: string): boolean {
+  return /expir/i.test(message) || /encerrad/i.test(message);
+}
+
+function publicSessionUnavailableMessage(message: string): string {
+  if (/encerrad/i.test(message)) {
+    return "Esta conversa foi encerrada. Recarregue a pagina para iniciar um novo atendimento.";
+  }
+  return "Sua sessao expirou. Recarregue a pagina para iniciar um novo atendimento.";
 }
 
 function readStoredWebchatSession(clinicSlug: string): PublicBookingSession | null {
@@ -123,7 +220,7 @@ function PublicWebchat({
   clinicSlug: string;
   clinicName: string;
   session: PublicBookingSession;
-  onExpired: () => void;
+  onExpired: (message?: string) => void;
 }) {
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -154,8 +251,8 @@ function PublicWebchat({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel atualizar o chat.";
       setChatError(message);
-      if (/expir/i.test(message) || /sess/i.test(message)) {
-        onExpired();
+      if (shouldInvalidatePublicSession(message)) {
+        onExpired(message);
       }
     } finally {
       setLoadingMessages(false);
@@ -223,8 +320,8 @@ function PublicWebchat({
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel enviar sua mensagem.";
       setChatError(message);
-      if (/expir/i.test(message) || /sess/i.test(message)) {
-        onExpired();
+      if (shouldInvalidatePublicSession(message)) {
+        onExpired(message);
       }
     } finally {
       setSending(false);
@@ -337,6 +434,293 @@ function PublicWebchat({
   );
 }
 
+function buildSummaryDraft(summary: PublicBookingSummary | null): PublicBookingSummaryDraft {
+  return {
+    full_name: summary?.fields.patient_name.value || "",
+    email: summary?.fields.email.value || "",
+    birth_date: summary?.fields.birth_date.value || "",
+    procedure_type: summary?.fields.procedure.value || "",
+    unit_id: summary?.fields.unit.unit_id || "",
+    preferred_date: summary?.fields.preferred_date.value || "",
+  };
+}
+
+function BookingSummaryPanel({
+  clinicName,
+  summary,
+  loading,
+  saving,
+  onSave,
+}: {
+  clinicName: string;
+  summary: PublicBookingSummary | null;
+  loading: boolean;
+  saving: boolean;
+  onSave: (draft: PublicBookingSummaryDraft) => Promise<void>;
+}) {
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [draft, setDraft] = useState<PublicBookingSummaryDraft>(() => buildSummaryDraft(summary));
+
+  useEffect(() => {
+    setDraft(buildSummaryDraft(summary));
+  }, [summary]);
+
+  const statusToneClass =
+    summary?.status.tone === "success"
+      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+      : summary?.status.tone === "progress"
+        ? "border-teal-200 bg-teal-50 text-teal-800"
+        : "border-stone-200 bg-white text-stone-600";
+
+  const cards = [
+    {
+      key: "patient_name",
+      label: "Paciente",
+      value: summary?.fields.patient_name.value || "Aguardando nome",
+      complete: summary?.fields.patient_name.complete || false,
+      icon: UserRound,
+    },
+    {
+      key: "email",
+      label: "E-mail",
+      value: summary?.fields.email.value || "Ainda nao informado",
+      complete: summary?.fields.email.complete || false,
+      icon: Mail,
+    },
+    {
+      key: "birth_date",
+      label: "Nascimento",
+      value: summary?.fields.birth_date.value ? formatPublicDate(summary.fields.birth_date.value) : "Ainda nao informado",
+      complete: summary?.fields.birth_date.complete || false,
+      icon: CalendarDays,
+    },
+    {
+      key: "unit",
+      label: "Unidade",
+      value: summary?.fields.unit.value || "Escolha pendente",
+      complete: summary?.fields.unit.complete || false,
+      icon: MapPinHouse,
+    },
+    {
+      key: "procedure",
+      label: "Servico",
+      value: summary?.fields.procedure.value || "Definir na conversa",
+      complete: summary?.fields.procedure.complete || false,
+      icon: ClipboardList,
+    },
+    {
+      key: "preferred_date",
+      label: "Data desejada",
+      value: summary?.fields.preferred_date.value ? formatPublicDate(summary.fields.preferred_date.value) : "Opcional",
+      complete: summary?.fields.preferred_date.complete || false,
+      icon: CalendarDays,
+    },
+    {
+      key: "confirmed_slot",
+      label: "Horario",
+      value: summary?.fields.confirmed_slot.value ? formatPublicDateTime(summary.fields.confirmed_slot.value) : "Aguardando confirmacao",
+      complete: summary?.fields.confirmed_slot.complete || false,
+      icon: Sparkles,
+    },
+  ];
+
+  const missingCount = cards.filter((card) => !card.complete).length;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onSave(draft);
+    setEditorOpen(false);
+  }
+
+  return (
+    <aside className="flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="inline-flex items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
+          <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
+          Agendamento automatico
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${statusToneClass}`}>
+          {summary?.status.label || "Preparando"}
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-xl font-semibold leading-tight text-stone-950">Resumo do atendimento</p>
+        <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
+          {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
+        </p>
+      </div>
+
+      <div className="mt-4 rounded-[24px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-stone-900">
+              {summary ? `${summary.progress.complete_count}/${summary.progress.total_count} itens prontos` : "Lendo a sessao..."}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
+              Cada item salvo automaticamente pela IA ou manualmente aqui fica destacado em verde.
+            </p>
+          </div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+            <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2.5">
+        {cards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <div
+              key={card.key}
+              className={[
+                "rounded-[20px] border px-3 py-3 transition",
+                card.complete
+                  ? "border-emerald-200 bg-emerald-50/90 shadow-[0_10px_24px_rgba(16,185,129,0.10)]"
+                  : "border-stone-200 bg-white/92",
+              ].join(" ")}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={[
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
+                    card.complete ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500",
+                  ].join(" ")}
+                >
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--booking-muted)]">{card.label}</p>
+                  <p className={`mt-1 text-sm font-medium leading-5 ${card.complete ? "text-emerald-900" : "text-stone-700"}`}>
+                    {card.value}
+                  </p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 rounded-[24px] border border-dashed border-stone-200 bg-white/70 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-stone-900">Complementar manualmente</p>
+            <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
+              {missingCount
+                ? `${missingCount} campos ainda podem ser preenchidos por aqui sem sair da pagina.`
+                : "Tudo essencial ja esta preenchido. Voce ainda pode revisar os dados manualmente."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditorOpen((current) => !current)}
+            className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
+          >
+            <PencilLine className="mr-2 h-4 w-4" aria-hidden="true" />
+            {editorOpen ? "Fechar" : "Editar"}
+          </button>
+        </div>
+
+        {editorOpen ? (
+          <form onSubmit={handleSubmit} className="mt-3 grid gap-2.5">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                value={draft.full_name}
+                onChange={(event) => setDraft((current) => ({ ...current, full_name: event.target.value }))}
+                placeholder="Nome completo"
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              />
+              <input
+                value={draft.email}
+                onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
+                placeholder="E-mail"
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              />
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                type="date"
+                value={draft.birth_date}
+                onChange={(event) => setDraft((current) => ({ ...current, birth_date: event.target.value }))}
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              />
+              <select
+                value={draft.unit_id}
+                onChange={(event) => setDraft((current) => ({ ...current, unit_id: event.target.value }))}
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              >
+                <option value="">Selecionar unidade</option>
+                {summary?.options.units.map((unit) => (
+                  <option key={unit.id} value={unit.id}>
+                    {unit.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                value={draft.procedure_type}
+                onChange={(event) => setDraft((current) => ({ ...current, procedure_type: event.target.value }))}
+                placeholder="Servico desejado"
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              />
+              <input
+                type="date"
+                value={draft.preferred_date}
+                onChange={(event) => setDraft((current) => ({ ...current, preferred_date: event.target.value }))}
+                className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-1 inline-flex h-11 items-center justify-center rounded-full bg-[var(--booking-primary)] px-4 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? "Salvando..." : "Salvar dados do agendamento"}
+            </button>
+          </form>
+        ) : null}
+      </div>
+
+      {loading && !summary ? (
+        <p className="mt-3 text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
+      ) : null}
+    </aside>
+  );
+}
+
+function WhatsAppOverviewPanel() {
+  const items = [
+    "Link oficial validado para levar o paciente ao WhatsApp da operacao.",
+    "A conversa chega no mesmo inbox usado pela clinica.",
+    "A confirmacao do agendamento continua no canal oficial da assistente.",
+  ];
+
+  return (
+    <aside className="flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
+      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
+        <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
+        Canal protegido
+      </div>
+      <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">Agendamento oficial da clinica</h2>
+      <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+        Essa entrada continua pelo WhatsApp do sistema, com o mesmo padrao operacional usado pela clinica.
+      </p>
+      <div className="mt-4 space-y-3">
+        {items.map((item) => (
+          <div key={item} className="flex gap-3">
+            <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-[var(--booking-primary)]" aria-hidden="true" />
+            <p className="text-sm leading-6 text-[var(--booking-muted)]">{item}</p>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 function WhatsAppCtaPanel({
   loading,
   opening,
@@ -410,6 +794,9 @@ export default function PublicBookingPage() {
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<PublicBookingSummary | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [savingSummary, setSavingSummary] = useState(false);
 
   useEffect(() => {
     if (!clinicSlug || bootstrappedRef.current) return;
@@ -514,6 +901,47 @@ export default function PublicBookingPage() {
     };
   }, []);
 
+  const webchatToken = session?.cta_mode === "webchat" ? session.public_access_token || "" : "";
+
+  const loadSummary = useCallback(async () => {
+    if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
+    setLoadingSummary(true);
+    try {
+      const response = await publicApiFetch<PublicBookingSummary>(
+        `/public/booking/sessions/${session.session_id}/summary`,
+        undefined,
+        { publicAccessToken: webchatToken },
+      );
+      setSummary(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Nao foi possivel atualizar o resumo do agendamento.";
+      if (shouldInvalidatePublicSession(message)) {
+        storeWebchatSession(clinicSlug, null);
+        setSession(null);
+        setError(publicSessionUnavailableMessage(message));
+        return;
+      }
+    } finally {
+      setLoadingSummary(false);
+    }
+  }, [clinicSlug, session, webchatToken]);
+
+  useEffect(() => {
+    if (!session || session.cta_mode !== "webchat" || !webchatToken) {
+      setSummary(null);
+      return;
+    }
+    void loadSummary();
+  }, [loadSummary, session, webchatToken]);
+
+  useEffect(() => {
+    if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
+    const interval = window.setInterval(() => {
+      void loadSummary();
+    }, 4000);
+    return () => window.clearInterval(interval);
+  }, [loadSummary, session, webchatToken]);
+
   const pageStyle = useMemo(() => {
     const branding = profile?.branding;
     return {
@@ -555,6 +983,35 @@ export default function PublicBookingPage() {
         "Agendamento por link indisponivel no momento. Entre em contato com a clinica pelo canal oficial."
       : null;
 
+  async function handleSaveSummary(draft: PublicBookingSummaryDraft) {
+    if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
+    setSavingSummary(true);
+    try {
+      const payload = {
+        full_name: draft.full_name || undefined,
+        email: draft.email || undefined,
+        birth_date: draft.birth_date || undefined,
+        procedure_type: draft.procedure_type || undefined,
+        unit_id: draft.unit_id || undefined,
+        preferred_date: draft.preferred_date || undefined,
+      };
+      const response = await publicApiFetch<PublicBookingSummary>(
+        `/public/booking/sessions/${session.session_id}/summary`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        },
+        { publicAccessToken: webchatToken },
+      );
+      setSummary(response);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nao foi possivel salvar os dados do agendamento.");
+    } finally {
+      setSavingSummary(false);
+    }
+  }
+
   return (
     <main
       className="box-border h-[100dvh] overflow-hidden bg-[var(--booking-background)] px-4 py-4 text-[var(--booking-text)] sm:px-6 sm:py-5 lg:px-10"
@@ -590,49 +1047,17 @@ export default function PublicBookingPage() {
         </header>
 
         <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden p-4 sm:p-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-1 lg:p-6">
-          <aside className="flex min-h-0 flex-col justify-between overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-5 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-6">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
-                <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
-                Canal protegido
-              </div>
-              <h2 className="mt-5 text-3xl font-semibold leading-tight text-stone-950 sm:text-[2rem]">
-                {profile?.link_flow.headline || "Agendamento oficial da clinica"}
-              </h2>
-              <p className="mt-4 text-base leading-7 text-[var(--booking-muted)]">
-                {profile?.link_flow.trust_message ||
-                  "Continue pelo canal oficial para falar com a assistente de agendamento."}
-              </p>
-
-              <div className="mt-6 space-y-3">
-                {[
-                  isWebchat
-                    ? "Converse com a assistente aqui na propria pagina, no mesmo padrao visual do inbox da clinica."
-                    : "Entre pelo WhatsApp oficial e continue no mesmo fluxo operacional usado pela clinica.",
-                  "A jornada fica vinculada ao tenant correto e protegida por sessao segura.",
-                  "Depois da triagem, a assistente segue para disponibilidade e confirmacao do agendamento.",
-                ].map((item) => (
-                  <div key={item} className="flex gap-3">
-                    <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-[var(--booking-primary)]" aria-hidden="true" />
-                    <p className="text-sm leading-6 text-[var(--booking-muted)]">{item}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-8 rounded-[24px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,249,0.92))] p-4 shadow-sm">
-              <p className="text-sm font-semibold text-stone-900">Sessao segura</p>
-              <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
-                {loading
-                  ? "Preparando seu atendimento..."
-                  : session
-                    ? isWebchat
-                      ? "Seu chat oficial esta pronto para receber mensagens da assistente."
-                      : "Seu link oficial esta pronto para abrir o WhatsApp da operacao."
-                    : linkFlowUnavailable || "Nao foi possivel preparar a sessao agora."}
-              </p>
-            </div>
-          </aside>
+          {isWebchat ? (
+            <BookingSummaryPanel
+              clinicName={clinicName}
+              summary={summary}
+              loading={loadingSummary}
+              saving={savingSummary}
+              onSave={handleSaveSummary}
+            />
+          ) : (
+            <WhatsAppOverviewPanel />
+          )}
 
           <div className="flex min-h-0">
             {profile?.link_flow.operational && session && isWebchat ? (
@@ -640,10 +1065,10 @@ export default function PublicBookingPage() {
                 clinicSlug={clinicSlug}
                 clinicName={clinicName}
                 session={session}
-                onExpired={() => {
+                onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);
-                  setError("Sua sessao expirou. Recarregue a pagina para iniciar um novo atendimento.");
+                  setError(publicSessionUnavailableMessage(message || ""));
                 }}
               />
             ) : null}

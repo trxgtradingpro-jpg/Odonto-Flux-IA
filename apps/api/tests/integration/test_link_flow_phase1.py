@@ -415,3 +415,43 @@ def test_public_webchat_creates_conversation_and_returns_safe_messages(monkeypat
         headers={"X-Link-Flow-Token": "wrong"},
     )
     assert wrong_token_response.status_code == 403
+
+
+def test_public_webchat_summary_tracks_auto_and_manual_booking_data(client, seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    _enable_link_flow(db_session, tenant, cta_mode="webchat")
+    db_session.commit()
+
+    session_response = client.post(
+        "/api/v1/public/booking/tenant-b/sessions",
+        json={"browser_session_id": "browser-webchat-summary", "cta_mode": "webchat"},
+    )
+    assert session_response.status_code == 200
+    session_payload = session_response.json()
+    headers = {"X-Link-Flow-Token": session_payload["public_access_token"]}
+
+    summary_response = client.get(
+        f"/api/v1/public/booking/sessions/{session_payload['session_id']}/summary",
+        headers=headers,
+    )
+    assert summary_response.status_code == 200
+    assert summary_response.json()["fields"]["patient_name"]["complete"] is False
+
+    update_response = client.patch(
+        f"/api/v1/public/booking/sessions/{session_payload['session_id']}/summary",
+        json={
+            "full_name": "Maria Souza",
+            "email": "maria@example.com",
+            "birth_date": "1992-04-18",
+            "procedure_type": "Avaliacao inicial",
+            "preferred_date": "2026-06-10",
+        },
+        headers=headers,
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["fields"]["patient_name"]["value"] == "Maria Souza"
+    assert updated["fields"]["patient_name"]["complete"] is True
+    assert updated["fields"]["procedure"]["value"] == "Avaliacao inicial"
+    assert updated["fields"]["preferred_date"]["value"] == "2026-06-10"
+    assert updated["fields"]["email"]["complete"] is True

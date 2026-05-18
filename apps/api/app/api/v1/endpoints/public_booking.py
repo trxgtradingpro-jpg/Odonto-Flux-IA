@@ -23,7 +23,9 @@ from app.services.webchat_service import (
     create_webchat_link_flow_session,
     list_public_webchat_messages,
     post_public_webchat_message,
+    public_webchat_booking_summary,
     public_webchat_session_state,
+    update_public_webchat_booking_summary,
     validate_public_webchat_session,
 )
 from app.services.whatsapp_service import whatsapp_account_issues
@@ -48,6 +50,15 @@ class PublicBookingEventInput(BaseModel):
 class PublicWebchatMessageInput(BaseModel):
     text: str = Field(max_length=1200)
     client_message_id: str | None = Field(default=None, max_length=120)
+
+
+class PublicWebchatSummaryUpdateInput(BaseModel):
+    full_name: str | None = Field(default=None, max_length=180)
+    email: str | None = Field(default=None, max_length=180)
+    birth_date: str | None = Field(default=None, max_length=10)
+    procedure_type: str | None = Field(default=None, max_length=120)
+    unit_id: UUID | None = None
+    preferred_date: str | None = Field(default=None, max_length=10)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -337,6 +348,45 @@ def get_public_booking_session(
         public_access_token=_public_access_token(request),
     )
     return public_webchat_session_state(session)
+
+
+@router.get("/sessions/{session_id}/summary")
+def get_public_webchat_summary(
+    session_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    session, tenant = validate_public_webchat_session(
+        db,
+        session_id=session_id,
+        public_access_token=_public_access_token(request),
+    )
+    return public_webchat_booking_summary(db, session=session, tenant=tenant)
+
+
+@router.patch("/sessions/{session_id}/summary")
+def patch_public_webchat_summary(
+    session_id: UUID,
+    payload: PublicWebchatSummaryUpdateInput,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    session, tenant = validate_public_webchat_session(
+        db,
+        session_id=session_id,
+        public_access_token=_public_access_token(request),
+    )
+    return update_public_webchat_booking_summary(
+        db,
+        session=session,
+        tenant=tenant,
+        full_name=payload.full_name,
+        email=payload.email,
+        birth_date_value=payload.birth_date,
+        procedure_type=payload.procedure_type,
+        unit_id=payload.unit_id,
+        preferred_date=payload.preferred_date,
+    )
 
 
 @router.post("/sessions/{session_id}/chat/messages")

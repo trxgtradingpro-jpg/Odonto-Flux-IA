@@ -11,6 +11,38 @@ const branding = {
   border_color: '#d6d3d1',
 };
 
+const emptySummary: {
+  session_status: string;
+  progress: { complete_count: number; total_count: number };
+  status: { label: string; tone: 'success' | 'progress' | 'pending'; appointment_created: boolean };
+  fields: {
+    patient_name: { value: string | null; complete: boolean; source: string | null };
+    email: { value: string | null; complete: boolean; source: string | null };
+    birth_date: { value: string | null; complete: boolean; source: string | null };
+    unit: { value: string | null; complete: boolean; source: string | null; unit_id: string | null };
+    procedure: { value: string | null; complete: boolean; source: string | null };
+    preferred_date: { value: string | null; complete: boolean; source: string | null };
+    confirmed_slot: { value: string | null; complete: boolean; source: string | null };
+  };
+  appointment: { id: string | null; starts_at: string | null; confirmation_status: string | null };
+  options: { units: Array<{ id: string; name: string }> };
+} = {
+  session_status: 'linked',
+  progress: { complete_count: 0, total_count: 6 },
+  status: { label: 'Coletando dados', tone: 'pending', appointment_created: false },
+  fields: {
+    patient_name: { value: null, complete: false, source: null },
+    email: { value: null, complete: false, source: null },
+    birth_date: { value: null, complete: false, source: null },
+    unit: { value: null, complete: false, source: null, unit_id: null },
+    procedure: { value: null, complete: false, source: null },
+    preferred_date: { value: null, complete: false, source: null },
+    confirmed_slot: { value: null, complete: false, source: null },
+  },
+  appointment: { id: null, starts_at: null, confirmation_status: null },
+  options: { units: [{ id: 'unit-1', name: 'Unidade principal' }] },
+};
+
 test.describe('public link flow landing', () => {
   test('does not create a session or render CTA when link flow is unavailable', async ({ page }) => {
     let sessionCalls = 0;
@@ -79,7 +111,7 @@ test.describe('public link flow landing', () => {
     await page.goto('/agendar/tenant-a');
 
     await expect(page.getByRole('button', { name: /Continuar pelo WhatsApp/i })).toBeVisible();
-    await expect(page.getByText('Seu link oficial esta pronto para abrir o WhatsApp da operacao.')).toBeVisible();
+    await expect(page.getByText('WhatsApp oficial do sistema')).toBeVisible();
   });
 
   test('renders webchat, sends a message and polls assistant replies', async ({ page }) => {
@@ -99,6 +131,9 @@ test.describe('public link flow landing', () => {
     });
     await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
       await route.fulfill({ json: { id: 'evt-webchat', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      await route.fulfill({ json: emptySummary });
     });
     await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
       if (route.request().method() === 'POST') {
@@ -187,6 +222,9 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
       await route.fulfill({ json: { id: 'evt-webchat-mobile', event_name: 'webchat_opened' } });
     });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      await route.fulfill({ json: emptySummary });
+    });
     await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
       await route.fulfill({
         json: {
@@ -226,5 +264,89 @@ test.describe('public link flow landing', () => {
     });
     expect(hasHorizontalOverflow).toBeFalsy();
     expect(pageScrolled).toBeFalsy();
+  });
+
+  test('shows booking checklist progress and manual save states in the left panel', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.clear();
+    });
+
+    let currentSummary = {
+      ...emptySummary,
+      progress: { complete_count: 2, total_count: 6 },
+      fields: {
+        ...emptySummary.fields,
+        patient_name: { value: 'Maria Souza', complete: true, source: 'manual' },
+        email: { value: 'maria@example.com', complete: true, source: 'manual' },
+      },
+    };
+
+    await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000005',
+          expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'webchat',
+          whatsapp_url: null,
+          public_access_token: 'public-token-summary',
+          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
+      await route.fulfill({ json: { id: 'evt-webchat-summary', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      if (route.request().method() === 'PATCH') {
+        currentSummary = {
+          ...currentSummary,
+          progress: { complete_count: 5, total_count: 6 },
+          status: { label: 'Em andamento', tone: 'progress', appointment_created: false },
+          fields: {
+            ...currentSummary.fields,
+            unit: { value: 'Unidade principal', complete: true, source: 'manual', unit_id: 'unit-1' },
+            procedure: { value: 'Avaliacao inicial', complete: true, source: 'manual' },
+            preferred_date: { value: '2026-06-10', complete: true, source: 'manual' },
+          },
+        };
+      }
+      await route.fulfill({ json: currentSummary });
+    });
+    await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
+      await route.fulfill({
+        json: {
+          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A', logo_data_url: null },
+          branding,
+          link_flow: {
+            enabled: true,
+            operational: true,
+            cta_mode: 'webchat',
+            headline: 'Agende com a ClÃ­nica A',
+            trust_message: 'Atendimento oficial pela pagina.',
+            button_label: 'Iniciar chat',
+            unavailable_message: null,
+          },
+        },
+      });
+    });
+
+    await page.goto('/agendar/tenant-a');
+
+    await expect(page.getByText('Resumo do atendimento')).toBeVisible();
+    await expect(page.getByText('Maria Souza')).toBeVisible();
+    await expect(page.getByText('Complementar manualmente')).toBeVisible();
+    await page.getByRole('button', { name: /Editar/i }).click();
+    await page.getByPlaceholder('Servico desejado').fill('Avaliacao inicial');
+    await page.getByRole('combobox').selectOption('unit-1');
+    await page.locator('input[type="date"]').nth(1).fill('2026-06-10');
+    await page.getByRole('button', { name: /Salvar dados do agendamento/i }).click();
+
+    await expect(page.getByText('Unidade principal')).toBeVisible();
+    await expect(page.getByText('Avaliacao inicial')).toBeVisible();
+    await expect(page.getByText('10/06/2026')).toBeVisible();
+    await expect(page.getByText('5/6 itens prontos')).toBeVisible();
   });
 });

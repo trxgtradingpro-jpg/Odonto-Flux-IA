@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApiError
-from app.models import Conversation, LinkFlowSession, Message, Patient, Tenant
+from app.models import Appointment, Conversation, LinkFlowEvent, LinkFlowSession, Message, Patient, Tenant, Unit
 from app.models.enums import MessageDirection, MessageStatus
 from app.services.link_flow_service import (
     LINK_FLOW_ACTIVE_STATUSES,
@@ -35,6 +35,11 @@ class WebchatSessionBundle:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _placeholder_patient_name(value: str | None) -> bool:
+    normalized = str(value or "").strip().casefold()
+    return not normalized or normalized in {"paciente webchat", "paciente", "novo paciente"}
 
 
 def _hash_token(raw_token: str) -> str:
@@ -410,6 +415,233 @@ def list_public_webchat_messages(
 
     messages = db.execute(stmt.order_by(Message.created_at.asc()).limit(max(1, min(limit, 100)))).scalars().all()
     return [serialize_public_webchat_message(message) for message in messages]
+
+
+def _latest_public_summary_draft(db: Session, *, session: LinkFlowSession) -> dict[str, Any]:
+    event = db.scalar(
+        select(LinkFlowEvent)
+        .where(
+            LinkFlowEvent.link_flow_session_id == session.id,
+            LinkFlowEvent.event_name == "webchat_summary_updated",
+        )
+        .order_by(desc(LinkFlowEvent.occurred_at), desc(LinkFlowEvent.created_at))
+        .limit(1)
+    )
+    return event.payload if event and isinstance(event.payload, dict) else {}
+
+
+def _unit_name_by_id(db: Session, *, tenant_id: UUID, unit_id: UUID | None) -> str | None:
+    if not unit_id:
+        return None
+    unit = db.scalar(
+        select(Unit).where(
+            Unit.id == unit_id,
+            Unit.tenant_id == tenant_id,
+            Unit.is_active.is_(True),
+        )
+    )
+    return unit.name if unit else None
+
+
+def _clean_summary_text(value: Any, *, max_length: int = 140) -> str | None:
+    text = " ".join(str(value or "").strip().split())
+    return text[:max_length] if text else None
+
+
+def _parse_summary_birth_date(value: Any) -> date | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ApiError(
+            status_code=422,
+            code="WEBCHAT_SUMMARY_BIRTH_DATE_INVALID",
+            message="Data de nascimento invalida.",
+        ) from exc
+    return parsed
+
+
+def _parse_summary_preferred_date(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError as exc:
+        raise ApiError(
+            status_code=422,
+            code="WEBCHAT_SUMMARY_PREFERRED_DATE_INVALID",
+            message="Data preferencial invalida.",
+        ) from exc
+
+
+def _summary_value(value: Any, *, source: str | None = None) -> dict[str, Any]:
+    text = None if value is None else str(value).strip()
+    complete = bool(text)
+    return {
+        "value": text or None,
+        "complete": complete,
+        "source": source if complete and source else None,
+    }
+
+
+def public_webchat_booking_summary(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+) -> dict[str, Any]:
+    patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
+    conversation = db.get(Conversation, session.linked_conversation_id) if session.linked_conversation_id else None
+    appointment = db.get(Appointment, session.linked_appointment_id) if session.linked_appointment_id else None
+    draft = _latest_public_summary_draft(db, session=session)
+
+    patient_name = None if _placeholder_patient_name(patient.full_name if patient else None) else _clean_summary_text(patient.full_name if patient else None, max_length=180)
+    patient_email = _clean_summary_text(patient.email if patient else None, max_length=180)
+    birth_date_value = patient.birth_date.isoformat() if patient and patient.birth_date else None
+
+    draft_unit_id: UUID | None = None
+    raw_draft_unit_id = draft.get("unit_id")
+    if raw_draft_unit_id:
+        try:
+            draft_unit_id = UUID(str(raw_draft_unit_id))
+        except (TypeError, ValueError):
+            draft_unit_id = None
+
+    current_unit_id = (
+        appointment.unit_id
+        if appointment
+        else conversation.unit_id if conversation and conversation.unit_id else patient.unit_id if patient and patient.unit_id else session.unit_id or draft_unit_id
+    )
+    unit_name = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=current_unit_id)
+
+    procedure_value = _clean_summary_text(
+        appointment.procedure_type if appointment and appointment.procedure_type else draft.get("procedure_type"),
+        max_length=120,
+    )
+    preferred_date = _parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None
+    confirmed_slot = appointment.starts_at.isoformat() if appointment and appointment.starts_at else None
+
+    fields = {
+        "patient_name": _summary_value(patient_name, source="auto" if patient_name else None),
+        "email": _summary_value(patient_email, source="auto" if patient_email else None),
+        "birth_date": _summary_value(birth_date_value, source="auto" if birth_date_value else None),
+        "unit": {
+            **_summary_value(unit_name, source="auto" if appointment or (conversation and conversation.unit_id) or (patient and patient.unit_id) or session.unit_id else "manual"),
+            "unit_id": str(current_unit_id) if current_unit_id else None,
+        },
+        "procedure": _summary_value(procedure_value, source="auto" if appointment and appointment.procedure_type else "manual"),
+        "preferred_date": _summary_value(preferred_date, source="manual"),
+        "confirmed_slot": _summary_value(confirmed_slot, source="auto"),
+    }
+
+    completion_order = ["patient_name", "email", "birth_date", "unit", "procedure", "confirmed_slot"]
+    complete_count = sum(1 for key in completion_order if bool(fields[key]["complete"]))
+
+    units = db.execute(
+        select(Unit)
+        .where(Unit.tenant_id == tenant.id, Unit.is_active.is_(True))
+        .order_by(Unit.name.asc())
+        .limit(20)
+    ).scalars().all()
+
+    appointment_status = "Agendado" if appointment else "Em andamento" if complete_count >= 2 else "Coletando dados"
+    appointment_tone = "success" if appointment else "progress" if complete_count >= 2 else "pending"
+
+    return {
+        "session_status": session.status,
+        "progress": {
+            "complete_count": complete_count,
+            "total_count": len(completion_order),
+        },
+        "status": {
+            "label": appointment_status,
+            "tone": appointment_tone,
+            "appointment_created": bool(appointment),
+        },
+        "fields": fields,
+        "appointment": {
+            "id": str(appointment.id) if appointment else None,
+            "starts_at": confirmed_slot,
+            "confirmation_status": appointment.confirmation_status if appointment else None,
+        },
+        "options": {
+            "units": [{"id": str(unit.id), "name": unit.name} for unit in units],
+        },
+    }
+
+
+def update_public_webchat_booking_summary(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+    full_name: str | None = None,
+    email: str | None = None,
+    birth_date_value: str | None = None,
+    procedure_type: str | None = None,
+    unit_id: UUID | None = None,
+    preferred_date: str | None = None,
+) -> dict[str, Any]:
+    patient = _ensure_webchat_patient(db, session=session, tenant=tenant)
+    draft = _latest_public_summary_draft(db, session=session)
+
+    normalized_name = _clean_summary_text(full_name, max_length=180)
+    if normalized_name:
+        patient.full_name = normalized_name
+
+    normalized_email = _clean_summary_text(email, max_length=180)
+    if normalized_email:
+        patient.email = normalized_email
+
+    parsed_birth_date = _parse_summary_birth_date(birth_date_value)
+    if parsed_birth_date:
+        patient.birth_date = parsed_birth_date
+
+    normalized_procedure = _clean_summary_text(procedure_type, max_length=120)
+    if normalized_procedure:
+        draft["procedure_type"] = normalized_procedure
+
+    parsed_preferred_date = _parse_summary_preferred_date(preferred_date)
+    if parsed_preferred_date:
+        draft["preferred_date"] = parsed_preferred_date
+
+    if unit_id:
+        unit = db.scalar(
+            select(Unit).where(
+                Unit.id == unit_id,
+                Unit.tenant_id == tenant.id,
+                Unit.is_active.is_(True),
+            )
+        )
+        if not unit:
+            raise ApiError(
+                status_code=404,
+                code="WEBCHAT_SUMMARY_UNIT_NOT_FOUND",
+                message="Unidade nao encontrada para este agendamento.",
+            )
+        session.unit_id = unit.id
+        patient.unit_id = unit.id
+        draft["unit_id"] = str(unit.id)
+        if session.linked_conversation_id:
+            conversation = db.get(Conversation, session.linked_conversation_id)
+            if conversation and conversation.tenant_id == tenant.id:
+                conversation.unit_id = unit.id
+                db.add(conversation)
+
+    db.add(patient)
+    db.add(session)
+    register_link_flow_event(
+        db,
+        session=session,
+        event_name="webchat_summary_updated",
+        payload=draft,
+    )
+    db.commit()
+    db.refresh(session)
+    return public_webchat_booking_summary(db, session=session, tenant=tenant)
 
 
 def post_public_webchat_message(
