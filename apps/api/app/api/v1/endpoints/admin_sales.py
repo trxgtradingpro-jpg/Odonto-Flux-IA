@@ -61,6 +61,7 @@ from app.schemas.admin_sales import (
     SalesClinicMessageListOutput,
     SalesClinicMessagePreviewInput,
     SalesClinicMessagePreviewOutput,
+    SalesMessageTemplateInput,
     SalesMessageTemplateOutput,
 )
 from app.services import sales_demo_service as sales
@@ -433,9 +434,43 @@ def list_prospects(
 
 
 @router.get("/admin/clinic-messages/templates", response_model=list[SalesMessageTemplateOutput])
-def list_clinic_message_templates(principal=Depends(get_current_principal)):
+def list_clinic_message_templates(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
     sales.require_sales_principal(principal)
-    return sales_messages.list_sales_message_templates()
+    return sales_messages.list_sales_message_templates(db)
+
+
+@router.post("/admin/clinic-messages/templates", response_model=SalesMessageTemplateOutput)
+def create_clinic_message_template(
+    payload: SalesMessageTemplateInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    return sales_messages.create_sales_message_template(db, payload.model_dump())
+
+
+@router.put("/admin/clinic-messages/templates/{template_key}", response_model=SalesMessageTemplateOutput)
+def update_clinic_message_template(
+    template_key: str,
+    payload: SalesMessageTemplateInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    return sales_messages.update_sales_message_template(db, template_key, payload.model_dump())
+
+
+@router.delete("/admin/clinic-messages/templates/{template_key}", response_model=list[SalesMessageTemplateOutput])
+def delete_clinic_message_template(
+    template_key: str,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    return sales_messages.delete_sales_message_template(db, template_key)
 
 
 @router.get("/admin/clinic-messages", response_model=SalesClinicMessageListOutput)
@@ -497,7 +532,7 @@ def list_clinic_messages(
         "total": total,
         "limit": limit,
         "offset": offset,
-        "templates": sales_messages.list_sales_message_templates(),
+        "templates": sales_messages.list_sales_message_templates(db),
     }
 
 
@@ -514,6 +549,7 @@ def preview_clinic_message(
         db,
         prospect=prospect,
         template_key=payload.template_key,
+        message_key=payload.message_key,
         actor_id=principal.user.id,
         base_url=_base_url(request),
         issue_demo_access=payload.issue_demo_access,
@@ -538,6 +574,7 @@ def record_clinic_message_event(
         event_name=payload.event_name,
         actor_id=principal.user.id,
         template_key=payload.template_key,
+        message_key=payload.message_key,
         message_snapshot=payload.message_snapshot,
         demo_login_url=payload.demo_login_url,
         channel=payload.channel,

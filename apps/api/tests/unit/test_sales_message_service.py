@@ -39,6 +39,7 @@ def test_build_sales_message_preview_adds_demo_link_at_the_end(seeded_db, db_ses
 
     assert preview["can_copy"] is True
     assert preview["demo_login_url"]
+    assert preview["message_key"] == "principal"
     assert preview["message_text"].endswith(preview["demo_login_url"])
     assert "Perde paciente no WhatsApp" in preview["message_text"]
 
@@ -85,6 +86,7 @@ def test_record_sales_message_contact_event_updates_contact_status(seeded_db, db
         event_name="contact_registered",
         actor_id=seeded_db["admin"].id,
         template_key="primeiro_contato",
+        message_key="principal",
         message_snapshot="Mensagem enviada",
         demo_login_url="http://localhost:3000/login?demo_token=abc",
         channel="whatsapp_manual",
@@ -95,3 +97,62 @@ def test_record_sales_message_contact_event_updates_contact_status(seeded_db, db
     assert prospect.status == "contato_iniciado"
     assert prospect.first_contact_channel == "whatsapp_manual"
     assert prospect.first_contact_at is not None
+
+
+def test_sales_message_templates_can_be_created_updated_and_used(seeded_db, db_session):
+    prospect = _create_demo_prospect(db_session, seeded_db)
+
+    created = sales_message_service.create_sales_message_template(
+        db_session,
+        {
+            "key": "teste_personalizado",
+            "label": "Teste personalizado",
+            "description": "Template editavel do ADM.",
+            "recommended_for": ["demo_acessada"],
+            "messages": [
+                {
+                    "key": "curta",
+                    "label": "Curta",
+                    "body": "Oi, {contact_name}. Demo da {clinic_name}: {demo_link}",
+                    "is_default": True,
+                },
+                {
+                    "key": "longa",
+                    "label": "Longa",
+                    "body": "Mensagem longa para {clinic_name}. Dor: {pain_sentence}. Link: {demo_link}",
+                    "is_default": False,
+                },
+            ],
+        },
+    )
+
+    assert created["key"] == "teste_personalizado"
+    assert len(created["messages"]) == 2
+
+    updated = sales_message_service.update_sales_message_template(
+        db_session,
+        "teste_personalizado",
+        {
+            **created,
+            "label": "Teste editado",
+            "messages": [
+                {**created["messages"][0], "body": "Texto editado para {clinic_name}: {demo_link}"},
+                {**created["messages"][1], "is_default": True},
+            ],
+        },
+    )
+    assert updated["label"] == "Teste editado"
+    assert updated["messages"][1]["is_default"] is True
+
+    preview = sales_message_service.build_sales_message_preview(
+        db_session,
+        prospect=prospect,
+        template_key="teste_personalizado",
+        message_key="longa",
+        actor_id=seeded_db["admin"].id,
+        base_url="http://localhost:3000",
+    )
+
+    assert preview["template_key"] == "teste_personalizado"
+    assert preview["message_key"] == "longa"
+    assert "Mensagem longa" in preview["message_text"]

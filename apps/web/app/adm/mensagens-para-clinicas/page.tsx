@@ -14,11 +14,14 @@ import {
   ExternalLink,
   MessageSquareText,
   PhoneCall,
+  Plus,
   RefreshCw,
+  Save,
   Search,
   Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,12 +51,28 @@ type Prospect = {
   demo_first_login_at?: string | null;
 };
 
+type SalesTemplateMessage = {
+  key: string;
+  label: string;
+  body: string;
+  is_default: boolean;
+};
+
 type SalesTemplate = {
   key: string;
   label: string;
   description: string;
   recommended_for: string[];
   body: string;
+  messages: SalesTemplateMessage[];
+};
+
+type TemplateDraft = {
+  key: string;
+  label: string;
+  description: string;
+  recommended_for_text: string;
+  messages: SalesTemplateMessage[];
 };
 
 type ClinicMessageItem = {
@@ -80,6 +99,8 @@ type MessagePreview = {
   prospect: Prospect;
   template_key: string;
   template_label: string;
+  message_key: string;
+  message_label: string;
   message_text: string;
   demo_login_url?: string | null;
   can_copy: boolean;
@@ -163,6 +184,54 @@ async function copyToClipboard(value: string) {
   document.body.removeChild(element);
 }
 
+function templateToDraft(template?: SalesTemplate | null): TemplateDraft {
+  return {
+    key: template?.key || "",
+    label: template?.label || "Novo template",
+    description: template?.description || "",
+    recommended_for_text: (template?.recommended_for || []).join(", "),
+    messages:
+      template?.messages?.length
+        ? template.messages.map((message) => ({ ...message }))
+        : [
+            {
+              key: "principal",
+              label: "Mensagem principal",
+              body:
+                "Oi, {contact_name}! Tudo bem?\n\n" +
+                "Preparei uma demo personalizada da {clinic_name}.\n\n" +
+                "Link oficial da demo:\n{demo_link}",
+              is_default: true,
+            },
+          ],
+  };
+}
+
+function draftToPayload(draft: TemplateDraft) {
+  return {
+    key: draft.key || null,
+    label: draft.label,
+    description: draft.description,
+    recommended_for: draft.recommended_for_text
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    messages: draft.messages.map((message, index) => ({
+      ...message,
+      is_default: message.is_default || index === 0,
+    })),
+  };
+}
+
+function newTemplateMessage(index: number): SalesTemplateMessage {
+  return {
+    key: `mensagem_${index + 1}`,
+    label: `Mensagem ${index + 1}`,
+    body: "Oi, {contact_name}! Tudo bem?\n\nLink oficial da demo da {clinic_name}:\n{demo_link}",
+    is_default: index === 0,
+  };
+}
+
 export default function ClinicMessagesPage() {
   const queryClient = useQueryClient();
   const [hasToken, setHasToken] = useState(false);
@@ -173,7 +242,11 @@ export default function ClinicMessagesPage() {
   const [demoStatusFilter, setDemoStatusFilter] = useState("");
   const [hasDemoFilter, setHasDemoFilter] = useState("");
   const [templateKey, setTemplateKey] = useState("");
+  const [messageKey, setMessageKey] = useState("");
   const [preview, setPreview] = useState<MessagePreview | null>(null);
+  const [viewMode, setViewMode] = useState<"clinics" | "templates">("clinics");
+  const [editingTemplateKey, setEditingTemplateKey] = useState<string | null>(null);
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
 
   useEffect(() => {
     setHasToken(Boolean(getAdminAccessToken()));
@@ -218,6 +291,14 @@ export default function ClinicMessagesPage() {
     () => messagesQuery.data?.templates ?? templatesQuery.data ?? [],
     [messagesQuery.data?.templates, templatesQuery.data],
   );
+  const selectedTemplate = useMemo(
+    () => templates.find((template) => template.key === templateKey) ?? templates[0] ?? null,
+    [templateKey, templates],
+  );
+  const selectedTemplateMessage = useMemo(() => {
+    const messages = selectedTemplate?.messages ?? [];
+    return messages.find((message) => message.key === messageKey) ?? messages.find((message) => message.is_default) ?? messages[0] ?? null;
+  }, [messageKey, selectedTemplate]);
 
   const selectedItem = useMemo(() => {
     return items.find((item) => item.prospect.id === selectedId) ?? items[0] ?? null;
@@ -237,24 +318,46 @@ export default function ClinicMessagesPage() {
     setPreview(null);
   }, [selectedProspectId, selectedSuggestedTemplateKey]);
 
+  useEffect(() => {
+    if (!selectedTemplate) return;
+    const defaultMessage =
+      selectedTemplate.messages.find((message) => message.is_default) ?? selectedTemplate.messages[0] ?? null;
+    if (defaultMessage && !selectedTemplate.messages.some((message) => message.key === messageKey)) {
+      setMessageKey(defaultMessage.key);
+    }
+  }, [messageKey, selectedTemplate]);
+
+  useEffect(() => {
+    const currentTemplate =
+      templates.find((template) => template.key === editingTemplateKey) ?? templates[0] ?? null;
+    if (!templateDraft && currentTemplate) {
+      setEditingTemplateKey(currentTemplate.key);
+      setTemplateDraft(templateToDraft(currentTemplate));
+    }
+  }, [editingTemplateKey, templateDraft, templates]);
+
   const previewMutation = useMutation({
     mutationFn: async ({
       prospectId,
       selectedTemplateKey,
+      selectedMessageKey,
     }: {
       prospectId: string;
       selectedTemplateKey: string;
+      selectedMessageKey: string;
     }) =>
       (
         await api.post<MessagePreview>("/admin/clinic-messages/preview", {
           prospect_id: prospectId,
           template_key: selectedTemplateKey || null,
+          message_key: selectedMessageKey || null,
           issue_demo_access: true,
         })
       ).data,
     onSuccess: (data) => {
       setPreview(data);
       setTemplateKey(data.template_key);
+      setMessageKey(data.message_key);
       queryClient.invalidateQueries({ queryKey: ["adm-clinic-messages"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
     },
@@ -279,6 +382,7 @@ export default function ClinicMessagesPage() {
         await api.post(`/admin/clinic-messages/${prospectId}/events`, {
           event_name: eventName,
           template_key: currentPreview?.template_key || templateKey || null,
+          message_key: currentPreview?.message_key || messageKey || null,
           message_snapshot: currentPreview?.message_text || null,
           demo_login_url: currentPreview?.demo_login_url || null,
           channel: "whatsapp_manual",
@@ -294,6 +398,43 @@ export default function ClinicMessagesPage() {
     },
   });
 
+  const saveTemplateMutation = useMutation({
+    mutationFn: async ({ draft, originalKey }: { draft: TemplateDraft; originalKey: string | null }) => {
+      const payload = draftToPayload(draft);
+      if (originalKey) {
+        return (await api.put<SalesTemplate>(`/admin/clinic-messages/templates/${originalKey}`, payload)).data;
+      }
+      return (await api.post<SalesTemplate>("/admin/clinic-messages/templates", payload)).data;
+    },
+    onSuccess: (template) => {
+      toast.success("Template salvo.");
+      setEditingTemplateKey(template.key);
+      setTemplateDraft(templateToDraft(template));
+      setTemplateKey(template.key);
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-message-templates"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-messages"] });
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel salvar o template."));
+    },
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (targetKey: string) =>
+      (await api.delete<SalesTemplate[]>(`/admin/clinic-messages/templates/${targetKey}`)).data,
+    onSuccess: (templatesAfterDelete) => {
+      toast.success("Template removido.");
+      const nextTemplate = templatesAfterDelete[0] ?? null;
+      setEditingTemplateKey(nextTemplate?.key ?? null);
+      setTemplateDraft(templateToDraft(nextTemplate));
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-message-templates"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-messages"] });
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel remover o template."));
+    },
+  });
+
   const totals = useMemo(() => {
     const withDemo = items.filter((item) => item.demo_ready).length;
     const blocked = items.filter((item) => item.prospect.do_not_contact).length;
@@ -301,12 +442,75 @@ export default function ClinicMessagesPage() {
     return { withDemo, blocked, hot };
   }, [items]);
 
+  function selectTemplateForEditing(template: SalesTemplate) {
+    setEditingTemplateKey(template.key);
+    setTemplateDraft(templateToDraft(template));
+  }
+
+  function startNewTemplate() {
+    setEditingTemplateKey(null);
+    setTemplateDraft(templateToDraft(null));
+    setViewMode("templates");
+  }
+
+  function updateTemplateDraft(patch: Partial<TemplateDraft>) {
+    setTemplateDraft((current) => (current ? { ...current, ...patch } : current));
+  }
+
+  function updateTemplateMessage(index: number, patch: Partial<SalesTemplateMessage>) {
+    setTemplateDraft((current) => {
+      if (!current) return current;
+      const messages = current.messages.map((message, messageIndex) =>
+        messageIndex === index ? { ...message, ...patch } : message,
+      );
+      if (patch.is_default) {
+        messages.forEach((message, messageIndex) => {
+          message.is_default = messageIndex === index;
+        });
+      }
+      return { ...current, messages };
+    });
+  }
+
+  function addTemplateMessage() {
+    setTemplateDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        messages: [...current.messages, newTemplateMessage(current.messages.length)],
+      };
+    });
+  }
+
+  function removeTemplateMessage(index: number) {
+    setTemplateDraft((current) => {
+      if (!current || current.messages.length <= 1) return current;
+      const messages = current.messages.filter((_message, messageIndex) => messageIndex !== index);
+      if (!messages.some((message) => message.is_default)) {
+        messages[0].is_default = true;
+      }
+      return { ...current, messages };
+    });
+  }
+
+  function saveTemplateDraft() {
+    if (!templateDraft) return;
+    saveTemplateMutation.mutate({ draft: templateDraft, originalKey: editingTemplateKey });
+  }
+
+  function deleteCurrentTemplate() {
+    if (!editingTemplateKey) return;
+    if (!window.confirm("Remover este template de mensagens?")) return;
+    deleteTemplateMutation.mutate(editingTemplateKey);
+  }
+
   async function generatePreview(copyAfter = false) {
     if (!selectedItem) return;
     try {
       const data = await previewMutation.mutateAsync({
         prospectId: selectedItem.prospect.id,
         selectedTemplateKey: templateKey || selectedItem.suggested_template_key,
+        selectedMessageKey: messageKey || selectedTemplateMessage?.key || "",
       });
       if (copyAfter) await copyMessage(data);
     } catch {
@@ -452,6 +656,46 @@ export default function ClinicMessagesPage() {
           </div>
         </section>
 
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-stone-200 bg-white p-2">
+          <Button
+            variant={viewMode === "clinics" ? "default" : "ghost"}
+            className={cn(viewMode === "clinics" && "bg-stone-950 text-white hover:bg-stone-800")}
+            onClick={() => setViewMode("clinics")}
+          >
+            <MessageSquareText size={16} />
+            Mensagens por clinica
+          </Button>
+          <Button
+            variant={viewMode === "templates" ? "default" : "ghost"}
+            className={cn(viewMode === "templates" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+            onClick={() => setViewMode("templates")}
+          >
+            <Save size={16} />
+            Editar templates
+          </Button>
+          <Button variant="outline" onClick={startNewTemplate}>
+            <Plus size={16} />
+            Novo template
+          </Button>
+        </div>
+
+        {viewMode === "templates" ? (
+          <TemplateEditorPanel
+            templates={templates}
+            editingTemplateKey={editingTemplateKey}
+            templateDraft={templateDraft}
+            onSelectTemplate={selectTemplateForEditing}
+            onNewTemplate={startNewTemplate}
+            onDraftChange={updateTemplateDraft}
+            onMessageChange={updateTemplateMessage}
+            onAddMessage={addTemplateMessage}
+            onRemoveMessage={removeTemplateMessage}
+            onSave={saveTemplateDraft}
+            onDelete={deleteCurrentTemplate}
+            saving={saveTemplateMutation.isPending}
+            deleting={deleteTemplateMutation.isPending}
+          />
+        ) : (
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_560px]">
           <div className="space-y-4">
             <Card className="border-stone-200 bg-white">
@@ -605,6 +849,10 @@ export default function ClinicMessagesPage() {
                         value={templateKey}
                         onChange={(event) => {
                           setTemplateKey(event.target.value);
+                          const nextTemplate = templates.find((template) => template.key === event.target.value);
+                          const nextMessage =
+                            nextTemplate?.messages.find((message) => message.is_default) ?? nextTemplate?.messages[0];
+                          setMessageKey(nextMessage?.key ?? "");
                           setPreview(null);
                         }}
                       >
@@ -616,6 +864,29 @@ export default function ClinicMessagesPage() {
                       </select>
                       <span className="block text-xs leading-5 text-stone-500">
                         Sugestao do sistema: {humanize(selectedItem.suggested_template_key)}.
+                      </span>
+                    </label>
+
+                    <label className="block space-y-2">
+                      <span className="text-xs font-bold uppercase tracking-wide text-stone-500">
+                        Mensagem dentro do template
+                      </span>
+                      <select
+                        className="h-11 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800"
+                        value={messageKey}
+                        onChange={(event) => {
+                          setMessageKey(event.target.value);
+                          setPreview(null);
+                        }}
+                      >
+                        {(selectedTemplate?.messages ?? []).map((message) => (
+                          <option key={message.key} value={message.key}>
+                            {message.label}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="block text-xs leading-5 text-stone-500">
+                        Para alterar ou criar mensagens, abra a aba Editar templates acima.
                       </span>
                     </label>
 
@@ -693,8 +964,238 @@ export default function ClinicMessagesPage() {
             </Card>
           </aside>
         </section>
+        )}
       </div>
     </main>
+  );
+}
+
+function TemplateEditorPanel({
+  templates,
+  editingTemplateKey,
+  templateDraft,
+  onSelectTemplate,
+  onNewTemplate,
+  onDraftChange,
+  onMessageChange,
+  onAddMessage,
+  onRemoveMessage,
+  onSave,
+  onDelete,
+  saving,
+  deleting,
+}: {
+  templates: SalesTemplate[];
+  editingTemplateKey: string | null;
+  templateDraft: TemplateDraft | null;
+  onSelectTemplate: (template: SalesTemplate) => void;
+  onNewTemplate: () => void;
+  onDraftChange: (patch: Partial<TemplateDraft>) => void;
+  onMessageChange: (index: number, patch: Partial<SalesTemplateMessage>) => void;
+  onAddMessage: () => void;
+  onRemoveMessage: (index: number) => void;
+  onSave: () => void;
+  onDelete: () => void;
+  saving: boolean;
+  deleting: boolean;
+}) {
+  return (
+    <section className="grid gap-4 xl:grid-cols-[390px_minmax(0,1fr)]">
+      <Card className="border-stone-200 bg-white">
+        <CardContent className="space-y-4 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Biblioteca</p>
+              <h2 className="text-xl font-black">Templates</h2>
+            </div>
+            <Button variant="outline" onClick={onNewTemplate}>
+              <Plus size={16} />
+              Novo
+            </Button>
+          </div>
+          <div className="max-h-[720px] space-y-2 overflow-auto pr-1">
+            {templates.map((template) => (
+              <button
+                key={template.key}
+                type="button"
+                onClick={() => onSelectTemplate(template)}
+                className={cn(
+                  "w-full rounded-2xl border p-4 text-left transition hover:bg-stone-50",
+                  editingTemplateKey === template.key
+                    ? "border-emerald-300 bg-emerald-50"
+                    : "border-stone-200 bg-white",
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-black text-stone-950">{template.label}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-stone-500">{template.description}</p>
+                  </div>
+                  <Badge className="border-stone-200 bg-stone-100 text-stone-700">
+                    {template.messages.length} msg
+                  </Badge>
+                </div>
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-stone-200 bg-white">
+        <CardContent className="space-y-5 p-5">
+          {templateDraft ? (
+            <>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">
+                    Editor de template
+                  </p>
+                  <h2 className="mt-1 text-2xl font-black">
+                    {editingTemplateKey ? "Editar template existente" : "Criar novo template"}
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
+                    Use variaveis como <code>{"{clinic_name}"}</code>, <code>{"{contact_name}"}</code>,{" "}
+                    <code>{"{pain_sentence}"}</code> e <code>{"{demo_link}"}</code>. O link da demo fica seguro e
+                    temporario quando a mensagem e gerada.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="bg-emerald-600 text-white hover:bg-emerald-500"
+                    onClick={onSave}
+                    disabled={saving || !templateDraft.label.trim()}
+                  >
+                    <Save size={16} />
+                    {saving ? "Salvando..." : "Salvar template"}
+                  </Button>
+                  {editingTemplateKey ? (
+                    <Button variant="outline" onClick={onDelete} disabled={deleting}>
+                      <Trash2 size={16} />
+                      Excluir
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-[220px_1fr]">
+                <label className="block space-y-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Chave</span>
+                  <Input
+                    value={templateDraft.key}
+                    onChange={(event) => onDraftChange({ key: event.target.value })}
+                    placeholder="primeiro_contato"
+                    disabled={Boolean(editingTemplateKey)}
+                  />
+                  <span className="block text-xs text-stone-500">
+                    A chave fica travada depois de salvar para nao quebrar historico.
+                  </span>
+                </label>
+                <label className="block space-y-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Nome do template</span>
+                  <Input
+                    value={templateDraft.label}
+                    onChange={(event) => onDraftChange({ label: event.target.value })}
+                    placeholder="Primeira mensagem"
+                  />
+                </label>
+              </div>
+
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Descricao</span>
+                <Input
+                  value={templateDraft.description}
+                  onChange={(event) => onDraftChange({ description: event.target.value })}
+                  placeholder="Quando usar este template"
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-stone-500">
+                  Status recomendados
+                </span>
+                <Input
+                  value={templateDraft.recommended_for_text}
+                  onChange={(event) => onDraftChange({ recommended_for_text: event.target.value })}
+                  placeholder="novo, pesquisado, demo_acessada"
+                />
+                <span className="block text-xs text-stone-500">
+                  Separe por virgula. Isso ajuda o sistema a sugerir o template certo para cada clinica.
+                </span>
+              </label>
+
+              <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">
+                      Mensagens deste template
+                    </p>
+                    <h3 className="text-lg font-black">Crie quantas variacoes quiser</h3>
+                  </div>
+                  <Button variant="outline" onClick={onAddMessage}>
+                    <Plus size={16} />
+                    Adicionar mensagem
+                  </Button>
+                </div>
+
+                <div className="mt-4 space-y-4">
+                  {templateDraft.messages.map((message, index) => (
+                    <div key={`${message.key}-${index}`} className="rounded-2xl border border-stone-200 bg-white p-4">
+                      <div className="grid gap-3 lg:grid-cols-[190px_1fr_auto]">
+                        <label className="block space-y-2">
+                          <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Chave</span>
+                          <Input
+                            value={message.key}
+                            onChange={(event) => onMessageChange(index, { key: event.target.value })}
+                            placeholder="principal"
+                          />
+                        </label>
+                        <label className="block space-y-2">
+                          <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Nome</span>
+                          <Input
+                            value={message.label}
+                            onChange={(event) => onMessageChange(index, { label: event.target.value })}
+                            placeholder="Mensagem principal"
+                          />
+                        </label>
+                        <div className="flex items-end gap-2">
+                          <label className="flex h-10 items-center gap-2 rounded-lg border border-stone-200 px-3 text-xs font-bold text-stone-600">
+                            <input
+                              type="checkbox"
+                              checked={message.is_default}
+                              onChange={(event) => onMessageChange(index, { is_default: event.target.checked })}
+                            />
+                            Padrao
+                          </label>
+                          <Button
+                            variant="outline"
+                            onClick={() => onRemoveMessage(index)}
+                            disabled={templateDraft.messages.length <= 1}
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                        </div>
+                      </div>
+                      <label className="mt-3 block space-y-2">
+                        <span className="text-xs font-bold uppercase tracking-wide text-stone-500">
+                          Texto da mensagem
+                        </span>
+                        <textarea
+                          className="min-h-[220px] w-full resize-y rounded-2xl border border-stone-200 bg-stone-50 p-4 font-mono text-sm leading-6 text-stone-800 outline-none transition focus:border-emerald-400 focus:bg-white"
+                          value={message.body}
+                          onChange={(event) => onMessageChange(index, { body: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="py-16 text-center text-stone-500">Carregando editor de templates...</div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 

@@ -11,7 +11,7 @@ linha usa `ProspectAccount`, os dados comerciais ja preenchidos e a demo vincula
 1. O operador entra no `/adm` e abre `Mensagens prontas`.
 2. Filtra por clinica, status, temperatura, demo ou busca livre.
 3. Seleciona a clinica cadastrada no CRM.
-4. Escolhe um template ou usa a sugestao automatica.
+4. Escolhe um template e uma mensagem/variacao dentro dele, ou usa a sugestao automatica.
 5. Clica em `Gerar mensagem pronta`.
 6. O backend emite um novo link temporario da demo quando a demo ja existe.
 7. A mensagem e renderizada com o link oficial no final.
@@ -22,8 +22,41 @@ linha usa `ProspectAccount`, os dados comerciais ja preenchidos e a demo vincula
 
 - `GET /api/v1/admin/clinic-messages`
 - `GET /api/v1/admin/clinic-messages/templates`
+- `POST /api/v1/admin/clinic-messages/templates`
+- `PUT /api/v1/admin/clinic-messages/templates/{template_key}`
+- `DELETE /api/v1/admin/clinic-messages/templates/{template_key}`
 - `POST /api/v1/admin/clinic-messages/preview`
 - `POST /api/v1/admin/clinic-messages/{prospect_id}/events`
+
+## Editor de templates
+
+A aba `Editar templates` permite:
+
+- editar nome, descricao, status recomendados e textos dos templates;
+- criar mais mensagens/variacoes dentro do mesmo template;
+- marcar uma mensagem como padrao;
+- criar templates novos;
+- excluir templates que nao serao mais usados.
+
+Os templates editaveis sao salvos em `Setting` com a chave `sales.message_templates`,
+vinculada ao tenant tecnico comercial da plataforma. Isso evita criar um segundo
+cadastro de clinicas e permite alterar as mensagens sem novo deploy.
+
+Variaveis disponiveis nos textos:
+
+- `{clinic_name}`
+- `{contact_name}`
+- `{owner_name}`
+- `{manager_name}`
+- `{city}`
+- `{state}`
+- `{main_pain}`
+- `{pain_sentence}`
+- `{whatsapp_phone}`
+- `{test_phone_number}`
+- `{website}`
+- `{sender_name}`
+- `{demo_link}`
 
 ## Regras
 
@@ -50,3 +83,5 @@ linha usa `ProspectAccount`, os dados comerciais ja preenchidos e a demo vincula
 4. Gere a mensagem pronta e confirme que o link aparece no final.
 5. Clique em `Copiar mensagem` e confira a timeline do prospect no CRM.
 6. Selecione uma clinica sem demo e confirme o aviso de bloqueio.
+7. Abra `Editar templates`, altere uma mensagem, salve e gere nova mensagem para confirmar o texto atualizado.
+8. Crie uma nova variacao dentro de um template e confirme que ela aparece no seletor `Mensagem dentro do template`.
