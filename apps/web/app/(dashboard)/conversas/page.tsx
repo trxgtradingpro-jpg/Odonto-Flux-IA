@@ -168,6 +168,39 @@ function normalizePhoneForComparison(value?: string | null) {
   return normalized.slice(-11);
 }
 
+function readStoredWebchatSessionIdFromPublicEntryPath(publicEntryPath?: string | null) {
+  if (typeof window === "undefined") return null;
+  const rawPath = String(publicEntryPath || "").trim();
+  if (!rawPath) return null;
+
+  let pathname = rawPath;
+  try {
+    pathname = rawPath.startsWith("http") ? new URL(rawPath).pathname : rawPath;
+  } catch {
+    pathname = rawPath;
+  }
+
+  const match = pathname.match(/\/agendar\/([^/?#]+)/i);
+  const clinicSlug = match?.[1] ? decodeURIComponent(match[1]) : null;
+  if (!clinicSlug) return null;
+
+  try {
+    const raw = window.localStorage.getItem(`clinicflux.link_flow.webchat.${clinicSlug}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { session_id?: string; cta_mode?: string };
+    if (parsed.cta_mode !== "webchat") return null;
+    return typeof parsed.session_id === "string" && parsed.session_id.trim() ? parsed.session_id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function webchatSyntheticContact(sessionId?: string | null) {
+  const normalized = String(sessionId || "").replace(/-/g, "").trim().toLowerCase();
+  if (!normalized) return null;
+  return `webchat${normalized.slice(0, 18)}`;
+}
+
 function isNoReplyConversation(conversation: ConversationItem) {
   return (
     ["aberta", "aguardando"].includes(conversation.status) &&
@@ -1730,6 +1763,42 @@ export default function ConversasPage() {
     }
 
     if (!canResolveDemoConversationFromPhone) return null;
+
+    if (demoEntryChannel === "webchat") {
+      const webchatSessionId = readStoredWebchatSessionIdFromPublicEntryPath(demoPublicEntryPath);
+      const linkedThreadId = webchatSessionId ? `link_flow:${webchatSessionId}` : null;
+      if (linkedThreadId) {
+        const directMatch = conversations.find((item) => item.external_thread_id === linkedThreadId) ?? null;
+        if (directMatch) return directMatch;
+      }
+
+      const syntheticContact = webchatSyntheticContact(webchatSessionId);
+      if (syntheticContact) {
+        const syntheticPatientMatch =
+          conversations.find((conversation) => {
+            if (!conversation.patient_id) return false;
+            const patientPhone = patientsById.get(conversation.patient_id)?.phone;
+            return patientPhone === syntheticContact;
+          }) ?? null;
+        if (syntheticPatientMatch) return syntheticPatientMatch;
+      }
+
+      const startedAtMs = demoWhatsAppStartedAt ? new Date(demoWhatsAppStartedAt).getTime() : null;
+      const webchatMatches = conversations.filter((conversation) => {
+        if (conversation.channel !== "webchat") return false;
+        if (!conversation.tags.includes("entry_webchat")) return false;
+        if (startedAtMs === null || !conversation.last_message_at) return true;
+        return new Date(conversation.last_message_at).getTime() >= startedAtMs - 60_000;
+      });
+      if (webchatMatches.length) {
+        return webchatMatches.sort((left, right) => {
+          const leftTime = left.last_message_at ? new Date(left.last_message_at).getTime() : 0;
+          const rightTime = right.last_message_at ? new Date(right.last_message_at).getTime() : 0;
+          return rightTime - leftTime;
+        })[0];
+      }
+    }
+
     if (!demoTrackedPhoneDigits) return null;
 
     const matches = conversations.filter((conversation) => {
@@ -1749,9 +1818,12 @@ export default function ConversasPage() {
       return rightTime - leftTime;
     })[0];
   }, [
+    demoEntryChannel,
+    demoPublicEntryPath,
     canResolveDemoConversationFromPhone,
     dataset?.conversations,
     demoTrackedPhoneDigits,
+    demoWhatsAppStartedAt,
     demoWhatsAppTrackedConversationId,
     leadsById,
     patientsById,

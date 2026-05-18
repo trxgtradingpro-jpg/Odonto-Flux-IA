@@ -9528,11 +9528,7 @@ def process_inbound_message(
         )
         if not generated_response:
             return finish_without_reply(final_decision=DECISION_HANDOFF, reason="dispatch_error", handoff=True)
-        interactive_payload = (
-            _build_scheduling_interactive_list_payload(scheduling_response)
-            if conversation.channel == "whatsapp"
-            else None
-        )
+        interactive_payload = _build_scheduling_interactive_list_payload(scheduling_response)
         interactive_options_enabled = booking_interactive_options_enabled(config)
         scheduling_metadata = (
             scheduling_response.get("metadata")
@@ -9560,7 +9556,12 @@ def process_inbound_message(
             "no_slots_for_period_with_alternatives",
         }
         inline_interactive_payload: dict[str, Any] | None = None
-        if interactive_payload and interactive_options_enabled and scheduling_mode in single_message_modes:
+        if (
+            interactive_payload
+            and conversation.channel == "whatsapp"
+            and interactive_options_enabled
+            and scheduling_mode in single_message_modes
+        ):
             inline_interactive_payload = dict(interactive_payload)
             inline_interactive_payload["body_text"] = generated_response
 
@@ -9572,7 +9573,7 @@ def process_inbound_message(
             dispatch_message_type = "interactive_buttons" if inline_interactive_type == "buttons" else "interactive_list"
             dispatch_interactive = inline_interactive_payload
             dispatch_body = str(inline_interactive_payload.get("body_text") or generated_response)
-        elif interactive_payload and not interactive_options_enabled:
+        elif interactive_payload and (conversation.channel == "webchat" or not interactive_options_enabled):
             dispatch_body = _compose_text_reply_with_options_fallback(
                 generated_response,
                 interactive_payload=interactive_payload,
@@ -9620,7 +9621,12 @@ def process_inbound_message(
 
             interactive_outbox = None
             interactive_outbound_message = None
-            if interactive_payload and interactive_options_enabled and not inline_interactive_payload:
+            if (
+                interactive_payload
+                and conversation.channel == "whatsapp"
+                and interactive_options_enabled
+                and not inline_interactive_payload
+            ):
                 interactive_type = str(interactive_payload.get("interactive_type") or "list").strip().lower()
                 interactive_message_type = "interactive_buttons" if interactive_type == "buttons" else "interactive_list"
                 interactive_body = str(interactive_payload.get("body_text") or "Escolha uma opção para continuar.")
@@ -9729,16 +9735,16 @@ def process_inbound_message(
                 followup_interactive = _build_scheduling_interactive_list_payload(followup_response)
                 followup_type = "text"
                 followup_dispatch_interactive = None
-                if followup_interactive and interactive_options_enabled:
+                if followup_interactive and conversation.channel == "whatsapp" and interactive_options_enabled:
                     followup_interactive_type = str(followup_interactive.get("interactive_type") or "buttons").strip().lower()
                     followup_type = "interactive_buttons" if followup_interactive_type == "buttons" else "interactive_list"
                     followup_dispatch_interactive = followup_interactive
                 followup_dispatch_body = (
                     str(followup_interactive.get("body_text") or followup_text)
-                    if followup_interactive and interactive_options_enabled
+                    if followup_interactive and conversation.channel == "whatsapp" and interactive_options_enabled
                     else followup_text
                 )
-                if followup_interactive and not interactive_options_enabled:
+                if followup_interactive and (conversation.channel == "webchat" or not interactive_options_enabled):
                     followup_dispatch_body = _compose_text_reply_with_options_fallback(
                         followup_text,
                         interactive_payload=followup_interactive,

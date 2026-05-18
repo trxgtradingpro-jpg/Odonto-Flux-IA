@@ -31,6 +31,7 @@ class ConversationOutput(BaseModel):
     lead_id: UUID | None
     unit_id: UUID | None
     channel: str
+    external_thread_id: str | None
     status: str
     assigned_user_id: UUID | None
     tags: list[str]

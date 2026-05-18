@@ -84,7 +84,7 @@ def _ensure_valid_whatsapp_account(db_session, *, tenant_id):
     db_session.commit()
 
 
-def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: str):
+def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: str, channel: str = "whatsapp"):
     suffix = uuid4().hex[:8]
     phone = f"5511940{suffix}"
     patient = Patient(
@@ -93,7 +93,7 @@ def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: st
         phone=phone,
         normalized_phone=phone,
         status="ativo",
-        origin="whatsapp",
+        origin="link_flow_webchat" if channel == "webchat" else "whatsapp",
         lgpd_consent=True,
         marketing_opt_in=True,
         tags_cache=[],
@@ -104,9 +104,9 @@ def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: st
     conversation = Conversation(
         tenant_id=tenant_id,
         patient_id=patient.id,
-        channel="whatsapp",
+        channel=channel,
         status="aberta",
-        tags=[],
+        tags=["entry_webchat"] if channel == "webchat" else [],
     )
     db_session.add(conversation)
     db_session.flush()
@@ -115,7 +115,7 @@ def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: st
         tenant_id=tenant_id,
         conversation_id=conversation.id,
         direction="inbound",
-        channel="whatsapp",
+        channel=channel,
         sender_type="patient",
         body=inbound_text,
         message_type="text",
@@ -2282,6 +2282,42 @@ def test_scheduling_days_request_returns_day_options_instead_of_time_slots(seede
     assert str(rows[0].get("id") or "").startswith("day_")
     scheduling = (outbound.payload or {}).get("scheduling") or {}
     assert scheduling.get("procedure_type") == "InstalaÃ§Ã£o de lentes"
+
+
+def test_webchat_day_request_falls_back_to_numbered_text_options(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero saber os dias disponiveis para avaliacao de lentes de contato",
+        channel="webchat",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_day_select"
+    assert outbound is not None
+    assert outbound.message_type == "text"
+    assert "Escolha o dia:" in (outbound.body or "")
+    assert "1)" in (outbound.body or "")
 
 
 def test_new_request_ignores_stale_wizard_confirmation_state(seeded_db, db_session):

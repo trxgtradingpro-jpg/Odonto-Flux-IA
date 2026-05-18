@@ -95,6 +95,7 @@ export type ConversationItem = {
   lead_id?: string | null;
   unit_id?: string | null;
   channel: string;
+  external_thread_id?: string | null;
   status: string;
   assigned_user_id?: string | null;
   tags: string[];
