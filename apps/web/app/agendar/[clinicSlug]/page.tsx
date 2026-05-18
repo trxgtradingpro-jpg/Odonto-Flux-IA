@@ -545,14 +545,7 @@ function BookingSummaryPanel({
         className,
       )}
     >
-      <div>
-        <p className="text-lg font-semibold leading-tight text-stone-950 sm:text-xl">Resumo do atendimento</p>
-        <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
-          {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
-        </p>
-      </div>
-
-      <div className="mt-4 rounded-[22px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
+      <div className="rounded-[22px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-stone-900">
@@ -1079,26 +1072,36 @@ export default function PublicBookingPage() {
     >
       <div className="box-border mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur">
         <header className="border-b border-white/60 px-5 py-5 sm:px-7">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-[var(--booking-border)] bg-[var(--booking-card)] shadow-sm">
-                {profile?.clinic.logo_data_url ? (
-                  <Image
-                    src={profile.clinic.logo_data_url}
-                    alt=""
-                    width={56}
-                    height={56}
-                    unoptimized
-                    className="h-full w-full object-contain p-2"
-                  />
-                ) : (
-                  <CalendarCheck2 className="h-7 w-7 text-[var(--booking-primary)]" aria-hidden="true" />
-                )}
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-[var(--booking-border)] bg-[var(--booking-card)] shadow-sm">
+                  {profile?.clinic.logo_data_url ? (
+                    <Image
+                      src={profile.clinic.logo_data_url}
+                      alt=""
+                      width={56}
+                      height={56}
+                      unoptimized
+                      className="h-full w-full object-contain p-2"
+                    />
+                  ) : (
+                    <CalendarCheck2 className="h-7 w-7 text-[var(--booking-primary)]" aria-hidden="true" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
+                  <h1 className="truncate text-2xl font-semibold leading-tight sm:text-3xl">{clinicName}</h1>
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
-                <h1 className="truncate text-2xl font-semibold leading-tight sm:text-3xl">{clinicName}</h1>
-              </div>
+              {isWebchat ? (
+                <div className="mt-4 max-w-2xl pl-0 sm:pl-[4.25rem]">
+                  <p className="text-lg font-semibold leading-tight text-stone-950 sm:text-xl">Resumo do atendimento</p>
+                  <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
+                    {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
+                  </p>
+                </div>
+              ) : null}
             </div>
             <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm font-medium text-[var(--booking-muted)] shadow-sm">
               Link verificado da clinica
