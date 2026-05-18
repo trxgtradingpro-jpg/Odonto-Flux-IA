@@ -191,6 +191,14 @@ type ProspectDemoWhatsAppSettings = {
   account_id: string | null;
 };
 
+type ProspectDemoIntakeMode = "official_api" | "link_flow" | "hybrid";
+type ProspectDemoLinkFlowCtaMode = "whatsapp_redirect" | "webchat";
+
+type ProspectDemoIntakeSettings = {
+  mode: ProspectDemoIntakeMode;
+  cta_mode: ProspectDemoLinkFlowCtaMode;
+};
+
 type PlatformWhatsAppAccountItem = {
   id: string;
   provider_name: string;
@@ -216,6 +224,8 @@ type ProspectEditFormState = {
   status: string;
   test_phone_number: string;
   demo_whatsapp_account_id: string;
+  demo_intake_mode: ProspectDemoIntakeMode;
+  demo_link_flow_cta_mode: ProspectDemoLinkFlowCtaMode;
   demo_ai_enabled: boolean;
   demo_whatsapp_enabled: boolean;
   demo_max_consecutive_auto_replies: number;
@@ -365,6 +375,24 @@ function getDemoWhatsAppSettingsSnapshot(prospect: Prospect): ProspectDemoWhatsA
   };
 }
 
+function getDemoIntakeSettingsSnapshot(prospect: Prospect): ProspectDemoIntakeSettings {
+  const raw = prospect.proposal_snapshot?.demo_intake;
+  const value = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const rawLinkFlow =
+    value.link_flow && typeof value.link_flow === "object" && !Array.isArray(value.link_flow)
+      ? (value.link_flow as Record<string, unknown>)
+      : {};
+  const mode =
+    value.mode === "official_api" || value.mode === "link_flow" || value.mode === "hybrid"
+      ? value.mode
+      : "hybrid";
+  const ctaMode = rawLinkFlow.cta_mode === "webchat" ? "webchat" : "whatsapp_redirect";
+  return {
+    mode,
+    cta_mode: ctaMode,
+  };
+}
+
 function platformWhatsAppAccountLabel(account: PlatformWhatsAppAccountItem) {
   const primary = (account.display_phone || "").trim() || account.phone_number_id;
   const provider = humanize(account.provider_name || "numero");
@@ -374,6 +402,7 @@ function platformWhatsAppAccountLabel(account: PlatformWhatsAppAccountItem) {
 function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
   const demoAi = getDemoAiSettingsSnapshot(prospect);
   const demoWhatsApp = getDemoWhatsAppSettingsSnapshot(prospect);
+  const demoIntake = getDemoIntakeSettingsSnapshot(prospect);
   return {
     clinic_name: prospect.clinic_name ?? "",
     owner_name: prospect.owner_name ?? "",
@@ -390,11 +419,26 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     status: prospect.status || "novo",
     test_phone_number: prospect.test_phone_number ?? "",
     demo_whatsapp_account_id: demoWhatsApp.account_id ?? "",
+    demo_intake_mode: demoIntake.mode,
+    demo_link_flow_cta_mode: demoIntake.cta_mode,
     demo_ai_enabled: demoAi.enabled,
     demo_whatsapp_enabled: demoAi.whatsapp_enabled,
     demo_max_consecutive_auto_replies: demoAi.max_consecutive_auto_replies,
     notes: prospect.notes ?? "",
     do_not_contact: Boolean(prospect.do_not_contact),
+  };
+}
+
+function buildDemoIntakeSnapshot(
+  mode: ProspectDemoIntakeMode,
+  ctaMode: ProspectDemoLinkFlowCtaMode,
+) {
+  return {
+    mode,
+    link_flow: {
+      enabled: mode !== "official_api",
+      cta_mode: ctaMode,
+    },
   };
 }
 
@@ -840,6 +884,8 @@ function CreateProspectForm({
   const [leadSource, setLeadSource] = useState("Google/Maps manual");
   const [testPhoneNumber, setTestPhoneNumber] = useState("");
   const [demoWhatsAppAccountId, setDemoWhatsAppAccountId] = useState("");
+  const [demoIntakeMode, setDemoIntakeMode] = useState<ProspectDemoIntakeMode>("hybrid");
+  const [demoLinkFlowCtaMode, setDemoLinkFlowCtaMode] = useState<ProspectDemoLinkFlowCtaMode>("whatsapp_redirect");
   const [demoAiEnabled, setDemoAiEnabled] = useState(true);
   const [demoWhatsappEnabled, setDemoWhatsappEnabled] = useState(true);
   const [demoMaxConsecutiveAutoReplies, setDemoMaxConsecutiveAutoReplies] = useState(10);
@@ -872,6 +918,7 @@ function CreateProspectForm({
             demo_whatsapp: {
               account_id: demoWhatsAppAccountId || null,
             },
+            demo_intake: buildDemoIntakeSnapshot(demoIntakeMode, demoLinkFlowCtaMode),
             demo_ai: {
               enabled: demoAiEnabled,
               whatsapp_enabled: demoWhatsappEnabled,
@@ -898,6 +945,8 @@ function CreateProspectForm({
       setLeadSource("Google/Maps manual");
       setTestPhoneNumber("");
       setDemoWhatsAppAccountId("");
+      setDemoIntakeMode("hybrid");
+      setDemoLinkFlowCtaMode("whatsapp_redirect");
       setDemoAiEnabled(true);
       setDemoWhatsappEnabled(true);
       setDemoMaxConsecutiveAutoReplies(10);
@@ -1057,6 +1106,32 @@ function CreateProspectForm({
               </Field>
               <Field label="Controles da demo" helper="Essas chaves valem para o numero de teste da clinica quando a demo for gerada." className="lg:col-span-4">
                 <div className="grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Modo da clinica na demo</label>
+                    <select
+                      className="mt-2 h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm"
+                      value={demoIntakeMode}
+                      onChange={(event) => setDemoIntakeMode(event.target.value as ProspectDemoIntakeMode)}
+                    >
+                      <option value="official_api">API oficial</option>
+                      <option value="link_flow">Link flow</option>
+                      <option value="hybrid">Hybrid</option>
+                    </select>
+                    <p className="mt-2 text-xs text-stone-500">Escolha como essa clinica vai operar na demonstracao.</p>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Entrada publica do link flow</label>
+                    <select
+                      className="mt-2 h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm disabled:opacity-60"
+                      value={demoLinkFlowCtaMode}
+                      onChange={(event) => setDemoLinkFlowCtaMode(event.target.value as ProspectDemoLinkFlowCtaMode)}
+                      disabled={demoIntakeMode === "official_api"}
+                    >
+                      <option value="whatsapp_redirect">WhatsApp redirect</option>
+                      <option value="webchat">Webchat</option>
+                    </select>
+                    <p className="mt-2 text-xs text-stone-500">Vale quando o modo estiver em link flow ou hybrid.</p>
+                  </div>
                   <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
                     <input type="checkbox" checked={demoAiEnabled} onChange={(event) => setDemoAiEnabled(event.target.checked)} />
                     IA da demo ligada
@@ -1154,6 +1229,8 @@ function EditProspectDrawer({
           status: "novo",
           test_phone_number: "",
           demo_whatsapp_account_id: "",
+          demo_intake_mode: "hybrid",
+          demo_link_flow_cta_mode: "whatsapp_redirect",
           demo_ai_enabled: true,
           demo_whatsapp_enabled: true,
           demo_max_consecutive_auto_replies: 10,
@@ -1196,6 +1273,7 @@ function EditProspectDrawer({
             demo_whatsapp: {
               account_id: nullableText(form.demo_whatsapp_account_id),
             },
+            demo_intake: buildDemoIntakeSnapshot(form.demo_intake_mode, form.demo_link_flow_cta_mode),
             demo_ai: {
               enabled: form.demo_ai_enabled,
               whatsapp_enabled: form.demo_whatsapp_enabled,
@@ -1320,6 +1398,35 @@ function EditProspectDrawer({
               </Field>
               <Field label="Controles da demo" helper={prospect.demo_tenant_id ? "Ao salvar, atualiza a demo atual desta clinica." : "Sera aplicado quando a demo desta clinica for gerada."} className="lg:col-span-4">
                 <div className="grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Modo da clinica na demo</label>
+                    <select
+                      className="mt-2 h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm disabled:opacity-60"
+                      value={form.demo_intake_mode}
+                      onChange={(event) => updateField("demo_intake_mode", event.target.value as ProspectDemoIntakeMode)}
+                      disabled={mutation.isPending}
+                    >
+                      <option value="official_api">API oficial</option>
+                      <option value="link_flow">Link flow</option>
+                      <option value="hybrid">Hybrid</option>
+                    </select>
+                    <p className="mt-2 text-xs text-stone-500">Defina se a demo usa API oficial, link flow ou coexistencia dos dois.</p>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white px-4 py-3">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Entrada publica do link flow</label>
+                    <select
+                      className="mt-2 h-10 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm disabled:opacity-60"
+                      value={form.demo_link_flow_cta_mode}
+                      onChange={(event) =>
+                        updateField("demo_link_flow_cta_mode", event.target.value as ProspectDemoLinkFlowCtaMode)
+                      }
+                      disabled={mutation.isPending || form.demo_intake_mode === "official_api"}
+                    >
+                      <option value="whatsapp_redirect">WhatsApp redirect</option>
+                      <option value="webchat">Webchat</option>
+                    </select>
+                    <p className="mt-2 text-xs text-stone-500">Use webchat para testar a landing com chat embutido.</p>
+                  </div>
                   <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
                     <input
                       type="checkbox"

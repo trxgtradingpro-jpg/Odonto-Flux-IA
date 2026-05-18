@@ -53,6 +53,7 @@ from app.models.enums import (
     OutboxStatus,
     RunStatus,
 )
+from app.services.link_flow_service import validate_intake_config_payload
 from app.services.password_policy_service import validate_password_strength
 from app.services.whatsapp_service import assert_whatsapp_account_ready_for_dispatch, queue_outbound_message
 from app.utils.hash import sha256_text
@@ -82,6 +83,18 @@ DEMO_AI_DEFAULT_SETTINGS = {
     "enabled": True,
     "whatsapp_enabled": True,
     "max_consecutive_auto_replies": 3,
+}
+
+DEMO_INTAKE_DEFAULT_SETTINGS = {
+    "mode": "hybrid",
+    "link_flow": {
+        "enabled": True,
+        "cta_mode": "whatsapp_redirect",
+        "headline": "Agendamento oficial da clinica",
+        "trust_message": "Continue pelo canal oficial para falar com a assistente de agendamento.",
+        "button_label": "Continuar pelo WhatsApp",
+        "session_ttl_minutes": 30,
+    },
 }
 
 SCORE_RULES = {
@@ -724,6 +737,65 @@ def _demo_whatsapp_settings(prospect: ProspectAccount) -> dict[str, str | None]:
     snapshot = dict(prospect.proposal_snapshot or {})
     raw = snapshot.get("demo_whatsapp")
     return _normalize_demo_whatsapp_settings(raw if isinstance(raw, dict) else None)
+
+
+def _normalize_demo_intake_settings(value: dict | None) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    raw_link_flow = raw.get("link_flow") if isinstance(raw.get("link_flow"), dict) else {}
+    mode = str(raw.get("mode") or DEMO_INTAKE_DEFAULT_SETTINGS["mode"]).strip()
+    cta_mode = str(
+        raw_link_flow.get("cta_mode")
+        or DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["cta_mode"]
+    ).strip()
+
+    payload = {
+        "mode": mode,
+        "link_flow": {
+            "enabled": bool(raw_link_flow.get("enabled", mode in {"link_flow", "hybrid"})),
+            "cta_mode": cta_mode,
+            "headline": str(
+                raw_link_flow.get("headline")
+                or DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["headline"]
+            ),
+            "trust_message": str(
+                raw_link_flow.get("trust_message")
+                or DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["trust_message"]
+            ),
+            "button_label": str(
+                raw_link_flow.get("button_label")
+                or (
+                    "Iniciar atendimento no chat"
+                    if cta_mode == "webchat"
+                    else DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["button_label"]
+                )
+            ),
+            "session_ttl_minutes": int(
+                raw_link_flow.get("session_ttl_minutes")
+                or DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["session_ttl_minutes"]
+            ),
+        },
+    }
+    return validate_intake_config_payload(payload)
+
+
+def _demo_intake_settings(prospect: ProspectAccount) -> dict:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    raw = snapshot.get("demo_intake")
+    return _normalize_demo_intake_settings(raw if isinstance(raw, dict) else None)
+
+
+def ensure_demo_intake_config_ready(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    prospect: ProspectAccount | None = None,
+) -> dict:
+    linked_prospect = prospect or db.scalar(
+        select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1)
+    )
+    desired_config = _demo_intake_settings(linked_prospect) if linked_prospect else dict(DEMO_INTAKE_DEFAULT_SETTINGS)
+    _upsert_setting(db, tenant_id=tenant_id, key="intake.config", value=desired_config)
+    return desired_config
 
 
 def _sanitize_demo_whatsapp_assignment(
@@ -1743,6 +1815,7 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
         setattr(prospect, key, value)
     prospect.updated_by = actor_id
     if prospect.demo_tenant_id:
+        ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
     if prospect.do_not_contact and not prospect.opt_out_at:
         prospect.opt_out_at = _now()
@@ -2020,6 +2093,7 @@ def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount,
             "test_phone_number": prospect.test_phone_number,
             "tracking_enabled": True,
         },
+        "intake.config": _demo_intake_settings(prospect),
     }
     for key, value in settings_payloads.items():
         _upsert_setting(db, tenant_id=tenant_id, key=key, value=value)
@@ -2457,6 +2531,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         demo_user = db.get(User, prospect.demo_user_id) if prospect.demo_user_id else None
         professionals = db.execute(select(Professional).where(Professional.tenant_id == prospect.demo_tenant_id)).scalars().all()
         _sync_demo_service_catalog(db, tenant_id=prospect.demo_tenant_id, services=services, demo_units=demo_units)
+        ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         if demo_tenant and demo_units and demo_user:
             _seed_demo_operational_data(
@@ -2601,6 +2676,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     prospect.demo_expires_at = _now() + timedelta(days=settings.demo_default_expire_days)
     prospect.demo_checklist = checklist
     prospect.status = "demo_criada"
+    ensure_demo_intake_config_ready(db, tenant_id=tenant.id, prospect=prospect)
     ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant.id, prospect=prospect)
     add_timeline(db, prospect, event_type="demo.created", event_label="Demo personalizada gerada", actor_id=actor_id, actor_type="admin", payload={"tenant_id": str(tenant.id)})
     db.add(prospect)

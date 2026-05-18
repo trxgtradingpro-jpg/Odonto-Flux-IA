@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from app.core.exceptions import ApiError
 from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, WhatsAppAccount
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
+from app.schemas.admin_sales import ProspectUpdate
 from app.services import sales_demo_service
 from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
 
@@ -396,6 +397,72 @@ def test_generate_demo_disables_guided_tour_by_default(monkeypatch, seeded_db, d
 
     assert guide_setting is not None
     assert (guide_setting.value or {}).get("enabled") is False
+
+
+def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    prospect.proposal_snapshot = {
+        "demo_intake": {
+            "mode": "link_flow",
+            "link_flow": {
+                "enabled": True,
+                "cta_mode": "webchat",
+            },
+        }
+    }
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    intake_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == generated["prospect"].demo_tenant_id,
+            Setting.key == "intake.config",
+        )
+    )
+    assert intake_setting is not None
+    assert intake_setting.value["mode"] == "link_flow"
+    assert intake_setting.value["link_flow"]["cta_mode"] == "webchat"
+
+    updated = sales_demo_service.update_prospect(
+        db_session,
+        prospect,
+        ProspectUpdate(
+            proposal_snapshot={
+                **(prospect.proposal_snapshot or {}),
+                "demo_intake": {
+                    "mode": "hybrid",
+                    "link_flow": {
+                        "enabled": True,
+                        "cta_mode": "whatsapp_redirect",
+                    },
+                },
+            },
+        ),
+        actor_id=None,
+    )
+    refreshed_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == updated.demo_tenant_id,
+            Setting.key == "intake.config",
+        )
+    )
+    assert refreshed_setting is not None
+    assert refreshed_setting.value["mode"] == "hybrid"
+    assert refreshed_setting.value["link_flow"]["cta_mode"] == "whatsapp_redirect"
 
 
 def test_redeem_demo_token_returns_test_phone_and_whatsapp_link(monkeypatch, seeded_db, db_session):
