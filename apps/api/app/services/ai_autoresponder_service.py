@@ -4379,6 +4379,8 @@ def _interactive_payload_option_lines(interactive_payload: dict[str, Any] | None
             continue
         title = _compact_text(item.get("title") or f"Opção {index}", max_length=120)
         description = _compact_text(item.get("description"), max_length=200)
+        if _normalize_for_match(description) in {"toque para escolher", "tap to choose", "touch to choose"}:
+            description = ""
         if not title:
             continue
         option_line = f"{index}) {title}"
@@ -4444,16 +4446,53 @@ def normalize_immediate_action_reply_text(text: str, *, next_action: str) -> str
 
     output = re.sub(r"\s{2,}", " ", output).strip()
     if not output:
-        output = "Escolha uma opção abaixo." if next_action in AI_OPTION_PROMPT_ACTIONS else "Perfeito, confirmação recebida."
-
-    normalized = _normalize_for_match(output)
-    if (
-        next_action in AI_OPTION_PROMPT_ACTIONS
-        and "opcao abaixo" not in normalized
-        and "opcoes abaixo" not in normalized
-    ):
-        output = f"{output.rstrip()}\nEscolha uma opção abaixo."
+        output = "Vou te mostrar as opções disponíveis agora." if next_action in AI_OPTION_PROMPT_ACTIONS else "Perfeito, confirmação recebida."
     return output.strip()
+
+
+def _build_services_overview_menu_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    session_token: str | None = None,
+) -> dict[str, Any]:
+    knowledge_base = get_knowledge_base_global_config(db, tenant_id=conversation.tenant_id)
+    services = _normalize_services((knowledge_base or {}).get("services"))
+    if not services:
+        return {
+            "mode": "services_menu_overview",
+            "response_text": (
+                "Posso te explicar nossos serviços e valores, mas agora não encontrei o catálogo detalhado. "
+                "Se quiser, me diga o nome do tratamento que você quer conhecer ou escreva 'quero agendar'."
+            ),
+            "metadata": {
+                "reason": "services_menu_selected_without_catalog",
+                "services_count": 0,
+            },
+        }
+
+    lines = ["Claro. Estes são alguns serviços que a clínica oferece:"]
+    for index, service in enumerate(services[:8], start=1):
+        parts = [service["name"]]
+        if service.get("description"):
+            parts.append(str(service["description"]))
+        elif service.get("price_note"):
+            parts.append(str(service["price_note"]))
+        elif service.get("duration_note"):
+            parts.append(str(service["duration_note"]))
+        lines.append(f"{index}) {' — '.join(part for part in parts if part)}")
+    lines.append("Se quiser mais detalhes de algum serviço, me diga o nome dele.")
+    lines.append("Se quiser agendar, escreva por exemplo: quero agendar limpeza odontológica.")
+
+    return {
+        "mode": "services_menu_overview",
+        "response_text": "\n".join(lines),
+        "metadata": {
+            "reason": "services_menu_selected",
+            "services_count": len(services),
+            "session_token": session_token,
+        },
+    }
 
 
 def _build_post_booking_options_payload() -> tuple[str, dict[str, Any]]:
@@ -6581,16 +6620,9 @@ def _try_booking_wizard_response(
                 )
 
             if selected_option == "menu_services":
-                preferred_service = _infer_procedure_type(inbound_text=inbound_text, context=context)
-                if preferred_service == "Avaliação inicial":
-                    preferred_service = None
-                return _wizard_build_service_step_response(
+                return _build_services_overview_menu_response(
                     db,
                     conversation=conversation,
-                    intro_text="Claro. Me diz qual atendimento você quer ver para eu te orientar com detalhes e horários.",
-                    period=carried_period,
-                    requested_date=carried_requested_date,
-                    preferred_service=preferred_service,
                     session_token=latest_session_token,
                 )
 

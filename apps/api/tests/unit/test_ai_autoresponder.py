@@ -2932,6 +2932,75 @@ def test_welcome_message_uses_text_field_when_greeting_example_is_object(seeded_
     assert "inferred" not in (outbound.body or "")
 
 
+def test_welcome_menu_services_selection_returns_service_overview_in_webchat(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "clinic_profile": {"clinic_name": "Clinica Exemplo"},
+            "services": [
+                {"name": "Limpeza odontológica", "description": "Remove placa e tártaro"},
+                {"name": "Clareamento dental", "description": "Melhora o brilho do sorriso"},
+            ],
+        },
+    )
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound_1 = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+        channel="webchat",
+    )
+    process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound_1.id,
+    )
+
+    inbound_2 = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="webchat",
+        sender_type="patient",
+        body="2",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(inbound_2)
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound_2.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "services_menu_overview"
+    assert outbound is not None
+    assert "Claro. Estes são alguns serviços" in (outbound.body or "")
+    assert "Limpeza odontológica" in (outbound.body or "")
+    assert "Toque para escolher" not in (outbound.body or "")
+    assert "Escolha uma opção abaixo." not in (outbound.body or "")
+
+
 def test_service_catalog_request_opens_service_selection_wizard(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
