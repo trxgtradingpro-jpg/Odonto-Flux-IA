@@ -179,7 +179,7 @@ def _patient_simulator_message(
     must_keep: str | None = None,
 ) -> str:
     prompt = (
-        "Voce e um paciente virtual brasileiro em um teste controlado do OdontoFlux.\n"
+        "Voce e um paciente virtual brasileiro em um teste controlado do ClinicFlux AI.\n"
         "Reescreva a mensagem alvo como uma mensagem natural de WhatsApp, curta, humana e diferente das anteriores.\n"
         "Preserve a intencao operacional e todos os dados importantes. Nao invente CPF, datas, horarios, unidade ou procedimento.\n"
         "Nao peca atendimento humano, atendente, ligacao ou equipe se a MENSAGEM_ALVO nao pedir isso.\n"
@@ -633,7 +633,7 @@ def _ai_audit_conversation(db: Session, *, tenant_id: UUID, result: dict[str, An
     patient_saved = result.get("patient_saved") if isinstance(result.get("patient_saved"), dict) else {}
     deterministic_errors = result.get("validation_errors") if isinstance(result.get("validation_errors"), list) else []
     prompt = (
-        "Voce e um auditor de qualidade E2E do OdontoFlux. Avalie se esta conversa pode liberar a proxima simulacao.\n"
+        "Voce e um auditor de qualidade E2E do ClinicFlux AI. Avalie se esta conversa pode liberar a proxima simulacao.\n"
         "Responda somente JSON valido com este formato:\n"
         "{\"passed\":true|false,\"errors\":[\"...\"],\"checks\":{\"flow\":\"ok|erro\",\"database\":\"ok|erro\",\"final_reply\":\"ok|erro\",\"appointment\":\"ok|erro\"},\"summary\":\"...\"}\n\n"
         "CRITERIOS OBRIGATORIOS:\n"

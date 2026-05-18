@@ -713,7 +713,7 @@ def run_seed() -> None:
         create_user_if_missing(
             db,
             tenant_id=None,
-            email="admin@odontoflux.com",
+            email="clinicfluxai@gmail.com",
             full_name="Admin Plataforma",
             role_names=["admin_platform"],
             role_map=role_map,
