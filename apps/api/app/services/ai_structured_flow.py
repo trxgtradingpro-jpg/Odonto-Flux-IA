@@ -839,6 +839,7 @@ def process_structured_inbound_message(
             inbound_message=inbound_message,
             dedupe_key=dedupe_key,
             config=config,
+            context=context,
             extractor_payload=extractor_payload,
             validation_error=str(exc),
         )
@@ -1882,6 +1883,7 @@ def _invalid_contract_fallback(
     inbound_message: Message,
     dedupe_key: str,
     config: dict[str, Any],
+    context: AiConversationContext,
     extractor_payload: dict[str, Any] | None,
     validation_error: str,
 ) -> dict[str, Any]:
@@ -1911,6 +1913,7 @@ def _invalid_contract_fallback(
         inbound_message=inbound_message,
         dedupe_key=dedupe_key,
         config=config,
+        context=context,
         patient_reply=fallback_reply,
         decision=fake_decision,
         plan=plan,

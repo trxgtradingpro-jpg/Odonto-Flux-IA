@@ -528,36 +528,56 @@ def _restore_patient_messages(original_create_runtime: Any, original_send: Any, 
     backtests._drive_reschedule = original_drive_reschedule
 
 
-def _patch_all_dispatch() -> tuple[Any, Any, Any, Any]:
-    original_auto_assert = autoresponder_module.assert_whatsapp_account_ready_for_dispatch
+def _patch_all_dispatch() -> tuple[Any, Any, Any, Any, Any]:
+    original_auto_assert = autoresponder_module.assert_whatsapp_route_ready_for_dispatch
     original_auto_queue = autoresponder_module.queue_outbound_message
-    original_structured_assert = structured_module.assert_whatsapp_account_ready_for_dispatch
-    original_structured_queue = structured_module.queue_outbound_message
+    original_auto_dispatch = getattr(autoresponder_module, "dispatch_patient_message", None)
+    original_structured_assert = structured_module.assert_whatsapp_route_ready_for_dispatch
+    original_structured_dispatch = structured_module.dispatch_patient_message
 
-    def fake_assert(db: Session, *, tenant_id: UUID):
+    def fake_assert(db: Session, *, tenant_id: UUID, provider_context: dict[str, Any] | None = None):
         return SimpleNamespace(id=uuid4(), tenant_id=tenant_id, provider_name="e2e_backtest")
 
     def fake_queue(*args: Any, **kwargs: Any):
         return SimpleNamespace(id=uuid4())
 
-    autoresponder_module.assert_whatsapp_account_ready_for_dispatch = fake_assert
+    def fake_dispatch(*args: Any, **kwargs: Any):
+        return SimpleNamespace(
+            outbox_id=uuid4(),
+            channel="whatsapp",
+            destination=kwargs.get("destination"),
+            provider_context=kwargs.get("provider_context"),
+        )
+
+    autoresponder_module.assert_whatsapp_route_ready_for_dispatch = fake_assert
     autoresponder_module.queue_outbound_message = fake_queue
-    structured_module.assert_whatsapp_account_ready_for_dispatch = fake_assert
-    structured_module.queue_outbound_message = fake_queue
-    return original_auto_assert, original_auto_queue, original_structured_assert, original_structured_queue
+    if original_auto_dispatch is not None:
+        autoresponder_module.dispatch_patient_message = fake_dispatch
+    structured_module.assert_whatsapp_route_ready_for_dispatch = fake_assert
+    structured_module.dispatch_patient_message = fake_dispatch
+    return (
+        original_auto_assert,
+        original_auto_queue,
+        original_auto_dispatch,
+        original_structured_assert,
+        original_structured_dispatch,
+    )
 
 
-def _restore_all_dispatch(originals: tuple[Any, Any, Any, Any]) -> None:
+def _restore_all_dispatch(originals: tuple[Any, Any, Any, Any, Any]) -> None:
     (
         original_auto_assert,
         original_auto_queue,
+        original_auto_dispatch,
         original_structured_assert,
-        original_structured_queue,
+        original_structured_dispatch,
     ) = originals
-    autoresponder_module.assert_whatsapp_account_ready_for_dispatch = original_auto_assert
+    autoresponder_module.assert_whatsapp_route_ready_for_dispatch = original_auto_assert
     autoresponder_module.queue_outbound_message = original_auto_queue
-    structured_module.assert_whatsapp_account_ready_for_dispatch = original_structured_assert
-    structured_module.queue_outbound_message = original_structured_queue
+    if original_auto_dispatch is not None:
+        autoresponder_module.dispatch_patient_message = original_auto_dispatch
+    structured_module.assert_whatsapp_route_ready_for_dispatch = original_structured_assert
+    structured_module.dispatch_patient_message = original_structured_dispatch
 
 
 def _validate_complete_result(db: Session, result: dict[str, Any]) -> list[str]:

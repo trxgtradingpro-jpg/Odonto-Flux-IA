@@ -95,22 +95,22 @@ def _fake_cpf(seed: int) -> str:
 
 
 def _patch_dispatch_for_backtest() -> tuple[Any, Any]:
-    original_assert = autoresponder_module.assert_whatsapp_account_ready_for_dispatch
+    original_assert = autoresponder_module.assert_whatsapp_route_ready_for_dispatch
     original_queue = autoresponder_module.queue_outbound_message
 
-    def fake_assert(db: Session, *, tenant_id: UUID):
+    def fake_assert(db: Session, *, tenant_id: UUID, provider_context: dict[str, Any] | None = None):
         return SimpleNamespace(id=uuid4(), tenant_id=tenant_id, provider_name="backtest")
 
     def fake_queue(*args: Any, **kwargs: Any):
         return SimpleNamespace(id=uuid4())
 
-    autoresponder_module.assert_whatsapp_account_ready_for_dispatch = fake_assert
+    autoresponder_module.assert_whatsapp_route_ready_for_dispatch = fake_assert
     autoresponder_module.queue_outbound_message = fake_queue
     return original_assert, original_queue
 
 
 def _restore_dispatch(original_assert: Any, original_queue: Any) -> None:
-    autoresponder_module.assert_whatsapp_account_ready_for_dispatch = original_assert
+    autoresponder_module.assert_whatsapp_route_ready_for_dispatch = original_assert
     autoresponder_module.queue_outbound_message = original_queue
 
 

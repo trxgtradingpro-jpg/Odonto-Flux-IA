@@ -1653,6 +1653,7 @@ def _extract_phone_from_text(text: str) -> str | None:
     if not raw_text.strip():
         return None
 
+    lowered_raw = raw_text.lower()
     cpf_digits = _extract_cpf_from_text(raw_text)
     for match in PHONE_PATTERN.finditer(raw_text):
         raw_phone = str(match.group(1) or "").strip()
@@ -1661,10 +1662,13 @@ def _extract_phone_from_text(text: str) -> str | None:
         normalized_phone = normalize_phone(raw_phone)
         if len(normalized_phone) < 10 or len(normalized_phone) > 15:
             continue
-        if cpf_digits and normalized_phone.endswith(cpf_digits):
-            continue
         context = raw_text[max(0, match.start() - 18) : match.start()].lower()
-        if not any(marker in context for marker in ("telefone", "celular", "whatsapp", "fone")):
+        has_phone_marker = any(marker in context for marker in ("telefone", "celular", "whatsapp", "fone"))
+        if not has_phone_marker:
+            has_phone_marker = any(marker in lowered_raw for marker in ("telefone", "celular", "whatsapp", "fone"))
+        if cpf_digits and normalized_phone.endswith(cpf_digits) and not has_phone_marker:
+            continue
+        if not has_phone_marker:
             compact_digits = re.sub(r"\D", "", raw_phone)
             if compact_digits != raw_text.strip():
                 continue
@@ -6099,6 +6103,15 @@ def _wizard_text_matches_current_step(
             "nao",
             "não",
         }
+
+    if step == "cpf_after_booking":
+        return bool(
+            _registration_skip_requested(inbound_text)
+            or _extract_registration_name_from_text(inbound_text)
+            or _extract_cpf_from_text(inbound_text)
+            or _extract_birth_date_from_text(inbound_text, allow_unlabeled=True)
+            or _extract_phone_from_text(inbound_text)
+        )
 
     return False
 
