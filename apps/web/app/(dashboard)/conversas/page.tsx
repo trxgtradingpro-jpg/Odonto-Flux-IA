@@ -1712,6 +1712,8 @@ export default function ConversasPage() {
     () => normalizePhoneForComparison(demoWhatsAppEntryPhone),
     [demoWhatsAppEntryPhone],
   );
+  const canResolveDemoConversationFromPhone =
+    demoWhatsAppExperienceStage === "awaiting_appointment" || demoWhatsAppExperienceStage === "appointment_ready";
 
   const demoTrackedConversation = useMemo(() => {
     const conversations = dataset?.conversations ?? [];
@@ -1721,6 +1723,7 @@ export default function ConversasPage() {
       return conversations.find((item) => item.id === demoWhatsAppTrackedConversationId) ?? null;
     }
 
+    if (!canResolveDemoConversationFromPhone) return null;
     if (!demoTrackedPhoneDigits) return null;
 
     const matches = conversations.filter((conversation) => {
@@ -1740,6 +1743,7 @@ export default function ConversasPage() {
       return rightTime - leftTime;
     })[0];
   }, [
+    canResolveDemoConversationFromPhone,
     dataset?.conversations,
     demoTrackedPhoneDigits,
     demoWhatsAppTrackedConversationId,

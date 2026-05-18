@@ -1,0 +1,73 @@
+import { expect, test } from "@playwright/test";
+
+const matchingConversationPhone = "5511940431906";
+const apiBaseUrl = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000/api/v1";
+
+test.describe("demo guide regression", () => {
+  test("new demo entry does not jump to conversation before WhatsApp step", async ({ page, request }) => {
+    const loginResponse = await request.post(`${apiBaseUrl}/auth/login`, {
+      data: {
+        email: "owner@sorrisosul.com",
+        password: "Odonto@123",
+      },
+    });
+
+    expect(loginResponse.ok()).toBeTruthy();
+    const payload = (await loginResponse.json()) as {
+      access_token: string;
+      refresh_token?: string | null;
+    };
+
+    await page.route("**/api/v1/auth/me", async (route) => {
+      const response = await route.fetch();
+      const data = (await response.json()) as Record<string, unknown>;
+      const roles = Array.isArray(data.roles) ? data.roles.map((item) => String(item)) : [];
+      if (!roles.includes("demo_client")) {
+        roles.push("demo_client");
+      }
+
+      await route.fulfill({
+        response,
+        json: {
+          ...data,
+          roles,
+        },
+      });
+    });
+
+    await page.addInitScript(
+      ({ accessToken, refreshToken, phone }) => {
+        window.localStorage.setItem("odontoflux_access_token", accessToken);
+        if (typeof refreshToken === "string" && refreshToken.length > 0) {
+          window.localStorage.setItem("odontoflux_refresh_token", refreshToken);
+        }
+
+        window.sessionStorage.setItem("odontoflux_demo_session_id", `demo-regression-${Date.now()}`);
+        window.sessionStorage.setItem("odontoflux_demo_guided_override_enabled", "1");
+        window.sessionStorage.setItem("odontoflux_demo_whatsapp_entry_active", "1");
+        window.sessionStorage.setItem("odontoflux_demo_whatsapp_stage", "entry");
+        window.sessionStorage.setItem("odontoflux_demo_whatsapp_entry_phone", phone);
+        window.sessionStorage.setItem("odontoflux_demo_whatsapp_entry_link", "https://wa.me/5511999999999");
+        window.sessionStorage.removeItem("odontoflux_demo_whatsapp_tracked_conversation_id");
+        window.sessionStorage.removeItem("odontoflux_demo_whatsapp_tracked_patient_id");
+        window.sessionStorage.removeItem("odontoflux_demo_whatsapp_started_at");
+        window.sessionStorage.removeItem("odontoflux_demo_whatsapp_baseline_appointments");
+      },
+      {
+        accessToken: payload.access_token,
+        refreshToken: payload.refresh_token ?? null,
+        phone: matchingConversationPhone,
+      },
+    );
+
+    await page.goto("http://127.0.0.1:3000/conversas", { waitUntil: "domcontentloaded" });
+
+    await expect(page.getByText("Abrir WhatsApp", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
+
+    await page.waitForTimeout(5000);
+
+    await expect(page.getByText("Abrir WhatsApp", { exact: true })).toBeVisible();
+    await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
+  });
+});
