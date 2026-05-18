@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { ArrowRight, CalendarCheck2, CheckCircle2, MessageCircle, SendHorizontal, ShieldCheck } from "lucide-react";
 import Image from "next/image";
@@ -122,7 +122,7 @@ function PublicWebchat({
   const lastMessageId = messages.length ? messages[messages.length - 1]?.id : undefined;
   const token = session.public_access_token || "";
 
-  async function loadMessages(afterMessageId?: string) {
+  const loadMessages = useCallback(async (afterMessageId?: string) => {
     try {
       const suffix = afterMessageId ? `?after_message_id=${encodeURIComponent(afterMessageId)}` : "";
       const response = await publicApiFetch<{ data: PublicWebchatMessage[] }>(
@@ -147,7 +147,7 @@ function PublicWebchat({
     } finally {
       setLoadingMessages(false);
     }
-  }
+  }, [onExpired, session.session_id, token]);
 
   useEffect(() => {
     if (!token || openedRef.current) return;
@@ -165,7 +165,7 @@ function PublicWebchat({
       { publicAccessToken: token },
     ).catch(() => undefined);
     void loadMessages();
-  }, [clinicSlug, session.session_id, token]);
+  }, [clinicSlug, loadMessages, session.session_id, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -173,7 +173,7 @@ function PublicWebchat({
       void loadMessages(lastMessageId);
     }, sending ? 1500 : 4000);
     return () => window.clearInterval(interval);
-  }, [lastMessageId, sending, token]);
+  }, [lastMessageId, loadMessages, sending, token]);
 
   async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -230,7 +230,7 @@ function PublicWebchat({
         ) : null}
         {!loadingMessages && messages.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[var(--booking-border)] bg-white p-4 text-sm leading-6 text-[var(--booking-muted)]">
-            Envie uma mensagem para começar. Por exemplo: "Quero agendar uma avaliacao".
+            Envie uma mensagem para comecar. Exemplo: Quero agendar uma avaliacao.
           </div>
         ) : null}
         {messages.map((message) => {

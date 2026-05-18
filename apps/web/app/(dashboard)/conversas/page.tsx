@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -1947,43 +1947,7 @@ export default function ConversasPage() {
     selectedPatient?.id,
   ]);
 
-  useEffect(() => {
-    if (!isDemoUser) return;
-
-    const handleDemoTourCommand = (event: Event) => {
-      const detail = (event as CustomEvent<DemoTourCommandDetail>).detail;
-      if (!detail) return;
-
-      if (detail.type === "open_whatsapp") {
-        launchDemoWhatsAppRedirect({ popup: detail.popup ?? null });
-        return;
-      }
-
-      if (detail.type === "check_message") {
-        if (demoTrackedConversation?.id) {
-          setDemoWhatsAppTrackedConversationId(demoTrackedConversation.id);
-          setDemoWhatsAppTrackedPatientId(demoTrackedPatient?.id ?? null);
-          if (selectedConversationId !== demoTrackedConversation.id) {
-            setSelectedConversationId(demoTrackedConversation.id);
-          }
-          dispatchDemoTourEvent({
-            type: "conversation_detected",
-            conversationId: demoTrackedConversation.id,
-            patientId: demoTrackedPatient?.id ?? null,
-          });
-          return;
-        }
-
-        void inboxQuery.refetch();
-      }
-    };
-
-    window.addEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
-    return () =>
-      window.removeEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
-  }, [demoTrackedConversation?.id, demoTrackedPatient?.id, inboxQuery.refetch, isDemoUser, selectedConversationId]);
-
-  function launchDemoWhatsAppRedirect(options?: { popup?: Window | null }) {
+  const launchDemoWhatsAppRedirect = useCallback((options?: { popup?: Window | null }) => {
     if (!demoWhatsAppEntryLink) {
       if (options?.popup && !options.popup.closed) {
         options.popup.close();
@@ -2025,7 +1989,56 @@ export default function ConversasPage() {
     if (!popup) {
       toast.error("Nao foi possivel abrir uma nova aba do WhatsApp. Libere pop-ups para esta demo.");
     }
-  }
+  }, [
+    demoTrackedConversation?.id,
+    demoTrackedPatient?.id,
+    demoTrackedPatientAppointments,
+    demoWhatsAppEntryLink,
+    demoWhatsAppEntryPhoneLabel,
+  ]);
+
+  useEffect(() => {
+    if (!isDemoUser) return;
+
+    const handleDemoTourCommand = (event: Event) => {
+      const detail = (event as CustomEvent<DemoTourCommandDetail>).detail;
+      if (!detail) return;
+
+      if (detail.type === "open_whatsapp") {
+        launchDemoWhatsAppRedirect({ popup: detail.popup ?? null });
+        return;
+      }
+
+      if (detail.type === "check_message") {
+        if (demoTrackedConversation?.id) {
+          setDemoWhatsAppTrackedConversationId(demoTrackedConversation.id);
+          setDemoWhatsAppTrackedPatientId(demoTrackedPatient?.id ?? null);
+          if (selectedConversationId !== demoTrackedConversation.id) {
+            setSelectedConversationId(demoTrackedConversation.id);
+          }
+          dispatchDemoTourEvent({
+            type: "conversation_detected",
+            conversationId: demoTrackedConversation.id,
+            patientId: demoTrackedPatient?.id ?? null,
+          });
+          return;
+        }
+
+        void inboxQuery.refetch();
+      }
+    };
+
+    window.addEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
+    return () =>
+      window.removeEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
+  }, [
+    demoTrackedConversation?.id,
+    demoTrackedPatient?.id,
+    inboxQuery,
+    isDemoUser,
+    launchDemoWhatsAppRedirect,
+    selectedConversationId,
+  ]);
 
   function redirectDemoToAgenda() {
     clearDemoWhatsAppEntry();
