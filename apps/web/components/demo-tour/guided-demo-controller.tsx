@@ -401,10 +401,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     };
   }, [showOverlay]);
 
-  const targetRect = useMemo(
-    () => findTargetRect(activeTargetId),
-    [activeTargetId, pathname, progress.updatedAt, viewportTick],
-  );
+  const targetRect = findTargetRect(activeTargetId);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
