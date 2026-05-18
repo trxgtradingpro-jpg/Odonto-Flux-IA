@@ -271,7 +271,6 @@ test.describe('public link flow landing', () => {
     await page.mouse.up();
 
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'open');
-    await expect(page.getByText('Resumo do atendimento')).toBeVisible();
     await page.getByRole('button', { name: /Fechar resumo do atendimento/i }).click();
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
 
@@ -353,7 +352,6 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
-    await expect(page.getByText('Resumo do atendimento')).toBeVisible();
     await expect(page.getByText('Maria Souza')).toBeVisible();
     await expect(page.getByText('Complementar manualmente')).toBeVisible();
     await page.getByRole('button', { name: /Editar/i }).click();
@@ -365,6 +363,5 @@ test.describe('public link flow landing', () => {
     await expect(page.getByText('Unidade principal')).toBeVisible();
     await expect(page.getByText('Avaliacao inicial')).toBeVisible();
     await expect(page.getByText('10/06/2026')).toBeVisible();
-    await expect(page.getByText('5/6 itens prontos')).toBeVisible();
   });
 });

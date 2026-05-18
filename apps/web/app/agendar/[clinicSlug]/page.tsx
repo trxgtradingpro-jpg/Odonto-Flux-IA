@@ -9,7 +9,6 @@ import {
   ChevronRight,
   CheckCircle2,
   ClipboardList,
-  Info,
   Mail,
   MapPinHouse,
   MessageCircle,
@@ -471,13 +470,6 @@ function BookingSummaryPanel({
     setDraft(buildSummaryDraft(summary));
   }, [summary]);
 
-  const statusToneClass =
-    summary?.status.tone === "success"
-      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-      : summary?.status.tone === "progress"
-        ? "border-teal-200 bg-teal-50 text-teal-800"
-        : "border-stone-200 bg-white text-stone-600";
-
   const cards = [
     {
       key: "patient_name",
@@ -545,31 +537,7 @@ function BookingSummaryPanel({
         className,
       )}
     >
-      <div className="rounded-[22px] border border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,249,248,0.94))] p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-stone-900">
-              {summary ? `${summary.progress.complete_count}/${summary.progress.total_count} itens prontos` : "Lendo a sessao..."}
-            </p>
-            <div className="mt-1 flex items-center gap-2">
-              <div className="group relative inline-flex">
-                <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition group-hover:border-[var(--booking-primary)] group-hover:text-[var(--booking-primary)]">
-                  <Info className="h-4 w-4" aria-hidden="true" />
-                </span>
-                <div className="pointer-events-none absolute left-0 top-full z-10 mt-2 w-56 rounded-2xl border border-stone-200 bg-white px-3 py-2 text-xs leading-5 text-stone-600 opacity-0 shadow-[0_16px_40px_rgba(15,23,42,0.14)] transition duration-150 group-hover:opacity-100">
-                  Cada item salvo automaticamente pela IA ou manualmente aqui fica destacado em verde.
-                </div>
-              </div>
-              <p className="truncate text-xs text-[var(--booking-muted)]">Passe no icone para ver a dica.</p>
-            </div>
-          </div>
-          <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${statusToneClass}`}>
-            {summary?.status.label || "Preparando"}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
           {cards.map((card) => {
             const Icon = card.icon;
@@ -1094,14 +1062,6 @@ export default function PublicBookingPage() {
                   <h1 className="truncate text-2xl font-semibold leading-tight sm:text-3xl">{clinicName}</h1>
                 </div>
               </div>
-              {isWebchat ? (
-                <div className="mt-4 max-w-2xl pl-0 sm:pl-[4.25rem]">
-                  <p className="text-lg font-semibold leading-tight text-stone-950 sm:text-xl">Resumo do atendimento</p>
-                  <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
-                    {clinicName} acompanha em tempo real os dados que a conversa ja capturou para concluir o agendamento.
-                  </p>
-                </div>
-              ) : null}
             </div>
             <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm font-medium text-[var(--booking-muted)] shadow-sm">
               Link verificado da clinica
