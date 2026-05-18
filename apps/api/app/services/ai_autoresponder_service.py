@@ -23,6 +23,7 @@ from app.models import (
     AppointmentEvent,
     Conversation,
     Lead,
+    LinkFlowSession,
     Message,
     MessageEvent,
     Patient,
@@ -1904,6 +1905,327 @@ def _patient_saved_cpf(db: Session, *, conversation: Conversation) -> str | None
     return _normalize_cpf_digits(patient.normalized_cpf or patient.cpf)
 
 
+def _patient_contact_value(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    patient_id: UUID | None,
+    channel: str,
+) -> str | None:
+    if not patient_id:
+        return None
+    contact = db.scalar(
+        select(PatientContact)
+        .where(
+            PatientContact.tenant_id == tenant_id,
+            PatientContact.patient_id == patient_id,
+            PatientContact.channel == channel,
+        )
+        .order_by(PatientContact.is_primary.desc(), PatientContact.created_at.asc())
+        .limit(1)
+    )
+    if not contact:
+        return None
+    value = str(contact.normalized_value or contact.value or "").strip()
+    return value or None
+
+
+def _linked_webchat_session(db: Session, *, conversation: Conversation) -> LinkFlowSession | None:
+    if conversation.channel != "webchat":
+        return None
+    return db.scalar(
+        select(LinkFlowSession)
+        .where(
+            LinkFlowSession.tenant_id == conversation.tenant_id,
+            LinkFlowSession.linked_conversation_id == conversation.id,
+        )
+        .order_by(LinkFlowSession.created_at.desc())
+        .limit(1)
+    )
+
+
+def _placeholder_webchat_patient(patient: Patient | None) -> bool:
+    if not patient:
+        return False
+    if str(patient.origin or "").strip() == "link_flow_webchat":
+        return True
+    return _is_placeholder_name(patient.full_name) or _is_webchat_placeholder_phone(patient.phone)
+
+
+def _find_existing_patient_by_cpf(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    cpf_digits: str,
+    exclude_patient_id: UUID | None,
+) -> Patient | None:
+    candidate = db.scalar(
+        select(Patient).where(
+            Patient.tenant_id == tenant_id,
+            Patient.normalized_cpf == cpf_digits,
+            Patient.id != exclude_patient_id,
+        )
+    )
+    if candidate:
+        return candidate
+
+    matched_patient_id = db.scalar(
+        select(PatientContact.patient_id)
+        .where(
+            PatientContact.tenant_id == tenant_id,
+            PatientContact.channel == CPF_CONTACT_CHANNEL,
+            PatientContact.normalized_value == cpf_digits,
+            PatientContact.patient_id != exclude_patient_id,
+        )
+        .order_by(PatientContact.is_primary.desc(), PatientContact.created_at.asc())
+        .limit(1)
+    )
+    if not matched_patient_id:
+        return None
+    return db.scalar(
+        select(Patient).where(
+            Patient.id == matched_patient_id,
+            Patient.tenant_id == tenant_id,
+        )
+    )
+
+
+def _find_existing_patient_by_phone(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    phone_digits: str,
+    exclude_patient_id: UUID | None,
+) -> Patient | None:
+    return db.scalar(
+        select(Patient).where(
+            Patient.tenant_id == tenant_id,
+            Patient.normalized_phone == phone_digits,
+            Patient.id != exclude_patient_id,
+        )
+    )
+
+
+def _resolve_existing_webchat_patient_candidate(
+    db: Session,
+    *,
+    conversation: Conversation,
+    patient: Patient | None,
+    inbound_text: str,
+) -> Patient | None:
+    if conversation.channel != "webchat" or not _placeholder_webchat_patient(patient):
+        return None
+
+    cpf_digits = _extract_cpf_from_text(inbound_text)
+    phone_digits = _extract_phone_from_text(inbound_text)
+    if not cpf_digits and not phone_digits:
+        return None
+
+    candidate_by_cpf = (
+        _find_existing_patient_by_cpf(
+            db,
+            tenant_id=conversation.tenant_id,
+            cpf_digits=cpf_digits,
+            exclude_patient_id=patient.id if patient else None,
+        )
+        if cpf_digits
+        else None
+    )
+    candidate_by_phone = (
+        _find_existing_patient_by_phone(
+            db,
+            tenant_id=conversation.tenant_id,
+            phone_digits=phone_digits,
+            exclude_patient_id=patient.id if patient else None,
+        )
+        if phone_digits
+        else None
+    )
+    if candidate_by_cpf and candidate_by_phone and candidate_by_cpf.id != candidate_by_phone.id:
+        logger.info(
+            "ai_autoresponder.webchat_patient_lookup_conflict",
+            tenant_id=str(conversation.tenant_id),
+            conversation_id=str(conversation.id),
+            placeholder_patient_id=str(patient.id) if patient else None,
+            cpf_patient_id=str(candidate_by_cpf.id),
+            phone_patient_id=str(candidate_by_phone.id),
+        )
+        return None
+    return candidate_by_cpf or candidate_by_phone
+
+
+def _merge_webchat_placeholder_data_into_patient(
+    db: Session,
+    *,
+    conversation: Conversation,
+    source_patient: Patient,
+    target_patient: Patient,
+) -> None:
+    if _has_complete_patient_name(source_patient.full_name) and not _has_complete_patient_name(target_patient.full_name):
+        target_patient.full_name = source_patient.full_name
+
+    source_email = str(source_patient.email or "").strip()
+    if source_email and not str(target_patient.email or "").strip():
+        target_patient.email = source_email
+
+    if source_patient.birth_date and not target_patient.birth_date:
+        target_patient.birth_date = source_patient.birth_date
+
+    if source_patient.unit_id and not target_patient.unit_id:
+        target_patient.unit_id = source_patient.unit_id
+
+    source_phone = str(source_patient.normalized_phone or source_patient.phone or "").strip()
+    if source_phone and not _is_webchat_placeholder_phone(source_phone) and not _has_patient_registration_phone(
+        target_patient,
+        conversation=conversation,
+    ):
+        conflicting_phone_owner = db.scalar(
+            select(Patient).where(
+                Patient.tenant_id == conversation.tenant_id,
+                Patient.normalized_phone == source_phone,
+                Patient.id != target_patient.id,
+                Patient.id != source_patient.id,
+            )
+        )
+        if not conflicting_phone_owner:
+            target_patient.phone = source_phone
+            target_patient.normalized_phone = source_phone
+
+    source_cpf = _normalize_cpf_digits(source_patient.normalized_cpf or source_patient.cpf) or _normalize_cpf_digits(
+        _patient_contact_value(
+            db,
+            tenant_id=conversation.tenant_id,
+            patient_id=source_patient.id,
+            channel=CPF_CONTACT_CHANNEL,
+        )
+    )
+    if source_cpf:
+        _sync_patient_cpf_record(
+            db,
+            conversation=conversation,
+            patient=target_patient,
+            cpf_digits=source_cpf,
+        )
+
+    source_preferred_name = _patient_contact_value(
+        db,
+        tenant_id=conversation.tenant_id,
+        patient_id=source_patient.id,
+        channel=PREFERRED_NAME_CONTACT_CHANNEL,
+    )
+    if source_preferred_name:
+        _upsert_patient_preferred_name(
+            db,
+            conversation=conversation,
+            preferred_name=source_preferred_name,
+        )
+
+    db.add(target_patient)
+
+
+def _rebind_webchat_conversation_to_existing_patient(
+    db: Session,
+    *,
+    conversation: Conversation,
+    source_patient: Patient,
+    target_patient: Patient,
+) -> bool:
+    if source_patient.id == target_patient.id:
+        return False
+
+    conversation.patient_id = target_patient.id
+    tags = set(conversation.tags or [])
+    tags.add("paciente_identificado_ia")
+    conversation.tags = sorted(tags)
+    db.add(conversation)
+
+    session = _linked_webchat_session(db, conversation=conversation)
+    if session:
+        session.linked_patient_id = target_patient.id
+        db.add(session)
+        if session.linked_appointment_id:
+            appointment = db.scalar(
+                select(Appointment).where(
+                    Appointment.id == session.linked_appointment_id,
+                    Appointment.tenant_id == conversation.tenant_id,
+                )
+            )
+            if appointment and appointment.patient_id == source_patient.id:
+                appointment.patient_id = target_patient.id
+                db.add(appointment)
+
+    if conversation.lead_id:
+        lead = db.scalar(
+            select(Lead).where(
+                Lead.id == conversation.lead_id,
+                Lead.tenant_id == conversation.tenant_id,
+            )
+        )
+        if lead and (lead.patient_id is None or lead.patient_id == source_patient.id):
+            lead.patient_id = target_patient.id
+            if _is_placeholder_name(lead.name) and _has_complete_patient_name(target_patient.full_name):
+                lead.name = target_patient.full_name
+            if not str(lead.email or "").strip() and str(target_patient.email or "").strip():
+                lead.email = target_patient.email
+            if not str(lead.phone or "").strip() and _has_patient_registration_phone(
+                target_patient,
+                conversation=conversation,
+            ):
+                lead.phone = target_patient.normalized_phone or target_patient.phone
+            db.add(lead)
+
+    _merge_webchat_placeholder_data_into_patient(
+        db,
+        conversation=conversation,
+        source_patient=source_patient,
+        target_patient=target_patient,
+    )
+    db.flush()
+    logger.info(
+        "ai_autoresponder.webchat_patient_rebound",
+        tenant_id=str(conversation.tenant_id),
+        conversation_id=str(conversation.id),
+        placeholder_patient_id=str(source_patient.id),
+        matched_patient_id=str(target_patient.id),
+    )
+    return True
+
+
+def _maybe_rebind_webchat_patient_from_inbound(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_text: str,
+) -> bool:
+    if conversation.channel != "webchat" or not conversation.patient_id:
+        return False
+
+    current_patient = db.scalar(
+        select(Patient).where(
+            Patient.id == conversation.patient_id,
+            Patient.tenant_id == conversation.tenant_id,
+        )
+    )
+    if not current_patient:
+        return False
+
+    candidate = _resolve_existing_webchat_patient_candidate(
+        db,
+        conversation=conversation,
+        patient=current_patient,
+        inbound_text=inbound_text,
+    )
+    if not candidate:
+        return False
+
+    return _rebind_webchat_conversation_to_existing_patient(
+        db,
+        conversation=conversation,
+        source_patient=current_patient,
+        target_patient=candidate,
+    )
+
+
 def _sync_patient_cpf_record(
     db: Session,
     *,
@@ -2065,6 +2387,45 @@ def _format_registration_missing_fields(fields: list[str]) -> str:
 def _registration_skip_requested(text: str) -> bool:
     normalized = _normalize_for_match(text)
     return any(pattern in normalized for pattern in REGISTRATION_SKIP_PATTERNS)
+
+
+def _webchat_existing_patient_lookup_prompt_needed(db: Session, *, conversation: Conversation) -> bool:
+    if conversation.channel != "webchat":
+        return False
+    if "webchat_lookup_prompt_sent" in set(conversation.tags or []):
+        return False
+    snapshot = _patient_registration_snapshot(db, conversation=conversation)
+    patient = snapshot.get("patient")
+    return not snapshot.get("cpf") and not _has_patient_registration_phone(patient, conversation=conversation)
+
+
+def _append_webchat_existing_patient_lookup_hint(
+    db: Session,
+    *,
+    conversation: Conversation,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    if not _webchat_existing_patient_lookup_prompt_needed(db, conversation=conversation):
+        return response
+
+    hint = (
+        "Se você já é paciente da clínica, também pode me enviar CPF ou celular com DDD a qualquer momento "
+        "para eu localizar seu cadastro e continuar com seus dados salvos."
+    )
+    base_text = str(response.get("response_text") or "").strip()
+    if hint not in base_text:
+        response["response_text"] = f"{base_text}\n\n{hint}" if base_text else hint
+
+    metadata = response.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["early_identification_prompt"] = True
+        response["metadata"] = metadata
+
+    tags = set(conversation.tags or [])
+    tags.add("webchat_lookup_prompt_sent")
+    conversation.tags = sorted(tags)
+    db.add(conversation)
+    return response
 
 
 def _capture_patient_registration_from_inbound(
@@ -5371,11 +5732,16 @@ def _wizard_build_service_step_response(
         )
     )
 
-    return {
+    response = {
         "mode": "booking_wizard_service_select",
         "response_text": intro_text or default_intro,
         "metadata": metadata,
     }
+    return _append_webchat_existing_patient_lookup_hint(
+        db,
+        conversation=conversation,
+        response=response,
+    )
 
 
 def _wizard_build_unit_step_response(
@@ -5431,11 +5797,16 @@ def _wizard_build_unit_step_response(
         step="unit",
     )
 
-    return {
+    response = {
         "mode": "booking_wizard_unit_select",
         "response_text": f"Perfeito, já deixei esse atendimento anotado: {procedure_type}. Agora me diz em qual unidade você prefere ser atendido.",
         "metadata": metadata,
     }
+    return _append_webchat_existing_patient_lookup_hint(
+        db,
+        conversation=conversation,
+        response=response,
+    )
 
 
 def _wizard_collect_day_choices(
@@ -5579,11 +5950,16 @@ def _wizard_build_day_step_response(
         step="day",
     )
 
-    return {
+    response = {
         "mode": "booking_wizard_day_select",
         "response_text": f"Ótimo, essa unidade funciona para você. Agora vou te mostrar os dias disponíveis para {procedure_type} na {unit.name}.",
         "metadata": metadata,
     }
+    return _append_webchat_existing_patient_lookup_hint(
+        db,
+        conversation=conversation,
+        response=response,
+    )
 
 
 def _wizard_collect_time_choices(
@@ -9428,6 +9804,11 @@ def process_inbound_message(
             handoff=False,
         )
 
+    _maybe_rebind_webchat_patient_from_inbound(
+        db,
+        conversation=conversation,
+        inbound_text=inbound_text,
+    )
     captured_profile = _capture_contact_profile_from_inbound(
         db,
         tenant_id=tenant_id,

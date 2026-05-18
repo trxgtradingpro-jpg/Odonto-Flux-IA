@@ -1,4 +1,5 @@
 ﻿from datetime import UTC, datetime, timedelta
+from datetime import date
 from uuid import uuid4
 from sqlalchemy import delete, func, select
 
@@ -2325,6 +2326,114 @@ def test_webchat_day_request_falls_back_to_numbered_text_options(seeded_db, db_s
     assert "1)" in (outbound.body or "")
 
 
+def test_webchat_initial_scheduling_prompt_invites_existing_patient_lookup(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar",
+        channel="webchat",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    db_session.refresh(conversation)
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_wizard_service_select"
+    assert outbound is not None
+    assert "cpf" in (outbound.body or "").lower()
+    assert "celular" in (outbound.body or "").lower()
+    assert "webchat_lookup_prompt_sent" in (conversation.tags or [])
+
+
+def test_webchat_rebinds_placeholder_patient_to_existing_record_by_cpf(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    _ensure_professional(db_session, tenant_id=tenant_id, unit_id=unit.id, full_name="Dra. Rebind")
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar uma avaliacao esta semana. Meu CPF e 123.456.096-16.",
+        channel="webchat",
+    )
+    placeholder_patient_id = conversation.patient_id
+    session = LinkFlowSession(
+        tenant_id=tenant_id,
+        mode="link_flow",
+        cta_mode="webchat",
+        channel="webchat",
+        token_hash=f"token-cpf-{conversation.id}",
+        public_access_token_hash=f"public-cpf-{conversation.id}",
+        status="linked",
+        landing_path="/agendar/tenant-a",
+        utm_payload={},
+        linked_conversation_id=conversation.id,
+        linked_patient_id=placeholder_patient_id,
+        linked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    existing_patient = Patient(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Marina Oliveira",
+        phone="5511998877665",
+        normalized_phone="5511998877665",
+        cpf="12345609616",
+        normalized_cpf="12345609616",
+        birth_date=date(1990, 5, 10),
+        status="ativo",
+        origin="imported",
+        lgpd_consent=True,
+        marketing_opt_in=False,
+        tags_cache=[],
+    )
+    db_session.add_all([session, existing_patient])
+    db_session.commit()
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    db_session.refresh(session)
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") in {
+        "booking_wizard_service_select",
+        "booking_wizard_unit_select",
+        "booking_wizard_day_select",
+        "no_slots_general",
+        "no_unit_available",
+    }
+    assert conversation.patient_id == existing_patient.id
+    assert session.linked_patient_id == existing_patient.id
+    assert conversation.patient_id != placeholder_patient_id
+    assert "paciente_identificado_ia" in (conversation.tags or [])
+
+
 def test_webchat_confirmation_keeps_session_open_and_requests_registration_fields(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
@@ -2448,6 +2557,125 @@ def test_webchat_confirmation_keeps_session_open_and_requests_registration_field
     assert session.status == "linked"
     assert session.closed_at is None
     assert session.linked_appointment_id == appointment.id
+
+
+def test_webchat_post_booking_phone_lookup_rebinds_existing_patient_and_linked_appointment(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar uma avaliacao esta semana.",
+        channel="webchat",
+    )
+    placeholder_patient = db_session.get(Patient, conversation.patient_id)
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    professional = _ensure_professional(db_session, tenant_id=tenant_id, unit_id=unit.id, full_name="Dra. Cadastro")
+    assert placeholder_patient is not None
+
+    placeholder_patient.unit_id = unit.id
+    conversation.unit_id = unit.id
+    existing_patient = Patient(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Bruna Lopes",
+        phone="5511998765432",
+        normalized_phone="5511998765432",
+        cpf="70640178195",
+        normalized_cpf="70640178195",
+        birth_date=date(1992, 1, 25),
+        status="ativo",
+        origin="legacy",
+        lgpd_consent=True,
+        marketing_opt_in=False,
+        tags_cache=[],
+    )
+    appointment = Appointment(
+        tenant_id=tenant_id,
+        patient_id=placeholder_patient.id,
+        unit_id=unit.id,
+        professional_id=professional.id,
+        procedure_type="Avaliação inicial",
+        starts_at=datetime.now(UTC) + timedelta(days=2, hours=2),
+        ends_at=datetime.now(UTC) + timedelta(days=2, hours=3),
+        origin="ai_autoresponder",
+        notes="Agendamento automático via WhatsApp/IA.",
+        status="agendada",
+        confirmation_status="confirmada",
+        confirmed_at=datetime.now(UTC),
+    )
+    db_session.add_all([placeholder_patient, conversation, existing_patient, appointment])
+    db_session.flush()
+
+    session = LinkFlowSession(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        mode="link_flow",
+        cta_mode="webchat",
+        channel="webchat",
+        token_hash=f"token-phone-{conversation.id}",
+        public_access_token_hash=f"public-phone-{conversation.id}",
+        status="linked",
+        landing_path="/agendar/tenant-a",
+        utm_payload={},
+        linked_conversation_id=conversation.id,
+        linked_patient_id=placeholder_patient.id,
+        linked_appointment_id=appointment.id,
+        linked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    cpf_prompt = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="webchat",
+        sender_type="ai",
+        body=(
+            "Perfeito! Seu agendamento já está confirmado.\n"
+            "Para agilizar seu atendimento no dia da consulta, você pode me enviar nome completo, CPF e data de nascimento agora."
+        ),
+        message_type="text",
+        payload={
+            "mode": "booking_request_cpf_after_booking",
+            "scheduling": {
+                "procedure_type": "Avaliação inicial",
+                "unit_name": unit.name,
+                "unit_address": "Rua Teste, 123",
+                "professional_name": professional.full_name,
+                "selected_slot": {"label": "sexta-feira, 22/05 às 10:00"},
+                "missing_registration_fields": ["full_name", "cpf", "birth_date", "phone"],
+                "registration_retry_sent": False,
+            },
+        },
+        status="sent",
+    )
+    db_session.add_all([session, cpf_prompt])
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Meu celular é 11 99876-5432",
+        channel="webchat",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    db_session.refresh(conversation)
+    db_session.refresh(session)
+    db_session.refresh(appointment)
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "booking_post_confirmation_options"
+    assert conversation.patient_id == existing_patient.id
+    assert session.linked_patient_id == existing_patient.id
+    assert appointment.patient_id == existing_patient.id
 
 
 def test_webchat_post_booking_registration_message_stays_in_flow_until_phone_is_collected(seeded_db, db_session):
