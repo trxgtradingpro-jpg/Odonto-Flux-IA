@@ -25,7 +25,12 @@ const emptySummary: {
     confirmed_slot: { value: string | null; complete: boolean; source: string | null };
   };
   appointment: { id: string | null; starts_at: string | null; confirmation_status: string | null };
-  options: { units: Array<{ id: string; name: string }> };
+  options: {
+    units: Array<{ id: string; name: string }>;
+    services: Array<{ id: string; name: string }>;
+    preferred_dates: Array<{ id: string; date: string; label: string; description?: string | null }>;
+    preferred_times: Array<{ id: string; label: string; time?: string | null }>;
+  };
 } = {
   session_status: 'linked',
   progress: { complete_count: 0, total_count: 6 },
@@ -40,7 +45,12 @@ const emptySummary: {
     confirmed_slot: { value: null, complete: false, source: null },
   },
   appointment: { id: null, starts_at: null, confirmation_status: null },
-  options: { units: [{ id: 'unit-1', name: 'Unidade principal' }] },
+  options: {
+    units: [{ id: 'unit-1', name: 'Unidade principal' }],
+    services: [{ id: 'service-1', name: 'Avaliacao inicial' }],
+    preferred_dates: [{ id: 'day-1', date: '2026-06-10', label: 'Quarta, 10/06', description: 'A partir de 09:00' }],
+    preferred_times: [{ id: 'time-1', label: '10/06 09:30', time: '09:30' }],
+  },
 };
 
 test.describe('public link flow landing', () => {
@@ -54,16 +64,16 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
       await route.fulfill({
         json: {
-          clinic: { slug: 'tenant-a', name: 'Clínica A', logo_data_url: null },
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
           branding,
           link_flow: {
             enabled: false,
             operational: false,
             cta_mode: 'whatsapp_redirect',
-            headline: 'Agendamento oficial da clínica',
+            headline: 'Agendamento oficial da clinica',
             trust_message: 'Continue pelo canal oficial.',
             button_label: 'Continuar pelo WhatsApp',
-            unavailable_message: 'Agendamento por link indisponível no momento.',
+            unavailable_message: 'Agendamento por link indisponivel no momento.',
           },
         },
       });
@@ -71,19 +81,32 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
-    await expect(page.locator('main').getByText('Agendamento por link indisponível no momento.').first()).toBeVisible();
+    await expect(page.locator('main').getByText('Agendamento por link indisponivel no momento.').first()).toBeVisible();
     await expect(page.getByRole('button', { name: /Continuar pelo WhatsApp/i })).toHaveCount(0);
     expect(sessionCalls).toBe(0);
   });
 
-  test('renders the WhatsApp CTA when backend marks link flow operational', async ({ page }) => {
+  test('requires a phone number before releasing the WhatsApp CTA', async ({ page }) => {
     await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
       await route.fulfill({
         json: {
           session_id: '00000000-0000-0000-0000-000000000001',
           expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'whatsapp_redirect',
           whatsapp_url: 'https://wa.me/5511999887766?text=CFX%3Atoken',
-          clinic: { slug: 'tenant-a', name: 'Clínica A' },
+          public_access_token: null,
+          contact_phone: null,
+          contact_phone_required: true,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/contact', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000001',
+          contact_phone: '(11) 99999-1111',
+          contact_phone_required: false,
         },
       });
     });
@@ -93,13 +116,13 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
       await route.fulfill({
         json: {
-          clinic: { slug: 'tenant-a', name: 'Clínica A', logo_data_url: null },
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
           branding,
           link_flow: {
             enabled: true,
             operational: true,
             cta_mode: 'whatsapp_redirect',
-            headline: 'Agende com a Clínica A',
+            headline: 'Agende com a Clinica A',
             trust_message: 'Atendimento oficial pelo WhatsApp.',
             button_label: 'Continuar pelo WhatsApp',
             unavailable_message: null,
@@ -110,11 +133,14 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
+    await expect(page.getByText('Antes de continuar, me passe seu celular')).toBeVisible();
+    await page.getByPlaceholder('Ex.: (11) 99999-1111').fill('(11) 99999-1111');
+    await page.getByRole('button', { name: /Continuar atendimento/i }).click();
     await expect(page.getByRole('button', { name: /Continuar pelo WhatsApp/i })).toBeVisible();
     await expect(page.getByText('WhatsApp oficial do sistema')).toBeVisible();
   });
 
-  test('renders webchat, sends a message and polls assistant replies', async ({ page }) => {
+  test('renders webchat, asks for phone first, sends a message and polls assistant replies', async ({ page }) => {
     let postMessageCalls = 0;
 
     await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
@@ -125,7 +151,18 @@ test.describe('public link flow landing', () => {
           cta_mode: 'webchat',
           whatsapp_url: null,
           public_access_token: 'public-token',
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A' },
+          contact_phone: null,
+          contact_phone_required: true,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/contact', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000003',
+          contact_phone: '(11) 98888-7777',
+          contact_phone_required: false,
         },
       });
     });
@@ -179,13 +216,13 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
       await route.fulfill({
         json: {
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A', logo_data_url: null },
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
           branding,
           link_flow: {
             enabled: true,
             operational: true,
             cta_mode: 'webchat',
-            headline: 'Agende com a ClÃ­nica A',
+            headline: 'Agende com a Clinica A',
             trust_message: 'Atendimento oficial pela pagina.',
             button_label: 'Iniciar chat',
             unavailable_message: null,
@@ -198,6 +235,8 @@ test.describe('public link flow landing', () => {
 
     await expect(page.getByText('Atendimento online')).toBeVisible();
     await expect(page.getByRole('button', { name: /Continuar pelo WhatsApp/i })).toHaveCount(0);
+    await page.getByPlaceholder('Ex.: (11) 99999-1111').fill('(11) 98888-7777');
+    await page.getByRole('button', { name: /Continuar atendimento/i }).click();
     await page.getByPlaceholder('Digite sua mensagem...').fill('Quero agendar');
     await page.getByRole('button', { name: /Enviar mensagem/i }).click();
 
@@ -215,7 +254,9 @@ test.describe('public link flow landing', () => {
           cta_mode: 'webchat',
           whatsapp_url: null,
           public_access_token: 'public-token-mobile',
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A' },
+          contact_phone: '5511999991111',
+          contact_phone_required: false,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
         },
       });
     });
@@ -235,13 +276,13 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
       await route.fulfill({
         json: {
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A', logo_data_url: null },
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
           branding,
           link_flow: {
             enabled: true,
             operational: true,
             cta_mode: 'webchat',
-            headline: 'Agende com a ClÃ­nica A',
+            headline: 'Agende com a Clinica A',
             trust_message: 'Atendimento oficial pela pagina.',
             button_label: 'Iniciar chat',
             unavailable_message: null,
@@ -306,7 +347,9 @@ test.describe('public link flow landing', () => {
           cta_mode: 'webchat',
           whatsapp_url: null,
           public_access_token: 'public-token-summary',
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A' },
+          contact_phone: '5511999991111',
+          contact_phone_required: false,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
         },
       });
     });
@@ -327,6 +370,7 @@ test.describe('public link flow landing', () => {
             unit: { value: 'Unidade principal', complete: true, source: 'manual', unit_id: 'unit-1' },
             procedure: { value: 'Avaliacao inicial', complete: true, source: 'manual' },
             preferred_date: { value: '2026-06-10', complete: true, source: 'manual' },
+            confirmed_slot: { value: '10/06 09:30', complete: true, source: 'manual' },
           },
         };
       }
@@ -335,13 +379,13 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
       await route.fulfill({
         json: {
-          clinic: { slug: 'tenant-a', name: 'ClÃ­nica A', logo_data_url: null },
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
           branding,
           link_flow: {
             enabled: true,
             operational: true,
             cta_mode: 'webchat',
-            headline: 'Agende com a ClÃ­nica A',
+            headline: 'Agende com a Clinica A',
             trust_message: 'Atendimento oficial pela pagina.',
             button_label: 'Iniciar chat',
             unavailable_message: null,
@@ -353,15 +397,18 @@ test.describe('public link flow landing', () => {
     await page.goto('/agendar/tenant-a');
 
     await expect(page.getByText('Maria Souza')).toBeVisible();
-    await expect(page.getByText('Complementar manualmente')).toBeVisible();
-    await page.getByRole('button', { name: /Editar/i }).click();
-    await page.getByPlaceholder('Servico desejado').fill('Avaliacao inicial');
-    await page.getByRole('combobox').selectOption('unit-1');
-    await page.locator('input[type="date"]').nth(1).fill('2026-06-10');
-    await page.getByRole('button', { name: /Salvar dados do agendamento/i }).click();
+    await page.getByTestId('summary-action-procedure').click();
+    await page.getByTestId('summary-select-procedure').selectOption({ label: 'Avaliacao inicial' });
+    await page.getByTestId('summary-action-unit').click();
+    await page.getByTestId('summary-select-unit').selectOption('unit-1');
+    await page.getByTestId('summary-action-preferred_date').click();
+    await page.getByTestId('summary-select-preferred_date').selectOption('2026-06-10');
+    await page.getByTestId('summary-action-confirmed_slot').click();
+    await page.getByTestId('summary-select-confirmed_slot').selectOption({ label: '10/06 09:30' });
 
     await expect(page.getByText('Unidade principal')).toBeVisible();
     await expect(page.getByText('Avaliacao inicial')).toBeVisible();
     await expect(page.getByText('10/06/2026')).toBeVisible();
+    await expect(page.getByText('10/06 09:30')).toBeVisible();
   });
 });

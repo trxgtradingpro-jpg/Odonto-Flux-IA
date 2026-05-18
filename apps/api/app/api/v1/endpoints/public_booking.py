@@ -13,10 +13,12 @@ from app.core.exceptions import ApiError
 from app.db.session import get_db
 from app.models import LinkFlowSession, Setting, Tenant, Unit
 from app.services.link_flow_service import (
+    capture_public_contact_phone,
     create_link_flow_session,
     get_intake_config,
     get_system_whatsapp_account,
     is_link_flow_enabled,
+    public_contact_phone_state,
     register_link_flow_event,
 )
 from app.services.webchat_service import (
@@ -59,6 +61,11 @@ class PublicWebchatSummaryUpdateInput(BaseModel):
     procedure_type: str | None = Field(default=None, max_length=120)
     unit_id: UUID | None = None
     preferred_date: str | None = Field(default=None, max_length=10)
+    preferred_time: str | None = Field(default=None, max_length=80)
+
+
+class PublicBookingContactInput(BaseModel):
+    phone: str = Field(min_length=8, max_length=30)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -246,6 +253,7 @@ def create_public_booking_session(
             "cta_mode": "webchat",
             "whatsapp_url": None,
             "public_access_token": bundle.public_access_token,
+            **public_contact_phone_state(db, session=session),
             "clinic": {
                 "slug": tenant.slug,
                 "name": _clinic_name(tenant, settings_map),
@@ -275,6 +283,7 @@ def create_public_booking_session(
         "cta_mode": "whatsapp_redirect",
         "whatsapp_url": whatsapp_url,
         "public_access_token": None,
+        **public_contact_phone_state(db, session=session),
         "clinic": {
             "slug": tenant.slug,
             "name": _clinic_name(tenant, settings_map),
@@ -347,7 +356,59 @@ def get_public_booking_session(
         session_id=session_id,
         public_access_token=_public_access_token(request),
     )
-    return public_webchat_session_state(session)
+    return {
+        **public_webchat_session_state(session),
+        **public_contact_phone_state(db, session=session),
+    }
+
+
+@router.post("/sessions/{session_id}/contact")
+def capture_public_booking_contact(
+    session_id: UUID,
+    payload: PublicBookingContactInput,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    session = db.get(LinkFlowSession, session_id)
+    if not session:
+        raise ApiError(
+            status_code=404,
+            code="LINK_FLOW_SESSION_NOT_FOUND",
+            message="Sessao do agendamento por link nao encontrada.",
+        )
+
+    if session.cta_mode == "webchat":
+        session, _tenant = validate_public_webchat_session(
+            db,
+            session_id=session_id,
+            public_access_token=_public_access_token(request),
+        )
+    else:
+        tenant = db.get(Tenant, session.tenant_id)
+        if not tenant or not tenant.is_active:
+            raise ApiError(
+                status_code=409,
+                code="PUBLIC_BOOKING_NOT_AVAILABLE",
+                message="Atendimento indisponivel. Abra novamente o link oficial da clinica para continuar.",
+            )
+        if session.expires_at <= datetime.now(UTC):
+            raise ApiError(
+                status_code=409,
+                code="LINK_FLOW_SESSION_EXPIRED",
+                message="Sessao do agendamento por link expirada.",
+            )
+
+    response = capture_public_contact_phone(
+        db,
+        session=session,
+        raw_phone=payload.phone,
+    )
+    db.commit()
+    db.refresh(session)
+    return {
+        "session_id": str(session.id),
+        **response,
+    }
 
 
 @router.get("/sessions/{session_id}/summary")
@@ -386,6 +447,7 @@ def patch_public_webchat_summary(
         procedure_type=payload.procedure_type,
         unit_id=payload.unit_id,
         preferred_date=payload.preferred_date,
+        preferred_time=payload.preferred_time,
     )
 
 

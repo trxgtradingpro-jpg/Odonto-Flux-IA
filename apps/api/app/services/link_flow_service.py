@@ -17,6 +17,8 @@ from app.models import (
     Conversation,
     LinkFlowEvent,
     LinkFlowSession,
+    Patient,
+    PatientContact,
     Setting,
     Tenant,
     WhatsAppAccount,
@@ -42,8 +44,10 @@ LINK_FLOW_ALLOWED_EVENTS = {
     "webchat_first_ai_response",
     "webchat_session_resumed",
     "webchat_summary_updated",
+    "webchat_summary_manual_followup_sent",
     "webchat_session_closed",
     "webchat_error",
+    "contact_phone_captured",
 }
 LINK_FLOW_ACTIVE_STATUSES = {"pending", "linked"}
 LINK_FLOW_INACTIVE_STATUSES = {"cancelled", "completed", "closed", "inactive"}
@@ -259,6 +263,153 @@ def _system_whatsapp_phone(db: Session) -> str:
             message="WhatsApp oficial do sistema indisponivel para criar o link de agendamento.",
         )
     return normalized
+
+
+def _is_webchat_placeholder_phone(value: str | None) -> bool:
+    return str(value or "").strip().lower().startswith("webchat")
+
+
+def _public_contact_phone(patient: Patient | None) -> str | None:
+    raw_phone = str(patient.phone or "").strip() if patient else ""
+    normalized = normalize_phone(raw_phone)
+    if not normalized or _is_webchat_placeholder_phone(raw_phone):
+        return None
+    return raw_phone
+
+
+def public_contact_phone_state(db: Session, *, session: LinkFlowSession) -> dict[str, Any]:
+    patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
+    contact_phone = _public_contact_phone(patient)
+    return {
+        "contact_phone": contact_phone,
+        "contact_phone_required": not bool(contact_phone),
+    }
+
+
+def _normalize_public_contact_phone(value: str | None) -> tuple[str, str]:
+    raw_phone = " ".join(str(value or "").strip().split())[:30]
+    normalized_phone = normalize_phone(raw_phone)
+    if len(normalized_phone) < 10 or len(normalized_phone) > 15:
+        raise ApiError(
+            status_code=422,
+            code="PUBLIC_BOOKING_PHONE_INVALID",
+            message="Informe um celular ou WhatsApp com DDD para continuar o atendimento.",
+        )
+    return raw_phone, normalized_phone
+
+
+def _upsert_primary_phone_contact(
+    db: Session,
+    *,
+    patient: Patient,
+    raw_phone: str,
+    normalized_phone: str,
+) -> None:
+    existing_contact = db.scalar(
+        select(PatientContact).where(
+            PatientContact.tenant_id == patient.tenant_id,
+            PatientContact.patient_id == patient.id,
+            PatientContact.channel == "whatsapp",
+            PatientContact.is_primary.is_(True),
+        )
+    )
+    if existing_contact:
+        existing_contact.value = raw_phone
+        existing_contact.normalized_value = normalized_phone
+        existing_contact.is_verified = False
+        db.add(existing_contact)
+        return
+
+    db.add(
+        PatientContact(
+            tenant_id=patient.tenant_id,
+            patient_id=patient.id,
+            channel="whatsapp",
+            value=raw_phone,
+            normalized_value=normalized_phone,
+            is_primary=True,
+            is_verified=False,
+        )
+    )
+
+
+def capture_public_contact_phone(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    raw_phone: str | None,
+) -> dict[str, Any]:
+    compact_phone, normalized_phone = _normalize_public_contact_phone(raw_phone)
+    tenant = db.get(Tenant, session.tenant_id)
+    if not tenant or not tenant.is_active:
+        raise ApiError(
+            status_code=409,
+            code="PUBLIC_BOOKING_NOT_AVAILABLE",
+            message="Atendimento indisponivel. Abra novamente o link oficial da clinica para continuar.",
+        )
+
+    linked_patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
+    target_patient = db.scalar(
+        select(Patient).where(
+            Patient.tenant_id == session.tenant_id,
+            Patient.normalized_phone == normalized_phone,
+        )
+    )
+    if not target_patient:
+        target_patient = linked_patient
+
+    if not target_patient:
+        target_patient = Patient(
+            tenant_id=session.tenant_id,
+            unit_id=session.unit_id,
+            full_name="Paciente do agendamento",
+            phone=compact_phone,
+            normalized_phone=normalized_phone,
+            status="lead",
+            origin="link_flow_public",
+            lgpd_consent=True,
+            marketing_opt_in=False,
+            tags_cache=["entry_link_flow"],
+        )
+        db.add(target_patient)
+        db.flush()
+    else:
+        if session.unit_id and not target_patient.unit_id:
+            target_patient.unit_id = session.unit_id
+        target_patient.phone = compact_phone
+        target_patient.normalized_phone = normalized_phone
+        if not str(target_patient.origin or "").strip():
+            target_patient.origin = "link_flow_public"
+        db.add(target_patient)
+
+    _upsert_primary_phone_contact(
+        db,
+        patient=target_patient,
+        raw_phone=compact_phone,
+        normalized_phone=normalized_phone,
+    )
+
+    session.linked_patient_id = target_patient.id
+    db.add(session)
+
+    if session.linked_conversation_id:
+        conversation = db.get(Conversation, session.linked_conversation_id)
+        if conversation and conversation.tenant_id == session.tenant_id and conversation.patient_id != target_patient.id:
+            conversation.patient_id = target_patient.id
+            if session.unit_id and not conversation.unit_id:
+                conversation.unit_id = session.unit_id
+            db.add(conversation)
+
+    register_link_flow_event_once(
+        db,
+        session=session,
+        event_name="contact_phone_captured",
+        payload={"phone": normalized_phone},
+        unique_payload_key="phone",
+        unique_payload_value=normalized_phone,
+    )
+
+    return public_contact_phone_state(db, session=session)
 
 
 def build_whatsapp_url(*, phone: str, raw_token: str, clinic_name: str) -> str:

@@ -12,6 +12,7 @@ import {
   Mail,
   MapPinHouse,
   MessageCircle,
+  List,
   PencilLine,
   SendHorizontal,
   ShieldCheck,
@@ -58,10 +59,25 @@ type PublicBookingSession = {
   cta_mode: "whatsapp_redirect" | "webchat";
   whatsapp_url: string | null;
   public_access_token?: string | null;
+  contact_phone?: string | null;
+  contact_phone_required?: boolean;
   clinic: {
     slug: string;
     name: string;
   };
+};
+
+type PublicBookingSessionState = {
+  session_id: string;
+  status: string;
+  cta_mode: "webchat";
+  channel: "webchat";
+  expires_at: string;
+  closed_at: string | null;
+  has_conversation: boolean;
+  completed: boolean;
+  contact_phone: string | null;
+  contact_phone_required: boolean;
 };
 
 type PublicWebchatMessage = {
@@ -106,6 +122,9 @@ type PublicBookingSummary = {
   };
   options: {
     units: Array<{ id: string; name: string }>;
+    services?: Array<{ id: string; name: string }>;
+    preferred_dates?: Array<{ id: string; date: string; label: string; description?: string | null }>;
+    preferred_times?: Array<{ id: string; label: string; time?: string | null }>;
   };
 };
 
@@ -116,6 +135,7 @@ type PublicBookingSummaryDraft = {
   procedure_type: string;
   unit_id: string;
   preferred_date: string;
+  preferred_time: string;
 };
 
 function formatPublicMessageTime(value: string | null): string {
@@ -212,6 +232,10 @@ function storeWebchatSession(clinicSlug: string, session: PublicBookingSession |
     return;
   }
   window.localStorage.setItem(key, JSON.stringify(session));
+}
+
+function normalizePhoneDraft(value: string): string {
+  return value.replace(/[^\d+()\-\s]/g, "").slice(0, 30);
 }
 
 function PublicWebchat({
@@ -445,30 +469,33 @@ function buildSummaryDraft(summary: PublicBookingSummary | null): PublicBookingS
     procedure_type: summary?.fields.procedure.value || "",
     unit_id: summary?.fields.unit.unit_id || "",
     preferred_date: summary?.fields.preferred_date.value || "",
+    preferred_time: summary?.fields.confirmed_slot.source === "manual" ? summary?.fields.confirmed_slot.value || "" : "",
   };
 }
 
 function BookingSummaryPanel({
-  clinicName,
   summary,
   loading,
   saving,
   onSave,
   className,
 }: {
-  clinicName: string;
   summary: PublicBookingSummary | null;
   loading: boolean;
   saving: boolean;
-  onSave: (draft: PublicBookingSummaryDraft) => Promise<void>;
+  onSave: (draft: Partial<PublicBookingSummaryDraft>) => Promise<void>;
   className?: string;
 }) {
-  const [editorOpen, setEditorOpen] = useState(false);
+  const [activeEditor, setActiveEditor] = useState<string | null>(null);
   const [draft, setDraft] = useState<PublicBookingSummaryDraft>(() => buildSummaryDraft(summary));
 
   useEffect(() => {
     setDraft(buildSummaryDraft(summary));
   }, [summary]);
+
+  const serviceOptions = summary?.options.services || [];
+  const preferredDateOptions = summary?.options.preferred_dates || [];
+  const preferredTimeOptions = summary?.options.preferred_times || [];
 
   const cards = [
     {
@@ -477,6 +504,7 @@ function BookingSummaryPanel({
       value: summary?.fields.patient_name.value || "Aguardando nome",
       complete: summary?.fields.patient_name.complete || false,
       icon: UserRound,
+      action: "edit" as const,
     },
     {
       key: "email",
@@ -484,6 +512,7 @@ function BookingSummaryPanel({
       value: summary?.fields.email.value || "Ainda nao informado",
       complete: summary?.fields.email.complete || false,
       icon: Mail,
+      action: "edit" as const,
     },
     {
       key: "birth_date",
@@ -491,6 +520,7 @@ function BookingSummaryPanel({
       value: summary?.fields.birth_date.value ? formatPublicDate(summary.fields.birth_date.value) : "Ainda nao informado",
       complete: summary?.fields.birth_date.complete || false,
       icon: CalendarDays,
+      action: null,
     },
     {
       key: "unit",
@@ -498,6 +528,7 @@ function BookingSummaryPanel({
       value: summary?.fields.unit.value || "Escolha pendente",
       complete: summary?.fields.unit.complete || false,
       icon: MapPinHouse,
+      action: "select" as const,
     },
     {
       key: "procedure",
@@ -505,6 +536,7 @@ function BookingSummaryPanel({
       value: summary?.fields.procedure.value || "Definir na conversa",
       complete: summary?.fields.procedure.complete || false,
       icon: ClipboardList,
+      action: "select" as const,
     },
     {
       key: "preferred_date",
@@ -512,152 +544,235 @@ function BookingSummaryPanel({
       value: summary?.fields.preferred_date.value ? formatPublicDate(summary.fields.preferred_date.value) : "Opcional",
       complete: summary?.fields.preferred_date.complete || false,
       icon: CalendarDays,
+      action: "select" as const,
     },
     {
       key: "confirmed_slot",
       label: "Horario",
-      value: summary?.fields.confirmed_slot.value ? formatPublicDateTime(summary.fields.confirmed_slot.value) : "Aguardando confirmacao",
+      value: summary?.fields.confirmed_slot.value
+        ? summary?.fields.confirmed_slot.source === "manual"
+          ? summary.fields.confirmed_slot.value
+          : formatPublicDateTime(summary.fields.confirmed_slot.value)
+        : "Aguardando confirmacao",
       complete: summary?.fields.confirmed_slot.complete || false,
       icon: Sparkles,
+      action: "select" as const,
     },
-  ];
+  ] as const;
 
-  const missingCount = cards.filter((card) => !card.complete).length;
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await onSave(draft);
-    setEditorOpen(false);
+  async function handleQuickSave(nextDraft: Partial<PublicBookingSummaryDraft>, nextEditor: string | null = null) {
+    await onSave(nextDraft);
+    setActiveEditor(nextEditor);
   }
+
+  const inlineInputClassName =
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+  const inlineSelectClassName =
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
 
   return (
     <aside
       className={cn(
-        "flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/70 bg-white/84 p-3 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:rounded-[30px] sm:p-5",
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/70 bg-white/84 p-2.5 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:rounded-[30px] sm:p-3.5",
         className,
       )}
     >
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+        <div className="grid grid-cols-2 gap-2">
           {cards.map((card) => {
             const Icon = card.icon;
+            const isEditing = activeEditor === card.key;
             return (
               <div
                 key={card.key}
                 className={[
-                  "rounded-[18px] border px-3 py-3 transition sm:rounded-[20px]",
+                  "rounded-[16px] border px-2.5 py-2.5 transition sm:rounded-[18px]",
                   card.complete
                     ? "border-emerald-200 bg-emerald-50/90 shadow-[0_10px_24px_rgba(16,185,129,0.10)]"
                     : "border-stone-200 bg-white/92",
                 ].join(" ")}
               >
-                <div className="flex items-start gap-2">
-                  <span
-                    className={[
-                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
-                      card.complete ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500",
-                    ].join(" ")}
-                  >
-                    <Icon className="h-4 w-4" aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--booking-muted)] sm:text-[11px]">
-                      {card.label}
-                    </p>
-                    <p
-                      className={`mt-1 break-words text-[13px] font-medium leading-5 sm:text-sm ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span
+                      className={[
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
+                        card.complete ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-500",
+                      ].join(" ")}
                     >
-                      {card.value}
-                    </p>
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--booking-muted)]">
+                        {card.label}
+                      </p>
+                      <p
+                        className={`mt-1 break-words text-[11px] font-medium leading-4 sm:text-[12px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                      >
+                        {card.value}
+                      </p>
+                    </div>
                   </div>
+                  {card.action === "edit" ? (
+                    <button
+                      type="button"
+                      aria-label={`Editar ${card.label}`}
+                      data-testid={`summary-action-${card.key}`}
+                      onClick={() => setActiveEditor((current) => (current === card.key ? null : card.key))}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-300 hover:text-stone-700"
+                    >
+                      <PencilLine className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {card.action === "select" ? (
+                    <button
+                      type="button"
+                      aria-label={`Escolher ${card.label}`}
+                      data-testid={`summary-action-${card.key}`}
+                      onClick={() => setActiveEditor((current) => (current === card.key ? null : card.key))}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-500 transition hover:border-stone-300 hover:text-stone-700"
+                    >
+                      <List className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  ) : null}
                 </div>
+
+                {isEditing && card.key === "patient_name" ? (
+                  <form
+                    className="mt-2 flex gap-2"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await handleQuickSave({ full_name: draft.full_name }, null);
+                    }}
+                  >
+                    <input
+                      value={draft.full_name}
+                      onChange={(event) => setDraft((current) => ({ ...current, full_name: event.target.value }))}
+                      placeholder="Nome completo"
+                      className={inlineInputClassName}
+                      data-testid="summary-input-patient_name"
+                    />
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-xs font-semibold text-white disabled:opacity-60"
+                    >
+                      Salvar
+                    </button>
+                  </form>
+                ) : null}
+
+                {isEditing && card.key === "email" ? (
+                  <form
+                    className="mt-2 flex gap-2"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await handleQuickSave({ email: draft.email }, null);
+                    }}
+                  >
+                    <input
+                      value={draft.email}
+                      onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
+                      placeholder="E-mail"
+                      className={inlineInputClassName}
+                      data-testid="summary-input-email"
+                    />
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-xs font-semibold text-white disabled:opacity-60"
+                    >
+                      Salvar
+                    </button>
+                  </form>
+                ) : null}
+
+                {isEditing && card.key === "unit" ? (
+                  <select
+                    value={draft.unit_id}
+                    onChange={async (event) => {
+                      const value = event.target.value;
+                      setDraft((current) => ({ ...current, unit_id: value, preferred_date: "", preferred_time: "" }));
+                      await handleQuickSave({ unit_id: value, preferred_date: "", preferred_time: "" }, null);
+                    }}
+                    className={`${inlineSelectClassName} mt-2`}
+                    data-testid="summary-select-unit"
+                    disabled={saving}
+                  >
+                    <option value="">Selecionar unidade</option>
+                    {summary?.options.units.map((unit) => (
+                      <option key={unit.id} value={unit.id}>
+                        {unit.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {isEditing && card.key === "procedure" ? (
+                  <select
+                    value={draft.procedure_type}
+                    onChange={async (event) => {
+                      const value = event.target.value;
+                      setDraft((current) => ({ ...current, procedure_type: value, preferred_date: "", preferred_time: "" }));
+                      await handleQuickSave({ procedure_type: value, preferred_date: "", preferred_time: "" }, null);
+                    }}
+                    className={`${inlineSelectClassName} mt-2`}
+                    data-testid="summary-select-procedure"
+                    disabled={saving}
+                  >
+                    <option value="">Selecionar servico</option>
+                    {serviceOptions.map((service) => (
+                      <option key={service.id} value={service.name}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {isEditing && card.key === "preferred_date" ? (
+                  <select
+                    value={draft.preferred_date}
+                    onChange={async (event) => {
+                      const value = event.target.value;
+                      setDraft((current) => ({ ...current, preferred_date: value, preferred_time: "" }));
+                      await handleQuickSave({ preferred_date: value, preferred_time: "" }, null);
+                    }}
+                    className={`${inlineSelectClassName} mt-2`}
+                    data-testid="summary-select-preferred_date"
+                    disabled={saving || preferredDateOptions.length === 0}
+                  >
+                    <option value="">{preferredDateOptions.length ? "Selecionar data" : "Escolha unidade e servico"}</option>
+                    {preferredDateOptions.map((option) => (
+                      <option key={option.id} value={option.date}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {isEditing && card.key === "confirmed_slot" ? (
+                  <select
+                    value={draft.preferred_time}
+                    onChange={async (event) => {
+                      const value = event.target.value;
+                      setDraft((current) => ({ ...current, preferred_time: value }));
+                      await handleQuickSave({ preferred_time: value }, null);
+                    }}
+                    className={`${inlineSelectClassName} mt-2`}
+                    data-testid="summary-select-confirmed_slot"
+                    disabled={saving || preferredTimeOptions.length === 0}
+                  >
+                    <option value="">{preferredTimeOptions.length ? "Selecionar horario" : "Escolha uma data"}</option>
+                    {preferredTimeOptions.map((option) => (
+                      <option key={option.id} value={option.label}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
               </div>
             );
           })}
-        </div>
-
-        <div className="mt-4 rounded-[22px] border border-dashed border-stone-200 bg-white/70 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-stone-900">Complementar manualmente</p>
-              <p className="mt-1 text-xs leading-5 text-[var(--booking-muted)]">
-                {missingCount
-                  ? `${missingCount} campos ainda podem ser preenchidos por aqui sem sair da pagina.`
-                  : "Tudo essencial ja esta preenchido. Voce ainda pode revisar os dados manualmente."}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setEditorOpen((current) => !current)}
-              className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
-            >
-              <PencilLine className="mr-2 h-4 w-4" aria-hidden="true" />
-              {editorOpen ? "Fechar" : "Editar"}
-            </button>
-          </div>
-
-          {editorOpen ? (
-            <form onSubmit={handleSubmit} className="mt-3 grid gap-2.5">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  value={draft.full_name}
-                  onChange={(event) => setDraft((current) => ({ ...current, full_name: event.target.value }))}
-                  placeholder="Nome completo"
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                />
-                <input
-                  value={draft.email}
-                  onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
-                  placeholder="E-mail"
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                />
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  type="date"
-                  value={draft.birth_date}
-                  onChange={(event) => setDraft((current) => ({ ...current, birth_date: event.target.value }))}
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                />
-                <select
-                  value={draft.unit_id}
-                  onChange={(event) => setDraft((current) => ({ ...current, unit_id: event.target.value }))}
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                >
-                  <option value="">Selecionar unidade</option>
-                  {summary?.options.units.map((unit) => (
-                    <option key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  value={draft.procedure_type}
-                  onChange={(event) => setDraft((current) => ({ ...current, procedure_type: event.target.value }))}
-                  placeholder="Servico desejado"
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                />
-                <input
-                  type="date"
-                  value={draft.preferred_date}
-                  onChange={(event) => setDraft((current) => ({ ...current, preferred_date: event.target.value }))}
-                  className="h-11 rounded-2xl border border-stone-200 bg-white px-3 text-sm outline-none transition focus:border-[var(--booking-primary)]"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={saving}
-                className="mt-1 inline-flex h-11 items-center justify-center rounded-full bg-[var(--booking-primary)] px-4 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? "Salvando..." : "Salvar dados do agendamento"}
-              </button>
-            </form>
-          ) : null}
         </div>
 
         {loading && !summary ? (
@@ -760,6 +875,69 @@ function WhatsAppCtaPanel({
   );
 }
 
+function PublicPhoneGate({
+  clinicName,
+  phone,
+  saving,
+  error,
+  onPhoneChange,
+  onSubmit,
+}: {
+  clinicName: string;
+  phone: string;
+  saving: boolean;
+  error: string | null;
+  onPhoneChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-stone-950/45 px-4 py-6 backdrop-blur-[2px]">
+      <div className="w-full max-w-md rounded-[30px] border border-white/70 bg-white/96 p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]">
+        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+          Atendimento protegido
+        </div>
+        <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">Antes de continuar, me passe seu celular</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+          Vamos usar esse numero apenas para identificar voce com mais rapidez no agendamento oficial da {clinicName}.
+        </p>
+        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+          Pode informar seu celular ou WhatsApp com DDD. Assim a clinica ja aproveita esse dado no restante do atendimento.
+        </p>
+
+        <form onSubmit={onSubmit} className="mt-5 space-y-4">
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-stone-800">Celular ou WhatsApp com DDD</span>
+            <input
+              autoFocus
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              value={phone}
+              onChange={(event) => onPhoneChange(event.target.value)}
+              placeholder="Ex.: (11) 99999-1111"
+              className="h-14 w-full rounded-2xl border border-stone-200 bg-white px-4 text-sm text-stone-900 outline-none transition focus:border-[var(--booking-primary)] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--booking-primary)_18%,transparent)]"
+            />
+          </label>
+
+          {error ? (
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{error}</p>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={!phone.trim() || saving}
+            className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {saving ? "Confirmando celular..." : "Continuar atendimento"}
+            <ArrowRight className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function PublicBookingPage() {
   const params = useParams<{ clinicSlug: string }>();
   const clinicSlug = String(params.clinicSlug || "").trim();
@@ -774,6 +952,9 @@ export default function PublicBookingPage() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [savingSummary, setSavingSummary] = useState(false);
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
+  const [contactPhoneDraft, setContactPhoneDraft] = useState("");
+  const [savingContactPhone, setSavingContactPhone] = useState(false);
+  const [contactPhoneError, setContactPhoneError] = useState<string | null>(null);
   const mobileSummaryGestureRef = useRef<{ startX: number; action: "open" | "close" } | null>(null);
 
   useEffect(() => {
@@ -797,12 +978,16 @@ export default function PublicBookingPage() {
           const storedSession = readStoredWebchatSession(clinicSlug);
           if (storedSession?.public_access_token) {
             try {
-              await publicApiFetch(
+              const storedSessionState = await publicApiFetch<PublicBookingSessionState>(
                 `/public/booking/sessions/${storedSession.session_id}`,
                 undefined,
                 { publicAccessToken: storedSession.public_access_token },
               );
-              bookingSession = storedSession;
+              bookingSession = {
+                ...storedSession,
+                contact_phone: storedSessionState.contact_phone,
+                contact_phone_required: storedSessionState.contact_phone_required,
+              };
               await publicApiFetch(
                 `/public/booking/sessions/${storedSession.session_id}/events`,
                 {
@@ -880,6 +1065,8 @@ export default function PublicBookingPage() {
   }, []);
 
   const webchatToken = session?.cta_mode === "webchat" ? session.public_access_token || "" : "";
+  const contactPhoneCaptured = Boolean(session?.contact_phone && session.contact_phone.trim());
+  const shouldBlockForPhone = Boolean(profile?.link_flow.operational && session && !contactPhoneCaptured);
 
   const loadSummary = useCallback(async () => {
     if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
@@ -911,6 +1098,11 @@ export default function PublicBookingPage() {
     }
     void loadSummary();
   }, [loadSummary, session, webchatToken]);
+
+  useEffect(() => {
+    setContactPhoneDraft(session?.contact_phone || "");
+    setContactPhoneError(null);
+  }, [session?.contact_phone]);
 
   useEffect(() => {
     if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
@@ -1004,18 +1196,18 @@ export default function PublicBookingPage() {
     }
   }, [isWebchat]);
 
-  async function handleSaveSummary(draft: PublicBookingSummaryDraft) {
+  async function handleSaveSummary(draft: Partial<PublicBookingSummaryDraft>) {
     if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
     setSavingSummary(true);
     try {
-      const payload = {
-        full_name: draft.full_name || undefined,
-        email: draft.email || undefined,
-        birth_date: draft.birth_date || undefined,
-        procedure_type: draft.procedure_type || undefined,
-        unit_id: draft.unit_id || undefined,
-        preferred_date: draft.preferred_date || undefined,
-      };
+      const payload: Record<string, string | undefined> = {};
+      if ("full_name" in draft) payload.full_name = draft.full_name || undefined;
+      if ("email" in draft) payload.email = draft.email || undefined;
+      if ("birth_date" in draft) payload.birth_date = draft.birth_date || undefined;
+      if ("procedure_type" in draft) payload.procedure_type = draft.procedure_type ?? "";
+      if ("unit_id" in draft) payload.unit_id = draft.unit_id || undefined;
+      if ("preferred_date" in draft) payload.preferred_date = draft.preferred_date ?? "";
+      if ("preferred_time" in draft) payload.preferred_time = draft.preferred_time ?? "";
       const response = await publicApiFetch<PublicBookingSummary>(
         `/public/booking/sessions/${session.session_id}/summary`,
         {
@@ -1030,6 +1222,40 @@ export default function PublicBookingPage() {
       setError(err instanceof Error ? err.message : "Nao foi possivel salvar os dados do agendamento.");
     } finally {
       setSavingSummary(false);
+    }
+  }
+
+  async function handleCaptureContactPhone(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    setSavingContactPhone(true);
+    setContactPhoneError(null);
+    try {
+      const response = await publicApiFetch<{ session_id: string; contact_phone: string | null; contact_phone_required: boolean }>(
+        `/public/booking/sessions/${session.session_id}/contact`,
+        {
+          method: "POST",
+          body: JSON.stringify({ phone: contactPhoneDraft }),
+        },
+        session.cta_mode === "webchat" ? { publicAccessToken: webchatToken } : undefined,
+      );
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              contact_phone: response.contact_phone,
+              contact_phone_required: response.contact_phone_required,
+            }
+          : current,
+      );
+      setContactPhoneDraft(response.contact_phone || contactPhoneDraft);
+      if (session.cta_mode === "webchat") {
+        void loadSummary();
+      }
+    } catch (err) {
+      setContactPhoneError(err instanceof Error ? err.message : "Nao foi possivel confirmar seu celular.");
+    } finally {
+      setSavingContactPhone(false);
     }
   }
 
@@ -1107,7 +1333,6 @@ export default function PublicBookingPage() {
                     <div className="h-1.5 w-16 rounded-full bg-stone-300/90 shadow-sm" aria-hidden="true" />
                   </div>
                   <BookingSummaryPanel
-                    clinicName={clinicName}
                     summary={summary}
                     loading={loadingSummary}
                     saving={savingSummary}
@@ -1154,7 +1379,6 @@ export default function PublicBookingPage() {
           <div className="hidden min-h-0 lg:flex">
             {isWebchat ? (
               <BookingSummaryPanel
-                clinicName={clinicName}
                 summary={summary}
                 loading={loadingSummary}
                 saving={savingSummary}
@@ -1198,6 +1422,17 @@ export default function PublicBookingPage() {
               </div>
             ) : null}
           </div>
+
+          {shouldBlockForPhone ? (
+            <PublicPhoneGate
+              clinicName={clinicName}
+              phone={contactPhoneDraft}
+              saving={savingContactPhone}
+              error={contactPhoneError}
+              onPhoneChange={(value) => setContactPhoneDraft(normalizePhoneDraft(value))}
+              onSubmit={handleCaptureContactPhone}
+            />
+          ) : null}
         </section>
 
         {(linkFlowUnavailable || error) && profile?.link_flow.operational && session ? (

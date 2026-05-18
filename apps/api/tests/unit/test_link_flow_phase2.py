@@ -11,6 +11,7 @@ from app.models import (
     LinkFlowSession,
     Message,
     Patient,
+    PatientContact,
     Professional,
     Setting,
     Unit,
@@ -20,7 +21,9 @@ from app.models.enums import MessageDirection, MessageStatus
 from app.services.ai_autoresponder_service import _appointment_response_from_selected_slot
 from app.services.ai_structured_flow import _confirm_appointment
 from app.services.link_flow_service import (
+    capture_public_contact_phone,
     get_intake_config,
+    public_contact_phone_state,
     validate_intake_config_payload,
 )
 from app.services.channel_dispatch_service import dispatch_patient_message
@@ -528,3 +531,81 @@ def test_webchat_message_idempotency_and_safe_serialization(monkeypatch, seeded_
     assert inbound_count == 1
     assert public_messages[0]["role"] == "patient"
     assert "conversation_id" not in public_messages[0]
+
+
+def test_capture_public_contact_phone_creates_patient_for_session(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    config = _enable_webchat_intake(db_session, tenant)
+    bundle = create_webchat_link_flow_session(
+        db_session,
+        tenant=tenant,
+        config=config,
+        landing_path="/agendar/tenant-b",
+    )
+
+    payload = capture_public_contact_phone(
+        db_session,
+        session=bundle.session,
+        raw_phone="(11) 99888-7766",
+    )
+    db_session.flush()
+    db_session.refresh(bundle.session)
+
+    patient = db_session.get(Patient, bundle.session.linked_patient_id)
+    contact = db_session.scalar(
+        select(PatientContact).where(
+            PatientContact.tenant_id == tenant.id,
+            PatientContact.patient_id == patient.id,
+            PatientContact.channel == "whatsapp",
+            PatientContact.is_primary.is_(True),
+        )
+    )
+
+    assert patient is not None
+    assert patient.phone == "(11) 99888-7766"
+    assert patient.normalized_phone == "5511998887766"
+    assert payload["contact_phone"] == "(11) 99888-7766"
+    assert payload["contact_phone_required"] is False
+    assert public_contact_phone_state(db_session, session=bundle.session)["contact_phone"] == "(11) 99888-7766"
+    assert contact is not None
+    assert contact.normalized_value == "5511998887766"
+
+
+def test_capture_public_contact_phone_reuses_existing_patient(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    existing = Patient(
+        tenant_id=tenant.id,
+        full_name="Juliana Lima",
+        phone="+55 11 97777-6666",
+        normalized_phone="5511977776666",
+        origin="manual",
+    )
+    db_session.add(existing)
+    db_session.flush()
+
+    session = LinkFlowSession(
+        tenant_id=tenant.id,
+        unit_id=None,
+        mode="link_flow",
+        cta_mode="whatsapp_redirect",
+        channel="whatsapp",
+        token_hash="token-existing",
+        status="pending",
+        landing_path="/agendar/tenant-b",
+        utm_payload={},
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(session)
+    db_session.flush()
+
+    payload = capture_public_contact_phone(
+        db_session,
+        session=session,
+        raw_phone="11 97777-6666",
+    )
+    db_session.flush()
+    db_session.refresh(session)
+
+    assert session.linked_patient_id == existing.id
+    assert payload["contact_phone"] == "11 97777-6666"
+    assert db_session.scalar(select(func.count()).select_from(Patient).where(Patient.tenant_id == tenant.id)) >= 1

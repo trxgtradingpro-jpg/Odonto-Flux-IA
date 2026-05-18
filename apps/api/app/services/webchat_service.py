@@ -487,6 +487,208 @@ def _summary_value(value: Any, *, source: str | None = None) -> dict[str, Any]:
     }
 
 
+def _public_summary_service_options(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    current_unit_id: UUID | None,
+) -> list[dict[str, str]]:
+    from app.services.service_catalog_service import get_service_catalog_items
+    from app.services.unit_catalog_service import list_unit_services_map
+
+    seen: set[str] = set()
+    names: list[str] = []
+    unit_services_map = list_unit_services_map(db, tenant_id=tenant_id)
+
+    if current_unit_id:
+        for service_name in unit_services_map.get(str(current_unit_id), []):
+            key = service_name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(service_name)
+
+    if not names:
+        for service_names in unit_services_map.values():
+            for service_name in service_names:
+                key = service_name.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                names.append(service_name)
+
+    if not names:
+        for item in get_service_catalog_items(db, tenant_id=tenant_id):
+            if not item.get("is_active", True):
+                continue
+            service_name = _clean_summary_text(item.get("name"), max_length=120)
+            if not service_name:
+                continue
+            key = service_name.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(service_name)
+
+    return [{"id": f"service_{index}", "name": name} for index, name in enumerate(names, start=1)]
+
+
+def _public_summary_schedule_options(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+    current_unit_id: UUID | None,
+    procedure_value: str | None,
+    preferred_date: str | None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    if not current_unit_id or not procedure_value or not session.linked_conversation_id:
+        return [], []
+
+    unit = db.scalar(
+        select(Unit).where(
+            Unit.id == current_unit_id,
+            Unit.tenant_id == tenant.id,
+            Unit.is_active.is_(True),
+        )
+    )
+    conversation = db.get(Conversation, session.linked_conversation_id)
+    if not unit or not conversation or conversation.tenant_id != tenant.id:
+        return [], []
+
+    config = get_intake_config(db, tenant_id=tenant.id)
+    from app.services.ai_autoresponder_service import (
+        _resolve_operation_timezone,
+        _wizard_collect_day_choices,
+        _wizard_collect_time_choices,
+    )
+
+    selected_date: date | None = None
+    if preferred_date:
+        try:
+            selected_date = date.fromisoformat(preferred_date[:10])
+        except ValueError:
+            selected_date = None
+
+    day_choices = _wizard_collect_day_choices(
+        db,
+        conversation=conversation,
+        unit_id=unit.id,
+        procedure_type=procedure_value,
+        period=None,
+        requested_date=selected_date,
+        operation_timezone=_resolve_operation_timezone(config),
+        config=config,
+    )
+    preferred_dates = [
+        {
+            "id": str(choice.get("id") or choice.get("date") or ""),
+            "date": str(choice.get("date") or ""),
+            "label": str(choice.get("label") or ""),
+            "description": str(choice.get("description") or ""),
+        }
+        for choice in day_choices
+        if str(choice.get("date") or "").strip() and str(choice.get("label") or "").strip()
+    ]
+
+    if not selected_date:
+        return preferred_dates, []
+
+    slot_choices = _wizard_collect_time_choices(
+        db,
+        conversation=conversation,
+        unit=unit,
+        procedure_type=procedure_value,
+        period=None,
+        selected_date=selected_date,
+        config=config,
+    )
+    preferred_times = [
+        {
+            "id": str(choice.get("id") or ""),
+            "label": str(choice.get("label") or ""),
+            "time": str(choice.get("time") or ""),
+        }
+        for choice in slot_choices
+        if str(choice.get("label") or "").strip()
+    ]
+    return preferred_dates, preferred_times
+
+
+def _build_manual_summary_followup_text(
+    *,
+    unit_name: str | None,
+    procedure_value: str | None,
+    preferred_date: str | None,
+    preferred_time: str | None,
+) -> str | None:
+    details: list[str] = []
+    if unit_name:
+        details.append(f"Unidade: {unit_name}")
+    if procedure_value:
+        details.append(f"Servico: {procedure_value}")
+    if preferred_date:
+        details.append(f"Data desejada: {format(date.fromisoformat(preferred_date), '%d/%m/%Y')}")
+    if preferred_time:
+        details.append(f"Horario desejado: {preferred_time}")
+    if not details:
+        return None
+    return (
+        "Atualizei manualmente meu agendamento pelo painel.\n"
+        + "\n".join(f"- {item}" for item in details)
+        + "\nConsidere essas informacoes e continue meu atendimento."
+    )
+
+
+def _dispatch_manual_summary_followup(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+    text: str,
+    changed_fields: list[str],
+) -> None:
+    conversation = ensure_webchat_conversation(db, session=session, tenant=tenant)
+    now = _now()
+    inbound = Message(
+        tenant_id=tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="webchat",
+        sender_type="patient",
+        body=text,
+        message_type="text",
+        payload={
+            "source": "public_webchat_summary_manual_update",
+            "link_flow_session_id": str(session.id),
+            "changed_fields": changed_fields,
+        },
+        status=MessageStatus.RECEIVED.value,
+    )
+    db.add(inbound)
+    conversation.last_message_at = now
+    session.last_patient_message_at = now
+    db.add(conversation)
+    db.add(session)
+    register_link_flow_event(
+        db,
+        session=session,
+        event_name="webchat_summary_manual_followup_sent",
+        payload={"source": "public_webchat", "changed_fields": changed_fields},
+    )
+    db.commit()
+    db.refresh(inbound)
+
+    from app.services.ai_autoresponder_service import process_inbound_message
+
+    process_inbound_message(
+        db,
+        tenant_id=tenant.id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+
 def public_webchat_booking_summary(
     db: Session,
     *,
@@ -522,7 +724,21 @@ def public_webchat_booking_summary(
         max_length=120,
     )
     preferred_date = _parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None
-    confirmed_slot = appointment.starts_at.isoformat() if appointment and appointment.starts_at else None
+    preferred_time = _clean_summary_text(draft.get("preferred_time"), max_length=80)
+    confirmed_slot = appointment.starts_at.isoformat() if appointment and appointment.starts_at else preferred_time
+    preferred_dates, preferred_times = _public_summary_schedule_options(
+        db,
+        session=session,
+        tenant=tenant,
+        current_unit_id=current_unit_id,
+        procedure_value=procedure_value,
+        preferred_date=preferred_date,
+    )
+    service_options = _public_summary_service_options(
+        db,
+        tenant_id=tenant.id,
+        current_unit_id=current_unit_id,
+    )
 
     fields = {
         "patient_name": _summary_value(patient_name, source="auto" if patient_name else None),
@@ -534,7 +750,7 @@ def public_webchat_booking_summary(
         },
         "procedure": _summary_value(procedure_value, source="auto" if appointment and appointment.procedure_type else "manual"),
         "preferred_date": _summary_value(preferred_date, source="manual"),
-        "confirmed_slot": _summary_value(confirmed_slot, source="auto"),
+        "confirmed_slot": _summary_value(confirmed_slot, source="auto" if appointment and appointment.starts_at else "manual"),
     }
 
     completion_order = ["patient_name", "email", "birth_date", "unit", "procedure", "confirmed_slot"]
@@ -569,6 +785,9 @@ def public_webchat_booking_summary(
         },
         "options": {
             "units": [{"id": str(unit.id), "name": unit.name} for unit in units],
+            "services": service_options,
+            "preferred_dates": preferred_dates,
+            "preferred_times": preferred_times,
         },
     }
 
@@ -584,9 +803,16 @@ def update_public_webchat_booking_summary(
     procedure_type: str | None = None,
     unit_id: UUID | None = None,
     preferred_date: str | None = None,
+    preferred_time: str | None = None,
 ) -> dict[str, Any]:
     patient = _ensure_webchat_patient(db, session=session, tenant=tenant)
     draft = _latest_public_summary_draft(db, session=session)
+    previous_procedure = _clean_summary_text(draft.get("procedure_type"), max_length=120)
+    previous_preferred_date = _parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None
+    previous_preferred_time = _clean_summary_text(draft.get("preferred_time"), max_length=80)
+    previous_unit_id = str(session.unit_id or patient.unit_id or draft.get("unit_id") or "").strip() or None
+    unit_name_for_followup = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=session.unit_id or patient.unit_id)
+    changed_fields: list[str] = []
 
     normalized_name = _clean_summary_text(full_name, max_length=180)
     if normalized_name:
@@ -600,13 +826,35 @@ def update_public_webchat_booking_summary(
     if parsed_birth_date:
         patient.birth_date = parsed_birth_date
 
-    normalized_procedure = _clean_summary_text(procedure_type, max_length=120)
-    if normalized_procedure:
-        draft["procedure_type"] = normalized_procedure
+    if procedure_type is not None:
+        normalized_procedure = _clean_summary_text(procedure_type, max_length=120)
+        if normalized_procedure:
+            draft["procedure_type"] = normalized_procedure
+        else:
+            draft.pop("procedure_type", None)
+        if normalized_procedure != previous_procedure:
+            changed_fields.append("procedure")
 
-    parsed_preferred_date = _parse_summary_preferred_date(preferred_date)
-    if parsed_preferred_date:
-        draft["preferred_date"] = parsed_preferred_date
+    if preferred_date is not None:
+        parsed_preferred_date = _parse_summary_preferred_date(preferred_date)
+        if parsed_preferred_date:
+            draft["preferred_date"] = parsed_preferred_date
+        else:
+            draft.pop("preferred_date", None)
+        draft.pop("preferred_time", None)
+        if parsed_preferred_date != previous_preferred_date:
+            changed_fields.append("preferred_date")
+        if previous_preferred_time:
+            changed_fields.append("confirmed_slot")
+
+    if preferred_time is not None:
+        normalized_preferred_time = _clean_summary_text(preferred_time, max_length=80)
+        if normalized_preferred_time:
+            draft["preferred_time"] = normalized_preferred_time
+        else:
+            draft.pop("preferred_time", None)
+        if normalized_preferred_time != previous_preferred_time:
+            changed_fields.append("confirmed_slot")
 
     if unit_id:
         unit = db.scalar(
@@ -625,11 +873,22 @@ def update_public_webchat_booking_summary(
         session.unit_id = unit.id
         patient.unit_id = unit.id
         draft["unit_id"] = str(unit.id)
+        draft.pop("preferred_date", None)
+        draft.pop("preferred_time", None)
         if session.linked_conversation_id:
             conversation = db.get(Conversation, session.linked_conversation_id)
             if conversation and conversation.tenant_id == tenant.id:
                 conversation.unit_id = unit.id
                 db.add(conversation)
+        unit_name_for_followup = unit.name
+        if str(unit.id) != previous_unit_id:
+            changed_fields.append("unit")
+        if previous_preferred_date:
+            changed_fields.append("preferred_date")
+        if previous_preferred_time:
+            changed_fields.append("confirmed_slot")
+
+    changed_fields = list(dict.fromkeys(changed_fields))
 
     db.add(patient)
     db.add(session)
@@ -641,6 +900,22 @@ def update_public_webchat_booking_summary(
     )
     db.commit()
     db.refresh(session)
+    followup_text = None
+    if changed_fields:
+        followup_text = _build_manual_summary_followup_text(
+            unit_name=unit_name_for_followup or _unit_name_by_id(db, tenant_id=tenant.id, unit_id=session.unit_id),
+            procedure_value=_clean_summary_text(draft.get("procedure_type"), max_length=120),
+            preferred_date=_parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None,
+            preferred_time=_clean_summary_text(draft.get("preferred_time"), max_length=80),
+        )
+    if followup_text:
+        _dispatch_manual_summary_followup(
+            db,
+            session=session,
+            tenant=tenant,
+            text=followup_text,
+            changed_fields=changed_fields,
+        )
     return public_webchat_booking_summary(db, session=session, tenant=tenant)
 
 
