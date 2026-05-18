@@ -372,14 +372,6 @@ function PublicWebchat({
         </div>
       </div>
 
-      <div className="border-b border-stone-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(247,250,249,0.92))] px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--booking-muted)]">
-          <span className="rounded-full border border-stone-200 bg-white px-3 py-1 font-medium">Assistente de agendamento</span>
-          <span className="rounded-full border border-stone-200 bg-white px-3 py-1 font-medium">Resposta automatica segura</span>
-          <span className="rounded-full border border-stone-200 bg-white px-3 py-1 font-medium">Sem abrir o WhatsApp</span>
-        </div>
-      </div>
-
       <div
         ref={viewportRef}
         className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_42%,_rgba(237,241,239,0.95))] px-4 py-5 sm:px-5"

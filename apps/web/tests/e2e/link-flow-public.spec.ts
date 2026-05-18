@@ -294,7 +294,6 @@ test.describe('public link flow landing', () => {
     await page.goto('/agendar/tenant-a');
 
     await expect(page.getByText('Atendimento online')).toBeVisible();
-    await expect(page.getByText('Assistente de agendamento', { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
     await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
