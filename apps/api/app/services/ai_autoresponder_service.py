@@ -612,6 +612,16 @@ def booking_interactive_options_enabled(config: dict[str, Any] | None) -> bool:
 
 
 def _compact_text(value: Any, *, max_length: int = 600) -> str:
+    if isinstance(value, dict):
+        for key in ("text", "value", "message", "body_text", "title", "name"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                value = candidate
+                break
+        else:
+            return ""
+    elif isinstance(value, (list, tuple, set)):
+        return ""
     text = str(value or "").strip()
     if len(text) > max_length:
         text = text[:max_length].rstrip()

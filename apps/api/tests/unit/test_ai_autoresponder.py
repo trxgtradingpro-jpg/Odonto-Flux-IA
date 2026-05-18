@@ -2882,6 +2882,56 @@ def test_welcome_message_uses_custom_greeting_from_knowledge_base(seeded_db, db_
     assert outbound.message_type == "interactive_list"
 
 
+def test_welcome_message_uses_text_field_when_greeting_example_is_object(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "clinic_profile": {
+                "clinic_name": "Lorenson Odontologia",
+                "welcome_greeting_example": {
+                    "text": "Olá! Bem-vindo à Lorenson Odontologia. Como podemos ajudar você hoje?",
+                    "inferred": True,
+                },
+            }
+        },
+    )
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+        channel="webchat",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "welcome_message_start"
+    assert outbound is not None
+    assert "Olá! Bem-vindo à Lorenson Odontologia. Como podemos ajudar você hoje?" in (outbound.body or "")
+    assert "{'text':" not in (outbound.body or "")
+    assert "inferred" not in (outbound.body or "")
+
+
 def test_service_catalog_request_opens_service_selection_wizard(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
