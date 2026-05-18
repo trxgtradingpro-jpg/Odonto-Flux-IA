@@ -193,6 +193,8 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         createInitialDemoTourProgress({
           phoneLabel: entry.testPhoneNumber || null,
           whatsappLink: entry.whatsappLink || null,
+          entryChannel: entry.entryChannel || (entry.whatsappLink ? "whatsapp" : null),
+          publicEntryPath: entry.publicEntryPath || null,
         }),
       );
       return;
@@ -213,6 +215,8 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       ...createInitialDemoTourProgress({
         whatsappLink: entry.whatsappLink || null,
         phoneLabel: entry.testPhoneNumber || null,
+        entryChannel: entry.entryChannel || (entry.whatsappLink ? "whatsapp" : null),
+        publicEntryPath: entry.publicEntryPath || null,
         conversationId: entry.trackedConversationId || null,
         patientId: entry.trackedPatientId || null,
         waitingStartedAt:
@@ -366,6 +370,8 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     return () => window.clearInterval(intervalId);
   }, [progress.context.waitingStartedAt, progress.status, progress.step]);
 
+  const isWebchatEntry = progress.context.entryChannel === "webchat";
+
   const activeTargetId = useMemo(() => {
     if (progress.step === "spotlight_whatsapp") return DEMO_TOUR_TARGETS.whatsappButton;
     if (progress.step === "spotlight_conversation") {
@@ -435,6 +441,16 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
 
   const handlePrimaryAction = () => {
     if (progress.step === "spotlight_whatsapp") {
+      if (isWebchatEntry) {
+        const publicEntryPath = progress.context.publicEntryPath;
+        if (!publicEntryPath) return;
+        window.open(publicEntryPath, "_blank", "noopener,noreferrer");
+        goToStep("waiting_external_message", "active", {
+          waitingStartedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       if (whatsappLaunchState !== "idle") return;
 
       if (!whatsappPopupRef.current || whatsappPopupRef.current.closed) {
@@ -527,18 +543,29 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       { label: "Criar conversa + agenda", onClick: handleSimulateCompleteConversation },
     ];
     const hasRealWhatsAppLink = Boolean(progress.context.whatsappLink);
+    const canOpenWebchatEntry = isWebchatEntry && Boolean(progress.context.publicEntryPath);
 
     switch (progress.step) {
       case "spotlight_whatsapp":
         return {
           align: "center",
-          badge: hasRealWhatsAppLink ? "Conversa real" : "Teste guiado",
-          title: hasRealWhatsAppLink ? "Teste como paciente" : "Esta demo ainda nao tem um numero real conectado",
+          badge: isWebchatEntry ? "Webchat publico" : hasRealWhatsAppLink ? "Conversa real" : "Teste guiado",
+          title: isWebchatEntry
+            ? "Teste o webchat publico da demo"
+            : hasRealWhatsAppLink
+              ? "Teste como paciente"
+              : "Esta demo ainda nao tem um numero real conectado",
           description:
-            hasRealWhatsAppLink
+            isWebchatEntry
+              ? "Abra a landing publica da demo e envie uma mensagem no chat embutido. A conversa deve aparecer aqui em tempo real."
+              : hasRealWhatsAppLink
               ? "Abra o WhatsApp da demo e envie uma mensagem simples, como se fosse um paciente querendo agendar."
               : "Use um dos testes guiados abaixo ou conecte um numero real da clinica dentro do tenant da demo. O numero de teste do /adm identifica quem vai testar, mas nao e o numero da clinica.",
-          primaryLabel: hasRealWhatsAppLink
+          primaryLabel: isWebchatEntry
+            ? canOpenWebchatEntry
+              ? "Abrir webchat"
+              : undefined
+            : hasRealWhatsAppLink
             ? whatsappLaunchState === "loading"
               ? "Abrindo WhatsApp"
               : "Abrir WhatsApp"
@@ -557,9 +584,11 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         return {
           align: "center",
           badge: "Aguardando teste",
-          title: "Envie uma mensagem no WhatsApp",
+          title: isWebchatEntry ? "Envie uma mensagem no webchat" : "Envie uma mensagem no WhatsApp",
           description:
-            "Converse como paciente e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real.",
+            isWebchatEntry
+              ? "Converse na landing publica da demo e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real."
+              : "Converse como paciente e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real.",
           secondaryLabel: "J\u00e1 enviei a mensagem",
           statusLabel: formatWaitingLabel(waitingElapsedSeconds),
           compact: false,
@@ -634,7 +663,9 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         return null;
     }
   }, [
+    isWebchatEntry,
     progress.context.whatsappLink,
+    progress.context.publicEntryPath,
     progress.seenEvents.appointment_detected,
     progress.step,
     waitingElapsedSeconds,

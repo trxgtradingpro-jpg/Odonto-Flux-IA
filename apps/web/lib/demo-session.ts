@@ -3,6 +3,8 @@ export const DEMO_WHATSAPP_ENTRY_ACTIVE_KEY = "odontoflux_demo_whatsapp_entry_ac
 export const DEMO_WHATSAPP_ENTRY_PHONE_KEY = "odontoflux_demo_whatsapp_entry_phone";
 export const DEMO_WHATSAPP_ENTRY_LINK_KEY = "odontoflux_demo_whatsapp_entry_link";
 export const DEMO_ENTRY_TARGET_PATH_KEY = "odontoflux_demo_entry_target_path";
+export const DEMO_ENTRY_CHANNEL_KEY = "odontoflux_demo_entry_channel";
+export const DEMO_PUBLIC_ENTRY_PATH_KEY = "odontoflux_demo_public_entry_path";
 export const DEMO_WHATSAPP_STAGE_KEY = "odontoflux_demo_whatsapp_stage";
 export const DEMO_WHATSAPP_STARTED_AT_KEY = "odontoflux_demo_whatsapp_started_at";
 export const DEMO_WHATSAPP_TRACKED_CONVERSATION_ID_KEY = "odontoflux_demo_whatsapp_tracked_conversation_id";
@@ -11,10 +13,14 @@ export const DEMO_WHATSAPP_BASELINE_APPOINTMENTS_KEY = "odontoflux_demo_whatsapp
 
 export type DemoWhatsAppFlowStage = "entry" | "awaiting_appointment" | "appointment_ready";
 
+export type DemoEntryChannel = "whatsapp" | "webchat";
+
 type DemoWhatsAppEntryPayload = {
   testPhoneNumber?: string | null;
   whatsappLink?: string | null;
   targetPath?: string | null;
+  entryChannel?: DemoEntryChannel | null;
+  publicEntryPath?: string | null;
 };
 
 type DemoWhatsAppAwaitingPayload = {
@@ -77,6 +83,16 @@ export function storeDemoWhatsAppEntry(payload: DemoWhatsAppEntryPayload) {
   } else {
     window.sessionStorage.removeItem(DEMO_WHATSAPP_ENTRY_LINK_KEY);
   }
+  if (payload.entryChannel) {
+    window.sessionStorage.setItem(DEMO_ENTRY_CHANNEL_KEY, payload.entryChannel);
+  } else {
+    window.sessionStorage.removeItem(DEMO_ENTRY_CHANNEL_KEY);
+  }
+  if (payload.publicEntryPath) {
+    window.sessionStorage.setItem(DEMO_PUBLIC_ENTRY_PATH_KEY, payload.publicEntryPath);
+  } else {
+    window.sessionStorage.removeItem(DEMO_PUBLIC_ENTRY_PATH_KEY);
+  }
   setDemoEntryTargetPathInternal(payload.targetPath);
 }
 
@@ -117,6 +133,8 @@ export function readDemoWhatsAppEntry() {
       testPhoneNumber: null,
       whatsappLink: null,
       targetPath: null,
+      entryChannel: null,
+      publicEntryPath: null,
       stage: null,
       startedAt: null,
       trackedConversationId: null,
@@ -143,6 +161,8 @@ export function readDemoWhatsAppEntry() {
     testPhoneNumber: window.sessionStorage.getItem(DEMO_WHATSAPP_ENTRY_PHONE_KEY),
     whatsappLink: window.sessionStorage.getItem(DEMO_WHATSAPP_ENTRY_LINK_KEY),
     targetPath: window.sessionStorage.getItem(DEMO_ENTRY_TARGET_PATH_KEY),
+    entryChannel: (window.sessionStorage.getItem(DEMO_ENTRY_CHANNEL_KEY) as DemoEntryChannel | null) ?? null,
+    publicEntryPath: window.sessionStorage.getItem(DEMO_PUBLIC_ENTRY_PATH_KEY),
     stage: (window.sessionStorage.getItem(DEMO_WHATSAPP_STAGE_KEY) as DemoWhatsAppFlowStage | null) ?? null,
     startedAt: window.sessionStorage.getItem(DEMO_WHATSAPP_STARTED_AT_KEY),
     trackedConversationId: window.sessionStorage.getItem(DEMO_WHATSAPP_TRACKED_CONVERSATION_ID_KEY),
@@ -170,6 +190,8 @@ export function clearDemoWhatsAppEntry() {
   window.sessionStorage.removeItem(DEMO_WHATSAPP_ENTRY_ACTIVE_KEY);
   window.sessionStorage.removeItem(DEMO_WHATSAPP_ENTRY_PHONE_KEY);
   window.sessionStorage.removeItem(DEMO_WHATSAPP_ENTRY_LINK_KEY);
+  window.sessionStorage.removeItem(DEMO_ENTRY_CHANNEL_KEY);
+  window.sessionStorage.removeItem(DEMO_PUBLIC_ENTRY_PATH_KEY);
   window.sessionStorage.removeItem(DEMO_WHATSAPP_STAGE_KEY);
   clearTrackedDemoWhatsAppState();
   window.sessionStorage.removeItem(DEMO_ENTRY_TARGET_PATH_KEY);

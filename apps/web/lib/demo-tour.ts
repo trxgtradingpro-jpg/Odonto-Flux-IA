@@ -47,6 +47,8 @@ export type DemoTourIdentity = {
 export type DemoTourContext = {
   whatsappLink?: string | null;
   phoneLabel?: string | null;
+  entryChannel?: "whatsapp" | "webchat" | null;
+  publicEntryPath?: string | null;
   conversationId?: string | null;
   patientId?: string | null;
   appointmentId?: string | null;
@@ -68,11 +70,15 @@ export type DemoTourEventDetail =
       type: "whatsapp_cta_ready";
       whatsappLink?: string | null;
       phoneLabel?: string | null;
+      entryChannel?: "whatsapp" | "webchat" | null;
+      publicEntryPath?: string | null;
     }
   | {
       type: "whatsapp_clicked";
       whatsappLink?: string | null;
       phoneLabel?: string | null;
+      entryChannel?: "whatsapp" | "webchat" | null;
+      publicEntryPath?: string | null;
     }
   | {
       type: "conversation_detected";
@@ -200,6 +206,8 @@ export function markDemoTourEventSeen(progress: DemoTourProgress, detail: DemoTo
         ? {
             whatsappLink: detail.whatsappLink ?? progress.context.whatsappLink ?? null,
             phoneLabel: detail.phoneLabel ?? progress.context.phoneLabel ?? null,
+            entryChannel: detail.entryChannel ?? progress.context.entryChannel ?? null,
+            publicEntryPath: detail.publicEntryPath ?? progress.context.publicEntryPath ?? null,
           }
         : {}),
       ...(detail.type === "conversation_detected"

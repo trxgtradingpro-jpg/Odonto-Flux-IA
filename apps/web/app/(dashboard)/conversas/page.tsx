@@ -1024,6 +1024,8 @@ export default function ConversasPage() {
   const [demoWhatsAppExperienceStage, setDemoWhatsAppExperienceStage] = useState<DemoWhatsAppExperienceStage>("idle");
   const [demoWhatsAppEntryPhone, setDemoWhatsAppEntryPhone] = useState<string | null>(null);
   const [demoWhatsAppEntryLink, setDemoWhatsAppEntryLink] = useState<string | null>(null);
+  const [demoEntryChannel, setDemoEntryChannel] = useState<"whatsapp" | "webchat" | null>(null);
+  const [demoPublicEntryPath, setDemoPublicEntryPath] = useState<string | null>(null);
   const [demoWhatsAppStartedAt, setDemoWhatsAppStartedAt] = useState<string | null>(null);
   const [demoWhatsAppTrackedConversationId, setDemoWhatsAppTrackedConversationId] = useState<string | null>(null);
   const [demoWhatsAppTrackedPatientId, setDemoWhatsAppTrackedPatientId] = useState<string | null>(null);
@@ -1489,6 +1491,8 @@ export default function ConversasPage() {
       setDemoWhatsAppExperienceStage("idle");
       setDemoWhatsAppEntryPhone(null);
       setDemoWhatsAppEntryLink(null);
+      setDemoEntryChannel(null);
+      setDemoPublicEntryPath(null);
       setDemoWhatsAppStartedAt(null);
       setDemoWhatsAppTrackedConversationId(null);
       setDemoWhatsAppTrackedPatientId(null);
@@ -1501,6 +1505,8 @@ export default function ConversasPage() {
     const entry = readDemoWhatsAppEntry();
     setDemoWhatsAppEntryPhone(entry.testPhoneNumber);
     setDemoWhatsAppEntryLink(entry.whatsappLink);
+    setDemoEntryChannel(entry.entryChannel || (entry.whatsappLink ? "whatsapp" : null));
+    setDemoPublicEntryPath(entry.publicEntryPath);
     setDemoWhatsAppStartedAt(entry.startedAt);
     setDemoWhatsAppTrackedConversationId(entry.trackedConversationId);
     setDemoWhatsAppTrackedPatientId(entry.trackedPatientId);
@@ -1778,6 +1784,7 @@ export default function ConversasPage() {
     return null;
   }, [messagesQuery.data?.data]);
   const demoWhatsAppEntryPhoneLabel = demoWhatsAppEntryPhone ? formatPhoneBR(demoWhatsAppEntryPhone) : null;
+  const demoUsesWebchatEntry = demoEntryChannel === "webchat";
   const demoTourConversationId =
     demoTrackedConversation?.id ??
     demoWhatsAppTrackedConversationId ??
@@ -1802,15 +1809,25 @@ export default function ConversasPage() {
 
   useEffect(() => {
     if (!isDemoUser) return;
-    if (!demoWhatsAppEntryLink) return;
+    if (!demoWhatsAppEntryLink && !(demoUsesWebchatEntry && demoPublicEntryPath)) return;
     if (!["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage)) return;
 
     dispatchDemoTourEvent({
       type: "whatsapp_cta_ready",
       whatsappLink: demoWhatsAppEntryLink,
       phoneLabel: demoWhatsAppEntryPhoneLabel,
+      entryChannel: demoEntryChannel,
+      publicEntryPath: demoPublicEntryPath,
     });
-  }, [demoWhatsAppEntryLink, demoWhatsAppEntryPhoneLabel, demoWhatsAppExperienceStage, isDemoUser]);
+  }, [
+    demoEntryChannel,
+    demoPublicEntryPath,
+    demoUsesWebchatEntry,
+    demoWhatsAppEntryLink,
+    demoWhatsAppEntryPhoneLabel,
+    demoWhatsAppExperienceStage,
+    isDemoUser,
+  ]);
 
   useEffect(() => {
     if (!isDemoUser) return;
@@ -1952,6 +1969,53 @@ export default function ConversasPage() {
   ]);
 
   const launchDemoWhatsAppRedirect = useCallback((options?: { popup?: Window | null }) => {
+    if (demoUsesWebchatEntry) {
+      if (!demoPublicEntryPath) {
+        if (options?.popup && !options.popup.closed) {
+          options.popup.close();
+        }
+        toast.error("Esta demo ainda nao tem uma landing publica de webchat configurada.");
+        return;
+      }
+
+      const startedAt = new Date().toISOString();
+      const baselineAppointmentIds = demoTrackedPatientAppointments.map((item) => item.id);
+
+      markDemoWhatsAppAwaitingAppointment({
+        startedAt,
+        trackedConversationId: demoTrackedConversation?.id ?? null,
+        trackedPatientId: demoTrackedPatient?.id ?? null,
+        baselineAppointmentIds,
+      });
+
+      setDemoWhatsAppStartedAt(startedAt);
+      setDemoWhatsAppTrackedConversationId(demoTrackedConversation?.id ?? null);
+      setDemoWhatsAppTrackedPatientId(demoTrackedPatient?.id ?? null);
+      setDemoWhatsAppBaselineAppointmentIds(baselineAppointmentIds);
+      setDemoWhatsAppExperienceStage("awaiting_appointment");
+      setDemoAgendaRedirectCountdown(null);
+      demoTrackedAppointmentHandledRef.current = false;
+
+      dispatchDemoTourEvent({
+        type: "whatsapp_clicked",
+        whatsappLink: null,
+        phoneLabel: demoWhatsAppEntryPhoneLabel,
+        entryChannel: demoEntryChannel,
+        publicEntryPath: demoPublicEntryPath,
+      });
+
+      if (options?.popup && !options.popup.closed) {
+        options.popup.location.href = demoPublicEntryPath;
+        return;
+      }
+
+      const popup = window.open(demoPublicEntryPath, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        toast.error("Nao foi possivel abrir a landing publica da demo. Libere pop-ups para esta demo.");
+      }
+      return;
+    }
+
     if (!demoWhatsAppEntryLink) {
       if (options?.popup && !options.popup.closed) {
         options.popup.close();
@@ -1982,6 +2046,8 @@ export default function ConversasPage() {
       type: "whatsapp_clicked",
       whatsappLink: demoWhatsAppEntryLink,
       phoneLabel: demoWhatsAppEntryPhoneLabel,
+      entryChannel: demoEntryChannel,
+      publicEntryPath: demoPublicEntryPath,
     });
 
     if (options?.popup && !options.popup.closed) {
@@ -1994,6 +2060,9 @@ export default function ConversasPage() {
       toast.error("Nao foi possivel abrir uma nova aba do WhatsApp. Libere pop-ups para esta demo.");
     }
   }, [
+    demoEntryChannel,
+    demoPublicEntryPath,
+    demoUsesWebchatEntry,
     demoTrackedConversation?.id,
     demoTrackedPatient?.id,
     demoTrackedPatientAppointments,
@@ -3294,7 +3363,9 @@ export default function ConversasPage() {
         </div>
       </div>
 
-      {isDemoUser && ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) && demoWhatsAppEntryLink ? (
+      {isDemoUser &&
+      ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
+      (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoPublicEntryPath)) ? (
         <div className="pointer-events-none fixed bottom-6 right-6 z-[70]">
           <Button
             type="button"
@@ -3303,7 +3374,13 @@ export default function ConversasPage() {
             onClick={handleOpenDemoWhatsApp}
           >
             <Share2 size={16} />
-            {demoWhatsAppExperienceStage === "entry" ? "Abrir WhatsApp da demo" : "Reabrir WhatsApp"}
+            {demoUsesWebchatEntry
+              ? demoWhatsAppExperienceStage === "entry"
+                ? "Abrir webchat da demo"
+                : "Reabrir webchat"
+              : demoWhatsAppExperienceStage === "entry"
+                ? "Abrir WhatsApp da demo"
+                : "Reabrir WhatsApp"}
           </Button>
         </div>
       ) : null}

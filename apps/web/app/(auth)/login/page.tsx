@@ -35,6 +35,8 @@ type DemoRedeemResponse = {
   demo_test_phone_number?: string | null;
   demo_whatsapp_link?: string | null;
   demo_target_path?: string | null;
+  demo_entry_channel?: "whatsapp" | "webchat" | null;
+  demo_public_entry_path?: string | null;
 };
 
 type DemoFlowState = "idle" | "redeeming" | "success" | "error";
@@ -277,6 +279,8 @@ export default function LoginPage() {
           testPhoneNumber: response.data.demo_test_phone_number ?? null,
           whatsappLink: response.data.demo_whatsapp_link ?? null,
           targetPath,
+          entryChannel: response.data.demo_entry_channel ?? null,
+          publicEntryPath: response.data.demo_public_entry_path ?? null,
         });
         clearDemoGuideSessionState();
         window.sessionStorage.setItem(DEMO_GUIDE_AUTOSTART_KEY, "1");

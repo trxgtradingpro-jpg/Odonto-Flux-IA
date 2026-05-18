@@ -3005,6 +3005,25 @@ def _resolve_demo_whatsapp_link(db: Session, *, tenant_id: UUID) -> str | None:
     return _build_demo_whatsapp_link(account.display_phone or phone_number_id)
 
 
+def _resolve_demo_entry_metadata(db: Session, *, prospect: ProspectAccount) -> dict[str, str | None]:
+    intake_settings = _demo_intake_settings(prospect)
+    link_flow = intake_settings.get("link_flow") if isinstance(intake_settings.get("link_flow"), dict) else {}
+    cta_mode = str(link_flow.get("cta_mode") or "whatsapp_redirect").strip()
+    mode = str(intake_settings.get("mode") or "official_api").strip()
+    tenant = db.get(Tenant, prospect.demo_tenant_id) if prospect.demo_tenant_id else None
+
+    if mode in {"link_flow", "hybrid"} and cta_mode == "webchat" and tenant and tenant.slug:
+        return {
+            "entry_channel": "webchat",
+            "public_entry_path": f"/agendar/{tenant.slug}",
+        }
+
+    return {
+        "entry_channel": "whatsapp",
+        "public_entry_path": None,
+    }
+
+
 def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None) -> dict:
     token_hash = sha256_text(token)
     prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_access_token_hash == token_hash))
@@ -3047,6 +3066,7 @@ def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None)
     db.add(prospect)
     db.commit()
     recalculate_score(db, prospect)
+    entry_metadata = _resolve_demo_entry_metadata(db, prospect=prospect)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -3055,6 +3075,8 @@ def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None)
         "demo_test_phone_number": prospect.test_phone_number,
         "demo_whatsapp_link": _resolve_demo_whatsapp_link(db, tenant_id=prospect.demo_tenant_id),
         "demo_target_path": "/conversas",
+        "demo_entry_channel": entry_metadata["entry_channel"],
+        "demo_public_entry_path": entry_metadata["public_entry_path"],
     }
 
 

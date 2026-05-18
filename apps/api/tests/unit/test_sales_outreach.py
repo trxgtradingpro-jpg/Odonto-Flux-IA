@@ -526,6 +526,45 @@ def test_redeem_demo_token_keeps_international_country_code(monkeypatch, seeded_
     assert redeemed["demo_whatsapp_link"] == "https://wa.me/447786004289"
 
 
+def test_redeem_demo_token_returns_webchat_entry_metadata(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    prospect.proposal_snapshot = {
+        "demo_intake": {
+            "mode": "link_flow",
+            "link_flow": {
+                "enabled": True,
+                "cta_mode": "webchat",
+            },
+        },
+    }
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    redeemed = sales_demo_service.redeem_demo_token(
+        db_session,
+        token=generated["access_token"],
+        session_id="demo-session-webchat",
+    )
+
+    assert redeemed["demo_target_path"] == "/conversas"
+    assert redeemed["demo_entry_channel"] == "webchat"
+    assert redeemed["demo_public_entry_path"] == f"/agendar/{generated['prospect'].slug}"
+
+
 def test_generate_demo_populates_business_week_with_conversation_backed_appointments(monkeypatch, seeded_db, db_session):
     prospect = _create_prospect(db_session)
 
