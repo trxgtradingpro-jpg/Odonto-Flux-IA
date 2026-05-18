@@ -12,14 +12,20 @@ from app.db.session import get_db
 from app.models import Conversation, Lead, Message, Patient
 from app.models.enums import MessageDirection, MessageStatus
 from app.schemas.conversation import MessageCreate, MessageOutput
-from app.services.ai_autoresponder_service import build_official_visit_guidance_response, get_global_config
+from app.services.ai_autoresponder_service import (
+    build_official_visit_guidance_response,
+    get_global_config,
+)
 from app.services.audit_service import record_audit
 from app.services.automation_service import emit_event
-from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_whatsapp_reply_simulation
+from app.services.channel_dispatch_service import dispatch_patient_message
+from app.services.demo_whatsapp_simulation_service import (
+    maybe_schedule_demo_whatsapp_reply_simulation,
+)
 from app.services.llm_service import classify_intent, suggest_reply
 from app.services.subscription_service import enforce_plan_limit
 from app.services.whatsapp_service import (
-    assert_whatsapp_account_ready_for_dispatch,
+    assert_whatsapp_route_ready_for_dispatch,
     ensure_whatsapp_audio_media_stored,
     queue_outbound_message,
     resolve_whatsapp_reply_route,
@@ -111,6 +117,63 @@ def create_message(
     if not conversation:
         raise ApiError(status_code=404, code='CONVERSATION_NOT_FOUND', message='Conversa nao encontrada')
 
+    if conversation.channel == 'webchat':
+        message = Message(
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.OUTBOUND.value,
+            channel='webchat',
+            sender_type='user',
+            sender_user_id=principal.user.id,
+            body=payload.body,
+            message_type=payload.message_type,
+            payload={'source': 'manual_inbox'},
+            status=MessageStatus.QUEUED.value,
+        )
+        db.add(message)
+        db.flush()
+        dispatch_patient_message(
+            db,
+            tenant_id=tenant_id,
+            conversation=conversation,
+            outbound_message=message,
+            body=payload.body,
+            message_type=payload.message_type,
+            metadata={
+                'created_by_user_id': str(principal.user.id),
+                'source': 'manual_inbox',
+                'outbound_message_id': str(message.id),
+            },
+        )
+        conversation.last_message_at = datetime.now(UTC)
+        db.add(conversation)
+        db.commit()
+        db.refresh(message)
+
+        record_audit(
+            db,
+            action='message.create',
+            entity_type='message',
+            entity_id=str(message.id),
+            tenant_id=tenant_id,
+            user_id=principal.user.id,
+            metadata={'conversation_id': str(conversation.id), 'channel': 'webchat'},
+        )
+        emit_event(
+            db,
+            tenant_id=tenant_id,
+            event_key='mensagem_enviada',
+            payload={'conversation_id': str(conversation.id), 'message_id': str(message.id)},
+        )
+        return MessageOutput.model_validate(message, from_attributes=True)
+
+    if conversation.channel != 'whatsapp':
+        raise ApiError(
+            status_code=400,
+            code='UNSUPPORTED_CONVERSATION_CHANNEL',
+            message='Canal da conversa nao suportado para envio manual.',
+        )
+
     contact_phone = None
     if conversation.patient_id:
         patient = db.scalar(
@@ -137,7 +200,7 @@ def create_message(
             message='Conversa sem telefone de contato (paciente ou lead)',
         )
 
-    assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+    assert_whatsapp_route_ready_for_dispatch(db, tenant_id=tenant_id, provider_context=provider_context)
 
     message = Message(
         tenant_id=tenant_id,

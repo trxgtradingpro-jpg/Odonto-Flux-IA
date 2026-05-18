@@ -434,6 +434,57 @@ class MessageEvent(UUIDTimestampMixin, Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 
+class LinkFlowSession(UUIDTimestampMixin, Base):
+    __tablename__ = "link_flow_sessions"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    unit_id: Mapped[UUID | None] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"), index=True)
+    mode: Mapped[str] = mapped_column(String(40), default="link_flow", index=True)
+    cta_mode: Mapped[str] = mapped_column(String(40), default="whatsapp_redirect", index=True)
+    channel: Mapped[str | None] = mapped_column(String(40), index=True)
+    token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    public_access_token_hash: Mapped[str | None] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    landing_path: Mapped[str] = mapped_column(String(255), default="")
+    browser_session_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    utm_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    failure_reason: Mapped[str | None] = mapped_column(String(120))
+    linked_conversation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"),
+        index=True,
+    )
+    linked_patient_id: Mapped[UUID | None] = mapped_column(ForeignKey("patients.id", ondelete="SET NULL"), index=True)
+    linked_lead_id: Mapped[UUID | None] = mapped_column(ForeignKey("leads.id", ondelete="SET NULL"), index=True)
+    linked_appointment_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("appointments.id", ondelete="SET NULL"),
+        index=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    first_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cta_clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_patient_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_assistant_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LinkFlowEvent(UUIDTimestampMixin, Base):
+    __tablename__ = "link_flow_events"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    link_flow_session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("link_flow_sessions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    event_name: Mapped[str] = mapped_column(String(80), index=True)
+    page_path: Mapped[str | None] = mapped_column(String(255), index=True)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    ip_address: Mapped[str | None] = mapped_column(String(100))
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+
+
 class WhatsAppAccount(UUIDTimestampMixin, Base):
     __tablename__ = "whatsapp_accounts"
 

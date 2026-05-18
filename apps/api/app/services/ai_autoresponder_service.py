@@ -11,7 +11,7 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,17 +34,25 @@ from app.models import (
 )
 from app.models.enums import MessageDirection, MessageStatus
 from app.services.appointment_validation_service import (
-    ensure_appointment_within_working_days,
     eligible_professionals_for_procedure,
+    ensure_appointment_within_working_days,
+    find_duplicate_active_patient_appointment,
     find_professional_conflict,
     list_active_professionals_for_unit,
     pick_best_available_professional,
     professional_assignment_priority,
 )
-from app.services.automation_service import emit_event
 from app.services.audit_service import record_audit
-from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_whatsapp_reply_simulation
+from app.services.automation_service import emit_event
+from app.services.channel_dispatch_service import dispatch_patient_message
+from app.services.demo_whatsapp_simulation_service import (
+    maybe_schedule_demo_whatsapp_reply_simulation,
+)
 from app.services.llm_service import classify_intent, run_llm_task
+from app.services.link_flow_service import (
+    record_link_flow_appointment_result,
+    record_link_flow_booking_attempt_started,
+)
 from app.services.service_catalog_service import (
     get_service_catalog_items,
     has_service_catalog_setting,
@@ -57,7 +65,7 @@ from app.services.service_duration_service import (
     resolve_service_duration_minutes,
 )
 from app.services.whatsapp_service import (
-    assert_whatsapp_account_ready_for_dispatch,
+    assert_whatsapp_route_ready_for_dispatch,
     queue_outbound_message,
     resolve_whatsapp_reply_route,
 )
@@ -232,6 +240,7 @@ AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "structured_flow_enabled": False,
     "channels": {
         "whatsapp": True,
+        "webchat": True,
     },
     "interactive_booking_options_enabled": True,
     "business_hours": {
@@ -554,7 +563,10 @@ def _normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
     merged["enabled"] = bool(merged.get("enabled", False))
     merged["structured_flow_enabled"] = bool(merged.get("structured_flow_enabled", False))
     channels = merged.get("channels") or {}
-    merged["channels"] = {"whatsapp": bool(channels.get("whatsapp", True))}
+    merged["channels"] = {
+        "whatsapp": bool(channels.get("whatsapp", True)),
+        "webchat": bool(channels.get("webchat", True)),
+    }
     merged["interactive_booking_options_enabled"] = bool(merged.get("interactive_booking_options_enabled", True))
 
     business_hours = merged.get("business_hours") or {}
@@ -898,7 +910,7 @@ def _render_ai_lab_training_examples(db: Session, *, tenant_id: UUID, limit: int
 
 def _normalize_string_list(value: Any, *, max_items: int = 20, item_max_length: int = 120) -> list[str]:
     if isinstance(value, str):
-        raw_items = [chunk for chunk in value.replace(";", ",").replace("\n", ",").split(",")]
+        raw_items = list(value.replace(";", ",").replace("\n", ",").split(","))
     elif isinstance(value, list):
         raw_items = value
     else:
@@ -3700,7 +3712,7 @@ def _build_services_action_interactive_preview(
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    for index, service in enumerate(services, start=1):
+    for service in services:
         name = _compact_text(service.get("name"), max_length=120)
         if not name:
             continue
@@ -4806,7 +4818,7 @@ def _wizard_expected_reply_prefixes(step: str) -> tuple[str, ...]:
         "reschedule_time": ("time_", "time_change_", "menu_human"),
         "reschedule_confirm": ("reschedule_",),
     }
-    return mapping.get(step, tuple())
+    return mapping.get(step, ())
 
 
 def _wizard_extract_reply_id(payload: dict[str, Any]) -> str:
@@ -5402,7 +5414,7 @@ def _wizard_build_day_step_response(
         }
 
     rows: list[dict[str, str]] = []
-    for index, day_choice in enumerate(day_choices, start=1):
+    for day_choice in day_choices:
         day_short = day_choice["label"].split(",")[0][:24]
         rows.append(
             {
@@ -7885,17 +7897,37 @@ def _appointment_response_from_selected_slot(
         }
 
     unit_address = _format_unit_address(unit.address)
+    record_link_flow_booking_attempt_started(
+        db,
+        conversation=conversation,
+        payload={
+            "source": "ai_autoresponder",
+            "unit_id": str(unit.id),
+            "starts_at": selected_slot["starts_at_utc"].isoformat(),
+            "procedure_type": procedure_type,
+        },
+    )
 
-    existing = db.scalar(
-        select(Appointment).where(
-            Appointment.tenant_id == conversation.tenant_id,
-            Appointment.patient_id == conversation.patient_id,
-            Appointment.unit_id == unit.id,
-            Appointment.starts_at == selected_slot["starts_at_utc"],
-            Appointment.status.in_(["agendada", "confirmada", "reagendada"]),
-        )
+    existing = find_duplicate_active_patient_appointment(
+        db,
+        tenant_id=conversation.tenant_id,
+        patient_id=conversation.patient_id,
+        unit_id=unit.id,
+        starts_at=selected_slot["starts_at_utc"],
+        lock=True,
     )
     if existing:
+        record_link_flow_appointment_result(
+            db,
+            conversation=conversation,
+            appointment_id=existing.id,
+            event_name="appointment_duplicate_detected",
+            payload={
+                "source": "ai_autoresponder",
+                "unit_id": str(unit.id),
+                "starts_at": existing.starts_at.isoformat(),
+            },
+        )
         cpf_already_saved = bool(_patient_saved_cpf(db, conversation=conversation))
         missing_registration_fields = _missing_patient_registration_fields(db, conversation=conversation)
         return {
@@ -8024,6 +8056,17 @@ def _appointment_response_from_selected_slot(
                 "origin": "ai_autoresponder",
             },
         )
+    )
+    record_link_flow_appointment_result(
+        db,
+        conversation=conversation,
+        appointment_id=appointment.id,
+        event_name="appointment_created",
+        payload={
+            "source": "ai_autoresponder",
+            "unit_id": str(unit.id),
+            "starts_at": appointment.starts_at.isoformat(),
+        },
     )
 
     cpf_already_saved = bool(_patient_saved_cpf(db, conversation=conversation))
@@ -8899,7 +8942,7 @@ def _queue_handoff_notice(
         return None, None, None, "missing_contact_phone"
 
     try:
-        assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+        assert_whatsapp_route_ready_for_dispatch(db, tenant_id=tenant_id, provider_context=provider_context)
     except Exception as exc:
         return None, None, None, str(exc)
 
@@ -9344,37 +9387,51 @@ def process_inbound_message(
         )
 
     context = _recent_context(db, tenant_id=tenant_id, conversation_id=conversation.id)
-    destination, provider_context = resolve_whatsapp_reply_route(
-        db,
-        conversation=conversation,
-        inbound_message=inbound_message,
-    )
-    logger.info(
-        "ai_autoresponder.reply_route_selected",
-        tenant_id=str(tenant_id),
-        conversation_id=str(conversation.id),
-        inbound_message_id=str(inbound_message.id),
-        destination=destination,
-        provider_name=str((provider_context or {}).get("provider_name") or "").strip() or None,
-        phone_number_id=str((provider_context or {}).get("phone_number_id") or "").strip() or None,
-        whatsapp_account_id=str((provider_context or {}).get("whatsapp_account_id") or "").strip() or None,
-    )
-    if not destination:
-        return finish_without_reply(
-            final_decision=DECISION_HANDOFF,
-            reason="missing_contact_phone",
-            handoff=True,
-        )
-
+    destination = None
+    provider_context = None
     if conversation.channel == "whatsapp":
+        destination, provider_context = resolve_whatsapp_reply_route(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
+        logger.info(
+            "ai_autoresponder.reply_route_selected",
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation.id),
+            inbound_message_id=str(inbound_message.id),
+            destination=destination,
+            provider_name=str((provider_context or {}).get("provider_name") or "").strip() or None,
+            phone_number_id=str((provider_context or {}).get("phone_number_id") or "").strip() or None,
+            whatsapp_account_id=str((provider_context or {}).get("whatsapp_account_id") or "").strip() or None,
+        )
+        if not destination:
+            return finish_without_reply(
+                final_decision=DECISION_HANDOFF,
+                reason="missing_contact_phone",
+                handoff=True,
+            )
         try:
-            assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+            assert_whatsapp_route_ready_for_dispatch(db, tenant_id=tenant_id, provider_context=provider_context)
         except Exception:
             return finish_without_reply(
                 final_decision=DECISION_HANDOFF,
                 reason="whatsapp_not_ready",
                 handoff=True,
             )
+    elif conversation.channel == "webchat":
+        logger.info(
+            "ai_autoresponder.webchat_route_selected",
+            tenant_id=str(tenant_id),
+            conversation_id=str(conversation.id),
+            inbound_message_id=str(inbound_message.id),
+        )
+    else:
+        return finish_without_reply(
+            final_decision=DECISION_HANDOFF,
+            reason="unsupported_channel",
+            handoff=True,
+        )
 
     scheduling_response = None
     has_interactive_reply_payload = bool(interactive_reply_id)
@@ -9542,14 +9599,16 @@ def process_inbound_message(
             db.add(outbound_message)
             db.flush()
 
-            outbox = queue_outbound_message(
+            dispatch_result = dispatch_patient_message(
                 db,
                 tenant_id=tenant_id,
-                conversation_id=conversation.id,
-                to=destination,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                outbound_message=outbound_message,
                 body=dispatch_body,
                 message_type=dispatch_message_type,
                 interactive=dispatch_interactive,
+                destination=destination,
                 provider_context=provider_context,
                 metadata={
                     "source": "ai_autoresponder",
@@ -9558,11 +9617,6 @@ def process_inbound_message(
                     "outbound_message_id": str(outbound_message.id),
                 },
             )
-
-            outbound_payload = outbound_message.payload if isinstance(outbound_message.payload, dict) else {}
-            outbound_payload["queued_outbox_id"] = str(outbox.id)
-            outbound_message.payload = outbound_payload
-            db.add(outbound_message)
 
             interactive_outbox = None
             interactive_outbound_message = None
@@ -9762,7 +9816,7 @@ def process_inbound_message(
                 metadata=_build_metadata(
                     config=config,
                     extra={
-                        "outbox_id": str(outbox.id),
+                        "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
                         "outbound_message_id": str(outbound_message.id),
                         "interactive_outbox_id": str(interactive_outbox.id) if interactive_outbox else None,
                         "interactive_outbound_message_id": (
@@ -9792,7 +9846,7 @@ def process_inbound_message(
             db.commit()
 
             simulation_target_message = followup_message or interactive_outbound_message or outbound_message
-            if simulation_target_message:
+            if simulation_target_message and conversation.channel == "whatsapp":
                 maybe_schedule_demo_whatsapp_reply_simulation(
                     db,
                     tenant_id=tenant_id,
@@ -9837,7 +9891,7 @@ def process_inbound_message(
             payload: dict[str, Any] = {
                 "status": final_decision,
                 "decision_id": str(decision.id),
-                "outbox_id": str(outbox.id),
+                "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
                 "outbound_message_id": str(outbound_message.id),
                 "interactive_outbox_id": str(interactive_outbox.id) if interactive_outbox else None,
                 "interactive_outbound_message_id": (
@@ -10067,15 +10121,24 @@ def process_inbound_message(
             interactive_payload=action_interactive_payload,
         )
 
-    destination, provider_context = resolve_whatsapp_reply_route(
-        db,
-        conversation=conversation,
-        inbound_message=inbound_message,
-    )
-    if not destination:
+    destination = None
+    provider_context = None
+    if conversation.channel == "whatsapp":
+        destination, provider_context = resolve_whatsapp_reply_route(
+            db,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
+        if not destination:
+            return finish_without_reply(
+                final_decision=DECISION_HANDOFF,
+                reason="missing_contact_phone",
+                handoff=True,
+            )
+    elif conversation.channel != "webchat":
         return finish_without_reply(
             final_decision=DECISION_HANDOFF,
-            reason="missing_contact_phone",
+            reason="unsupported_channel",
             handoff=True,
         )
 
@@ -10101,14 +10164,16 @@ def process_inbound_message(
         db.add(outbound_message)
         db.flush()
 
-        outbox = queue_outbound_message(
+        dispatch_result = dispatch_patient_message(
             db,
             tenant_id=tenant_id,
-            conversation_id=conversation.id,
-            to=destination,
+            conversation=conversation,
+            inbound_message=inbound_message,
+            outbound_message=outbound_message,
             body=dispatch_body,
             message_type=dispatch_message_type,
             interactive=dispatch_interactive,
+            destination=destination,
             provider_context=provider_context,
             metadata={
                 "source": "ai_autoresponder",
@@ -10118,18 +10183,14 @@ def process_inbound_message(
                 "next_action": contract_next_action,
             },
         )
-
-        outbound_payload = outbound_message.payload if isinstance(outbound_message.payload, dict) else {}
-        outbound_payload["queued_outbox_id"] = str(outbox.id)
-        outbound_message.payload = outbound_payload
-        db.add(outbound_message)
         logger.info(
-            "ai_autoresponder.outbox_created",
+            "ai_autoresponder.patient_reply_dispatched",
             tenant_id=str(tenant_id),
             conversation_id=str(conversation.id),
             inbound_message_id=str(inbound_message.id),
             outbound_message_id=str(outbound_message.id),
-            outbox_id=str(outbox.id),
+            outbox_id=str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
+            channel=dispatch_result.channel,
             destination=destination,
             provider_name=str((provider_context or {}).get("provider_name") or "").strip() or None,
             phone_number_id=str((provider_context or {}).get("phone_number_id") or "").strip() or None,
@@ -10157,7 +10218,7 @@ def process_inbound_message(
             metadata=_build_metadata(
                 config=config,
                 extra={
-                    "outbox_id": str(outbox.id),
+                    "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
                     "outbound_message_id": str(outbound_message.id),
                     "knowledge_context_present": bool(knowledge_context),
                     "training_examples_present": bool(training_examples_context),
@@ -10180,13 +10241,14 @@ def process_inbound_message(
         db.add(conversation)
         db.commit()
 
-        maybe_schedule_demo_whatsapp_reply_simulation(
-            db,
-            tenant_id=tenant_id,
-            conversation_id=conversation.id,
-            outbound_message_id=outbound_message.id,
-            source="ai_autoresponder",
-        )
+        if conversation.channel == "whatsapp":
+            maybe_schedule_demo_whatsapp_reply_simulation(
+                db,
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                outbound_message_id=outbound_message.id,
+                source="ai_autoresponder",
+            )
 
         record_audit(
             db,
@@ -10197,7 +10259,7 @@ def process_inbound_message(
             user_id=None,
             metadata={
                 "decision_id": str(decision.id),
-                "outbox_id": str(outbox.id),
+                "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
                 "inbound_message_id": str(inbound_message.id),
                 "outbound_message_id": str(outbound_message.id),
             },
@@ -10206,7 +10268,7 @@ def process_inbound_message(
         payload: dict[str, Any] = {
             "status": DECISION_RESPONDED,
             "decision_id": str(decision.id),
-            "outbox_id": str(outbox.id),
+            "outbox_id": str(dispatch_result.outbox_id) if dispatch_result.outbox_id else None,
             "outbound_message_id": str(outbound_message.id),
             "reason": "response_sent",
             "reason_label": _reason_label("response_sent"),

@@ -146,6 +146,47 @@ type WhatsAppHealth = {
   message: string;
 };
 
+type IntakeMode = "official_api" | "link_flow" | "hybrid";
+type LinkFlowCtaMode = "whatsapp_redirect" | "webchat";
+
+type IntakeConfig = {
+  mode: IntakeMode;
+  link_flow: {
+    enabled: boolean;
+    cta_mode: LinkFlowCtaMode;
+    headline: string;
+    trust_message: string;
+    button_label: string;
+    session_ttl_minutes: number;
+  };
+};
+
+type IntakeReadiness = {
+  configured: boolean;
+  healthy: boolean;
+  provider_name?: string | null;
+  display_phone?: string | null;
+  issues: string[];
+};
+
+type IntakeStatus = {
+  config: IntakeConfig;
+  mode: IntakeMode;
+  link_flow_enabled: boolean;
+  current_mode_operational: boolean;
+  readiness: {
+    own_whatsapp_account: IntakeReadiness;
+    shared_sender: IntakeReadiness;
+  };
+  requirements: {
+    own_whatsapp_account: boolean;
+    shared_sender: boolean;
+    link_flow_enabled: boolean;
+  };
+  issues: string[];
+  message: string;
+};
+
 type PrivacySummary = {
   consent_rate: number;
   retention_days: number;
@@ -157,7 +198,7 @@ type PrivacySummary = {
 
 type AIAutoresponderConfig = {
   enabled: boolean;
-  channels: { whatsapp: boolean };
+  channels: { whatsapp: boolean; webchat?: boolean };
   interactive_booking_options_enabled: boolean;
   business_hours: {
     timezone: string;
@@ -299,7 +340,7 @@ const CONFIGURATION_TABS = TABS.filter((tab) => tab !== "Serviços" && tab !== "
 
 const DEFAULT_AI_CONFIG: AIAutoresponderConfig = {
   enabled: true,
-  channels: { whatsapp: true },
+  channels: { whatsapp: true, webchat: true },
   interactive_booking_options_enabled: true,
   business_hours: {
     timezone: "America/Sao_Paulo",
@@ -314,6 +355,44 @@ const DEFAULT_AI_CONFIG: AIAutoresponderConfig = {
   tone: "profissional, cordial e objetivo",
   fallback_user_id: null,
 };
+
+const DEFAULT_INTAKE_CONFIG: IntakeConfig = {
+  mode: "official_api",
+  link_flow: {
+    enabled: false,
+    cta_mode: "whatsapp_redirect",
+    headline: "Agendamento oficial da clinica",
+    trust_message: "Continue pelo canal oficial para falar com a assistente de agendamento.",
+    button_label: "Continuar pelo WhatsApp",
+    session_ttl_minutes: 30,
+  },
+};
+
+const INTAKE_MODE_COPY: Record<IntakeMode, { title: string; description: string }> = {
+  official_api: {
+    title: "WhatsApp oficial próprio",
+    description: "A clínica atende pelo número oficial já integrado, como no fluxo atual.",
+  },
+  link_flow: {
+    title: "Link oficial",
+    description: "O paciente entra pela página pública e continua pelo CTA configurado: WhatsApp do sistema ou chat embutido.",
+  },
+  hybrid: {
+    title: "Híbrido",
+    description: "A conta própria e o link oficial convivem; cada conversa responde pela rota real de entrada.",
+  },
+};
+
+function mergeIntakeConfig(value?: Partial<IntakeConfig> | null): IntakeConfig {
+  return {
+    ...DEFAULT_INTAKE_CONFIG,
+    ...(value ?? {}),
+    link_flow: {
+      ...DEFAULT_INTAKE_CONFIG.link_flow,
+      ...(value?.link_flow ?? {}),
+    },
+  };
+}
 
 const DEFAULT_BRANDING_CONFIG: BrandingConfig = {
   primary_color: "#0f766e",
@@ -975,6 +1054,7 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
   const [accessToken, setAccessToken] = useState("");
   const [displayPhone, setDisplayPhone] = useState("");
   const [whatsappTestResult, setWhatsappTestResult] = useState<WhatsAppTestResult | null>(null);
+  const [intakeConfigDraft, setIntakeConfigDraft] = useState<IntakeConfig>(DEFAULT_INTAKE_CONFIG);
 
   const [search, setSearch] = useState("");
   const [anonymizePatientId, setAnonymizePatientId] = useState("");
@@ -1021,6 +1101,16 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     queryFn: async () => (await api.get("/settings/whatsapp/health")).data,
   });
 
+  const intakeConfigQuery = useQuery<IntakeConfig>({
+    queryKey: ["intake-config"],
+    queryFn: async () => (await api.get("/settings/intake/config")).data,
+  });
+
+  const intakeStatusQuery = useQuery<IntakeStatus>({
+    queryKey: ["intake-status"],
+    queryFn: async () => (await api.get("/settings/intake/status")).data,
+  });
+
   const whatsappTemplatesQuery = useQuery<{ data: WhatsAppTemplateItem[] }>({
     queryKey: ["whatsapp-templates"],
     queryFn: async () => (await api.get("/settings/whatsapp/templates")).data,
@@ -1044,6 +1134,11 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     queryKey: ["service-catalog-settings"],
     queryFn: async () => (await api.get("/settings/service-catalog/config")).data,
   });
+
+  useEffect(() => {
+    if (!intakeConfigQuery.data) return;
+    setIntakeConfigDraft(mergeIntakeConfig(intakeConfigQuery.data));
+  }, [intakeConfigQuery.data]);
 
   useEffect(() => {
     if (!aiAutoresponderQuery.data?.global) return;
@@ -1357,6 +1452,16 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     onError: (error) => toast.error(extractApiErrorMessage(error, "Não foi possível salvar o tema da clínica.")),
   });
 
+  const saveIntakeConfigMutation = useMutation({
+    mutationFn: async () => api.put("/settings/intake/config", intakeConfigDraft),
+    onSuccess: () => {
+      toast.success("Modo de entrada salvo com sucesso.");
+      queryClient.invalidateQueries({ queryKey: ["intake-config"] });
+      queryClient.invalidateQueries({ queryKey: ["intake-status"] });
+    },
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Não foi possível salvar o modo de entrada.")),
+  });
+
   const saveAiUnitOverrideMutation = useMutation({
     mutationFn: async ({ unitId, mode }: { unitId: string; mode: "default" | "enabled" | "disabled" }) =>
       api.put(`/settings/ai-autoresponder/unit/${unitId}`, mode === "default" ? {} : { enabled: mode === "enabled" }),
@@ -1511,6 +1616,37 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     setPrivacyConfigDraft(buildPrivacyDraftFromSettings(settingsQuery.data?.data ?? []));
   };
 
+  const restoreIntakeConfigDraft = () => {
+    setIntakeConfigDraft(mergeIntakeConfig(intakeConfigQuery.data));
+  };
+
+  const handleIntakeModeChange = (mode: IntakeMode) => {
+    setIntakeConfigDraft((current) => ({
+      ...current,
+      mode,
+      link_flow: {
+        ...current.link_flow,
+        enabled: mode === "official_api" ? current.link_flow.enabled : true,
+      },
+    }));
+  };
+
+  const handleSaveIntakeConfig = () => {
+    if (!intakeConfigDraft.link_flow.headline.trim()) {
+      toast.error("Informe o título da página pública do Link Flow.");
+      return;
+    }
+    if (!intakeConfigDraft.link_flow.button_label.trim()) {
+      toast.error("Informe o texto do botão do Link Flow.");
+      return;
+    }
+    if (intakeConfigDraft.link_flow.session_ttl_minutes < 5 || intakeConfigDraft.link_flow.session_ttl_minutes > 240) {
+      toast.error("O TTL da sessão precisa ficar entre 5 e 240 minutos.");
+      return;
+    }
+    saveIntakeConfigMutation.mutate();
+  };
+
   const handleSaveClinicProfile = () => {
     if (!clinicProfileDraft.clinic_name.trim()) {
       toast.error("Informe o nome da clínica antes de salvar.");
@@ -1551,6 +1687,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     settingsQuery.isLoading ||
     whatsappAccountsQuery.isLoading ||
     whatsappHealthQuery.isLoading ||
+    intakeConfigQuery.isLoading ||
+    intakeStatusQuery.isLoading ||
     whatsappTemplatesQuery.isLoading ||
     unitsQuery.isLoading ||
     privacySummaryQuery.isLoading ||
@@ -1574,6 +1712,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     settingsQuery.isError ||
     whatsappAccountsQuery.isError ||
     whatsappHealthQuery.isError ||
+    intakeConfigQuery.isError ||
+    intakeStatusQuery.isError ||
     whatsappTemplatesQuery.isError ||
     unitsQuery.isError ||
     privacySummaryQuery.isError ||
@@ -1614,6 +1754,13 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     : whatsappHealth?.status === "warning"
       ? "border-amber-200 bg-amber-50 text-amber-800"
       : "border-red-200 bg-red-50 text-red-800";
+  const intakeStatus = intakeStatusQuery.data;
+  const intakeModeCopy = INTAKE_MODE_COPY[intakeConfigDraft.mode];
+  const intakeStatusTone = intakeStatus?.current_mode_operational
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : "border-amber-200 bg-amber-50 text-amber-800";
+  const ownAccountReady = intakeStatus?.readiness.own_whatsapp_account;
+  const sharedSenderReady = intakeStatus?.readiness.shared_sender;
   const templateRows = whatsappTemplatesQuery.data?.data ?? [];
 
   const clinicTimezone = clinicProfileDraft.timezone || DEFAULT_CLINIC_PROFILE.timezone;
@@ -3734,6 +3881,203 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
         <div className="space-y-4">
           <Card className="border-stone-200">
             <CardHeader>
+              <CardTitle>Modo de entrada do atendimento</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className={`rounded-md border p-3 text-sm ${intakeStatusTone}`}>
+                <p className="font-semibold">
+                  {intakeStatus?.current_mode_operational
+                    ? "Modo atual pronto para operação"
+                    : "Modo atual com pendências"}
+                </p>
+                <p className="mt-1 text-xs">{intakeStatus?.message}</p>
+                {intakeStatus?.issues.length ? (
+                  <p className="mt-1 text-xs">Pendências: {intakeStatus.issues.join("; ")}</p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                {(["official_api", "link_flow", "hybrid"] as IntakeMode[]).map((mode) => {
+                  const copy = INTAKE_MODE_COPY[mode];
+                  const selected = intakeConfigDraft.mode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => handleIntakeModeChange(mode)}
+                      className={[
+                        "rounded-md border p-4 text-left transition",
+                        selected
+                          ? "border-emerald-500 bg-emerald-50 text-emerald-900"
+                          : "border-stone-200 bg-white text-stone-700 hover:border-stone-300",
+                      ].join(" ")}
+                    >
+                      <span className="text-sm font-semibold">{copy.title}</span>
+                      <span className="mt-2 block text-xs leading-5">{copy.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Modo selecionado</p>
+                  <p className="mt-1 text-sm font-medium text-stone-800">{intakeModeCopy.title}</p>
+                  <p className="mt-1 text-xs text-stone-600">{intakeModeCopy.description}</p>
+                </div>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Conta própria</p>
+                  <p className="mt-1 text-sm font-medium text-stone-800">
+                    {ownAccountReady?.healthy
+                      ? "Configurada e pronta"
+                      : ownAccountReady?.configured
+                        ? "Configurada com pendências"
+                        : "Não configurada"}
+                  </p>
+                  <p className="mt-1 text-xs text-stone-600">
+                    {ownAccountReady?.provider_name ? `Provedor: ${ownAccountReady.provider_name}` : "Usada no modo official_api e no lado próprio do hybrid."}
+                  </p>
+                </div>
+                <div className="rounded-md border border-stone-200 bg-stone-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Sender compartilhado</p>
+                  <p className="mt-1 text-sm font-medium text-stone-800">
+                    {sharedSenderReady?.healthy
+                      ? "Disponível para Link Flow"
+                      : sharedSenderReady?.configured
+                        ? "Configurado com pendências"
+                        : "Não configurado"}
+                  </p>
+                  <p className="mt-1 text-xs text-stone-600">
+                    {sharedSenderReady?.display_phone ||
+                      "Usado quando o Link Flow redireciona para WhatsApp; webchat nao depende deste sender."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-stone-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-stone-800">Configuração mínima do Link Flow</p>
+                    <p className="mt-1 text-xs text-stone-500">
+                      Estes textos aparecem na rota pública. Nenhum segredo, ID interno ou token é exibido ao paciente.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-stone-700">
+                    <input
+                      type="checkbox"
+                      checked={intakeConfigDraft.link_flow.enabled}
+                      onChange={(event) =>
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: { ...current.link_flow, enabled: event.target.checked },
+                        }))
+                      }
+                    />
+                    Habilitar Link Flow
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">CTA publico</label>
+                    <select
+                      className="h-10 w-full rounded-md border border-stone-300 bg-white px-3 text-sm"
+                      value={intakeConfigDraft.link_flow.cta_mode}
+                      onChange={(event) => {
+                        const value = event.target.value === "webchat" ? "webchat" : "whatsapp_redirect";
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: {
+                            ...current.link_flow,
+                            cta_mode: value,
+                            button_label:
+                              value === "webchat" && current.link_flow.button_label === "Continuar pelo WhatsApp"
+                                ? "Iniciar chat"
+                                : current.link_flow.button_label,
+                          },
+                        }));
+                      }}
+                    >
+                      <option value="whatsapp_redirect">Abrir WhatsApp do sistema</option>
+                      <option value="webchat">Chat embutido na pagina</option>
+                    </select>
+                    <p className="text-xs text-stone-500">
+                      WhatsApp usa o sender compartilhado. Webchat cria uma conversa de navegador com canal proprio.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Headline</label>
+                    <Input
+                      value={intakeConfigDraft.link_flow.headline}
+                      onChange={(event) =>
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: { ...current.link_flow, headline: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Texto do botão</label>
+                    <Input
+                      value={intakeConfigDraft.link_flow.button_label}
+                      onChange={(event) =>
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: { ...current.link_flow, button_label: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Mensagem de confiança</label>
+                    <Input
+                      value={intakeConfigDraft.link_flow.trust_message}
+                      onChange={(event) =>
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: { ...current.link_flow, trust_message: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">TTL da sessão em minutos</label>
+                    <Input
+                      type="number"
+                      min={5}
+                      max={240}
+                      value={intakeConfigDraft.link_flow.session_ttl_minutes}
+                      onChange={(event) =>
+                        setIntakeConfigDraft((current) => ({
+                          ...current,
+                          link_flow: {
+                            ...current.link_flow,
+                            session_ttl_minutes: Number(event.target.value) || 30,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="rounded-md border border-stone-200 bg-stone-50 p-3 text-xs leading-5 text-stone-600">
+                    Em <strong>link_flow</strong>, a clínica não precisa ter conta própria. Em <strong>hybrid</strong>, as entradas convivem: WhatsApp continua WhatsApp e webchat continua webchat.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="outline" onClick={restoreIntakeConfigDraft}>
+                  Recarregar modo
+                </Button>
+                <Button onClick={handleSaveIntakeConfig} disabled={saveIntakeConfigMutation.isPending}>
+                  {saveIntakeConfigMutation.isPending ? "Salvando..." : "Salvar modo de entrada"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-stone-200">
+            <CardHeader>
               <CardTitle>Conta WhatsApp ({providerDisplayName})</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -3898,12 +4242,12 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
               <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
                 <p className="text-sm font-semibold text-emerald-800">Como funciona</p>
                 <p className="mt-1 text-xs text-emerald-700">
-                  Este painel define quando a IA responde automaticamente no WhatsApp e quando deve encaminhar para humano.
+                  Este painel define quando a IA responde automaticamente no WhatsApp e no webchat, e quando deve encaminhar para humano.
                   Configure horário, limites e segurança antes de ativar em produção.
                 </p>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 <div>
                   <label className="flex items-center gap-2 text-sm text-stone-700">
                     <input
@@ -3935,6 +4279,24 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
                   </label>
                   <p className="mt-1 text-xs text-stone-500">
                     Define se a IA pode responder automaticamente no canal WhatsApp.
+                  </p>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-sm text-stone-700">
+                    <input
+                      type="checkbox"
+                      checked={aiConfigDraft.channels.webchat ?? true}
+                      onChange={(event) =>
+                        setAiConfigDraft((current) => ({
+                          ...current,
+                          channels: { ...current.channels, webchat: event.target.checked },
+                        }))
+                      }
+                    />
+                    Habilitar canal Webchat
+                  </label>
+                  <p className="mt-1 text-xs text-stone-500">
+                    Define se a IA pode responder automaticamente no chat publico do Link Flow.
                   </p>
                 </div>
                 <div>

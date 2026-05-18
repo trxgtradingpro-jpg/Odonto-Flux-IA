@@ -34,10 +34,20 @@ from app.services.audio_transcription_service import (
     transcribe_audio_bytes,
 )
 from app.services.automation_service import emit_event, pending_jobs_for_dispatch
-from app.services.demo_whatsapp_simulation_service import ensure_demo_virtual_whatsapp_account, is_demo_tenant
+from app.services.demo_whatsapp_simulation_service import (
+    ensure_demo_virtual_whatsapp_account,
+    is_demo_tenant,
+)
+from app.services.link_flow_service import (
+    LinkFlowInboundResolution,
+    is_system_link_flow_sender,
+    link_session_to_conversation,
+    record_link_flow_unrouted_event,
+    register_link_flow_event_once,
+    resolve_inbound_link_flow_session,
+)
 from app.services.storage_service import StorageProviderFactory
 from app.utils.phone import normalize_phone
-
 
 SUPPORTED_WHATSAPP_PROVIDERS = {"meta_cloud", "infobip", "twilio"}
 WEBHOOK_EVENT_ID_MAX_LENGTH = 120
@@ -182,7 +192,9 @@ def _schedule_ai_autoresponder_for_inbound(
             message_id=str(inbound_message_id),
             error=str(exc),
         )
-        from app.services.ai_autoresponder_service import process_inbound_message as process_ai_autoresponder_inbound
+        from app.services.ai_autoresponder_service import (
+            process_inbound_message as process_ai_autoresponder_inbound,
+        )
 
         process_ai_autoresponder_inbound(
             db,
@@ -398,6 +410,164 @@ def _resolve_demo_inbound_target(
         assigned_prospect_ids=[str(prospect.id) for prospect in prospects],
     )
     return account.tenant_id, account.unit_id
+
+
+def _resolve_demo_inbound_target_by_sender_match(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    sender_phone: str | None = None,
+) -> tuple[UUID, UUID | None] | None:
+    matched_prospect = _find_demo_prospect_by_sender_phone(
+        db,
+        prospects=_assigned_demo_prospects_for_account(db, account=account),
+        sender_phone=sender_phone,
+    )
+    if matched_prospect and matched_prospect.demo_tenant_id:
+        return matched_prospect.demo_tenant_id, _demo_unit_id_for_tenant(db, tenant_id=matched_prospect.demo_tenant_id)
+    return None
+
+
+def _resolve_inbound_target_with_link_flow(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    sender_phone: str | None,
+    body: str | None,
+) -> tuple[UUID, UUID | None, str, LinkFlowInboundResolution | None]:
+    link_flow_resolution = resolve_inbound_link_flow_session(db, text=body)
+    if link_flow_resolution.token_found:
+        if link_flow_resolution.is_valid and link_flow_resolution.session:
+            if not is_system_link_flow_sender(db, account) and account.tenant_id != link_flow_resolution.session.tenant_id:
+                return (
+                    account.tenant_id,
+                    account.unit_id,
+                    link_flow_resolution.sanitized_text,
+                    LinkFlowInboundResolution(
+                        token_found=True,
+                        session=None,
+                        sanitized_text=link_flow_resolution.sanitized_text,
+                        failure_reason="session_invalid",
+                    ),
+                )
+            return (
+                link_flow_resolution.session.tenant_id,
+                link_flow_resolution.session.unit_id,
+                link_flow_resolution.sanitized_text,
+                link_flow_resolution,
+            )
+        return (
+            account.tenant_id,
+            account.unit_id,
+            link_flow_resolution.sanitized_text,
+            link_flow_resolution,
+        )
+
+    if is_system_link_flow_sender(db, account):
+        demo_target = _resolve_demo_inbound_target_by_sender_match(
+            db,
+            account=account,
+            sender_phone=sender_phone,
+        )
+        if demo_target:
+            tenant_id, preferred_unit_id = demo_target
+            return tenant_id, preferred_unit_id, link_flow_resolution.sanitized_text, None
+        return (
+            account.tenant_id,
+            account.unit_id,
+            link_flow_resolution.sanitized_text,
+            LinkFlowInboundResolution(
+                token_found=False,
+                session=None,
+                sanitized_text=link_flow_resolution.sanitized_text,
+                failure_reason="session_invalid",
+            ),
+        )
+
+    tenant_id, preferred_unit_id = _resolve_demo_inbound_target(
+        db,
+        account=account,
+        sender_phone=sender_phone,
+    )
+    return tenant_id, preferred_unit_id, link_flow_resolution.sanitized_text, None
+
+
+def _record_invalid_link_flow_inbound(
+    db: Session,
+    *,
+    stats: dict,
+    account: WhatsAppAccount,
+    provider: str,
+    event_id: str,
+    payload: dict,
+    resolution: LinkFlowInboundResolution,
+    sender_phone: str | None = None,
+) -> bool:
+    tenant_id = resolution.session.tenant_id if resolution.session else account.tenant_id
+    event_name = resolution.failure_reason if resolution.failure_reason in {"session_invalid", "session_expired"} else "session_invalid"
+    if resolution.session:
+        register_link_flow_event_once(
+            db,
+            session=resolution.session,
+            event_name=event_name,
+            payload={"source": "whatsapp_inbound_rejected"},
+        )
+    else:
+        record_link_flow_unrouted_event(
+            db,
+            tenant_id=tenant_id,
+            event_name=event_name,
+            payload={
+                "source": "whatsapp_inbound_rejected",
+                "provider": provider,
+                "has_token": resolution.token_found,
+            },
+        )
+
+    inbox_event = WebhookInbox(
+        tenant_id=tenant_id,
+        provider=provider,
+        event_id=_safe_webhook_event_id(event_id),
+        payload=payload,
+        processed=True,
+        processed_at=datetime.now(UTC),
+        error_message=resolution.failure_reason or "session_invalid",
+    )
+    db.add(inbox_event)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        stats["duplicates"] += 1
+        return False
+
+    fallback_to = normalize_phone(sender_phone)
+    if fallback_to:
+        queue_outbound_message(
+            db,
+            tenant_id=tenant_id,
+            conversation_id=None,
+            to=fallback_to,
+            body="Nao consegui localizar seu atendimento por este link. Abra novamente o link oficial da clinica para continuar.",
+            provider_context=_build_provider_context(account),
+            metadata={
+                "source": "link_flow_invalid_session_fallback",
+                "failure_reason": event_name,
+            },
+            immediate_dispatch=False,
+            commit=False,
+        )
+
+    db.commit()
+    stats["processed"] += 1
+    logger.warning(
+        "whatsapp.link_flow_inbound_rejected",
+        tenant_id=str(tenant_id),
+        account_id=str(account.id),
+        provider=provider,
+        failure_reason=resolution.failure_reason,
+    )
+    return True
 
 
 def _resolve_dispatch_account_for_tenant(db: Session, *, tenant_id: UUID) -> WhatsAppAccount | None:
@@ -804,6 +974,35 @@ def assert_whatsapp_account_ready_for_dispatch(db: Session, *, tenant_id: UUID) 
     return account
 
 
+def assert_whatsapp_route_ready_for_dispatch(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    provider_context: dict | None = None,
+) -> WhatsAppAccount:
+    account = _dispatch_account_from_provider_context(db, provider_context) if provider_context else None
+    if not account:
+        return assert_whatsapp_account_ready_for_dispatch(db, tenant_id=tenant_id)
+
+    issues = whatsapp_account_issues(
+        provider_name=account.provider_name,
+        phone_number_id=account.phone_number_id,
+        business_account_id=account.business_account_id,
+        access_token=account.access_token_encrypted,
+    )
+    if issues:
+        raise ApiError(
+            status_code=400,
+            code='WHATSAPP_ACCOUNT_INVALID',
+            message='Conta WhatsApp com credenciais invalidas para envio real.',
+            details={
+                'issues': issues,
+                'action': 'Atualize a rota WhatsApp utilizada nesta conversa.',
+            },
+        )
+    return account
+
+
 def _dispatch_demo_virtual_outbox_item(db: Session, item: OutboxMessage) -> None:
     payload = item.payload or {}
     payload_metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
@@ -872,7 +1071,9 @@ def _dispatch_demo_virtual_outbox_item(db: Session, item: OutboxMessage) -> None
         and dispatched_message.sender_type == 'automation'
         and dispatched_message.channel == 'whatsapp'
     ):
-        from app.services.demo_whatsapp_simulation_service import maybe_schedule_demo_whatsapp_reply_simulation
+        from app.services.demo_whatsapp_simulation_service import (
+            maybe_schedule_demo_whatsapp_reply_simulation,
+        )
 
         maybe_schedule_demo_whatsapp_reply_simulation(
             db,
@@ -1403,11 +1604,26 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 if not event_id:
                     continue
                 sender_phone = message.get('from', '')
-                tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+                body, inbound_type, interactive_reply = _extract_meta_inbound_body_and_interactive(message)
+                media = _extract_meta_audio_media(message)
+                tenant_id, preferred_demo_unit_id, body, link_flow_resolution = _resolve_inbound_target_with_link_flow(
                     db,
                     account=account,
                     sender_phone=sender_phone,
+                    body=body,
                 )
+                if link_flow_resolution and not link_flow_resolution.is_valid:
+                    _record_invalid_link_flow_inbound(
+                        db,
+                        stats=stats,
+                        account=account,
+                        provider='whatsapp',
+                        event_id=event_id,
+                        payload=message,
+                        resolution=link_flow_resolution,
+                        sender_phone=sender_phone,
+                    )
+                    continue
 
                 inbox_event = WebhookInbox(
                     tenant_id=tenant_id,
@@ -1451,12 +1667,14 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                     patient.id,
                     preferred_unit_id=preferred_unit_id,
                 )
-                body, inbound_type, interactive_reply = _extract_meta_inbound_body_and_interactive(message)
-                media = _extract_meta_audio_media(message)
                 if not body:
                     body = _placeholder_body_for_message_type(inbound_type)
                 inbound_payload = dict(message)
                 inbound_payload['provider_context'] = _build_provider_context(account)
+                if link_flow_resolution and link_flow_resolution.session:
+                    inbound_payload['entry_source'] = 'link_flow'
+                    inbound_payload['link_flow_session_id'] = str(link_flow_resolution.session.id)
+                    inbound_payload['raw_inbound_text'] = _extract_meta_inbound_body_and_interactive(message)[0]
                 if interactive_reply:
                     inbound_payload['interactive_reply'] = interactive_reply
                 if media:
@@ -1483,6 +1701,14 @@ def _ingest_meta_webhook_payload(db: Session, payload: dict) -> dict:
                 if conversation:
                     conversation.last_message_at = datetime.now(UTC)
                     db.add(conversation)
+                if link_flow_resolution and link_flow_resolution.session:
+                    link_session_to_conversation(
+                        db,
+                        session=link_flow_resolution.session,
+                        conversation=conversation,
+                        patient_id=patient.id,
+                        lead_id=lead.id if lead else None,
+                    )
                 _sync_sales_outreach_reply_if_needed(
                     db,
                     conversation=conversation,
@@ -1662,13 +1888,27 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
         is_inbound = bool(sender_phone and (inbound_text or media))
 
         if is_inbound:
-            tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+            tenant_id, preferred_demo_unit_id, inbound_text, link_flow_resolution = _resolve_inbound_target_with_link_flow(
                 db,
                 account=account,
                 sender_phone=sender_phone,
+                body=inbound_text,
             )
             stats['received'] += 1
             event_id = f'infobip_inbound:{provider_message_id or sender_phone}:{result.get("receivedAt") or ""}'
+            if link_flow_resolution and not link_flow_resolution.is_valid:
+                _record_invalid_link_flow_inbound(
+                    db,
+                    stats=stats,
+                    account=account,
+                    provider='infobip_whatsapp',
+                    event_id=event_id,
+                    payload=result,
+                    resolution=link_flow_resolution,
+                    sender_phone=sender_phone,
+                )
+                continue
+
             inbox_event = WebhookInbox(
                 tenant_id=tenant_id,
                 provider='infobip_whatsapp',
@@ -1713,6 +1953,10 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             inbound_body = inbound_text or _placeholder_body_for_message_type(inferred_type)
             inbound_payload = dict(result)
             inbound_payload['provider_context'] = _build_provider_context(account)
+            if link_flow_resolution and link_flow_resolution.session:
+                inbound_payload['entry_source'] = 'link_flow'
+                inbound_payload['link_flow_session_id'] = str(link_flow_resolution.session.id)
+                inbound_payload['raw_inbound_text'] = _extract_infobip_inbound_body_and_interactive(result, message_block)[0]
             if interactive_reply:
                 inbound_payload['interactive_reply'] = interactive_reply
             if media:
@@ -1739,6 +1983,14 @@ def _ingest_infobip_webhook_payload(db: Session, payload: dict) -> dict:
             if conversation:
                 conversation.last_message_at = datetime.now(UTC)
                 db.add(conversation)
+            if link_flow_resolution and link_flow_resolution.session:
+                link_session_to_conversation(
+                    db,
+                    session=link_flow_resolution.session,
+                    conversation=conversation,
+                    patient_id=patient.id,
+                    lead_id=lead.id if lead else None,
+                )
             _sync_sales_outreach_reply_if_needed(
                 db,
                 conversation=conversation,
@@ -1884,13 +2136,27 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
 
     if is_inbound:
         sender_phone = _strip_whatsapp_prefix(from_phone)
-        tenant_id, preferred_demo_unit_id = _resolve_demo_inbound_target(
+        tenant_id, preferred_demo_unit_id, body, link_flow_resolution = _resolve_inbound_target_with_link_flow(
             db,
             account=account,
             sender_phone=sender_phone,
+            body=body,
         )
         stats['received'] += 1
         event_id = f'twilio_inbound:{message_sid}'
+        if link_flow_resolution and not link_flow_resolution.is_valid:
+            _record_invalid_link_flow_inbound(
+                db,
+                stats=stats,
+                account=account,
+                provider='twilio_whatsapp',
+                event_id=event_id,
+                payload=payload,
+                resolution=link_flow_resolution,
+                sender_phone=sender_phone,
+            )
+            return stats
+
         inbox_event = WebhookInbox(
             tenant_id=tenant_id,
             provider='twilio_whatsapp',
@@ -1940,6 +2206,10 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
         inferred_type = 'audio' if audio_media else ('media' if num_media != '0' else 'text')
         inbound_payload = dict(payload)
         inbound_payload['provider_context'] = _build_provider_context(account)
+        if link_flow_resolution and link_flow_resolution.session:
+            inbound_payload['entry_source'] = 'link_flow'
+            inbound_payload['link_flow_session_id'] = str(link_flow_resolution.session.id)
+            inbound_payload['raw_inbound_text'] = str(payload.get('Body') or '').strip()
         if audio_media:
             inbound_payload['media'] = audio_media
             inbound_payload['audio_transcription'] = {
@@ -1965,6 +2235,14 @@ def _ingest_twilio_webhook_payload(db: Session, payload: dict) -> dict:
         if conversation:
             conversation.last_message_at = datetime.now(UTC)
             db.add(conversation)
+        if link_flow_resolution and link_flow_resolution.session:
+            link_session_to_conversation(
+                db,
+                session=link_flow_resolution.session,
+                conversation=conversation,
+                patient_id=patient.id,
+                lead_id=lead.id if lead else None,
+            )
         _sync_sales_outreach_reply_if_needed(
             db,
             conversation=conversation,
