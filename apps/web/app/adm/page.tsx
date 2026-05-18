@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1766,6 +1767,13 @@ export default function AdmPage() {
                 <SlidersHorizontal size={16} />
                 WhatsApp do sistema
               </Button>
+              <Link
+                href="/adm/mensagens-para-clinicas"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+              >
+                <Clipboard size={16} />
+                Mensagens prontas
+              </Link>
             </div>
           </CardContent>
         </Card>

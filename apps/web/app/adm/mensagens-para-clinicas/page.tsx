@@ -1,0 +1,755 @@
+"use client";
+
+import Link from "next/link";
+import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Building2,
+  CheckCircle2,
+  Clipboard,
+  Copy,
+  ExternalLink,
+  MessageSquareText,
+  PhoneCall,
+  RefreshCw,
+  Search,
+  Send,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { api } from "@/lib/api";
+import { getAdminAccessToken } from "@/lib/auth";
+import { formatDateTimeBR } from "@/lib/formatters";
+import { Badge, Button, Card, CardContent, Input, cn } from "@odontoflux/ui";
+
+type Prospect = {
+  id: string;
+  clinic_name: string;
+  owner_name?: string | null;
+  manager_name?: string | null;
+  phone?: string | null;
+  whatsapp_phone?: string | null;
+  city?: string | null;
+  state?: string | null;
+  main_pain?: string | null;
+  status: string;
+  temperature: string;
+  score: number;
+  do_not_contact: boolean;
+  demo_tenant_id?: string | null;
+  demo_user_id?: string | null;
+  demo_status: string;
+  demo_sent_at?: string | null;
+  demo_first_login_at?: string | null;
+};
+
+type SalesTemplate = {
+  key: string;
+  label: string;
+  description: string;
+  recommended_for: string[];
+  body: string;
+};
+
+type ClinicMessageItem = {
+  prospect: Prospect;
+  suggested_template_key: string;
+  contact_name: string;
+  whatsapp_destination?: string | null;
+  demo_ready: boolean;
+  copy_blocked_reason?: string | null;
+  last_event_name?: string | null;
+  last_event_at?: string | null;
+  last_template_key?: string | null;
+};
+
+type ClinicMessagesResponse = {
+  data: ClinicMessageItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  templates: SalesTemplate[];
+};
+
+type MessagePreview = {
+  prospect: Prospect;
+  template_key: string;
+  template_label: string;
+  message_text: string;
+  demo_login_url?: string | null;
+  can_copy: boolean;
+  warnings: string[];
+  missing_variables: string[];
+  resolved_variables: Record<string, string>;
+  suggested_template_key: string;
+};
+
+const STATUS_OPTIONS = [
+  "novo",
+  "pesquisado",
+  "contato_iniciado",
+  "respondeu",
+  "decisor_identificado",
+  "demo_criada",
+  "demo_enviada",
+  "demo_acessada",
+  "testou_whatsapp",
+  "visitou_agenda",
+  "followup",
+  "reuniao_marcada",
+  "proposta_enviada",
+  "negociacao",
+  "fechado_ganho",
+  "fechado_perdido",
+];
+
+const TEMPERATURE_OPTIONS = ["frio", "morno", "quente", "muito_quente"];
+const DEMO_STATUS_OPTIONS = ["rascunho", "criada", "enviada", "acessada", "expirada"];
+
+function humanize(value?: string | null) {
+  if (!value) return "-";
+  return value
+    .replace(/_/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function extractApiErrorMessage(error: unknown, fallback: string) {
+  const response = (error as { response?: { data?: { error?: { message?: string } } } }).response;
+  return response?.data?.error?.message || fallback;
+}
+
+function statusClass(status?: string | null) {
+  if (status === "demo_acessada" || status === "testou_whatsapp") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  }
+  if (status === "demo_enviada" || status === "contato_iniciado") {
+    return "border-cyan-200 bg-cyan-50 text-cyan-800";
+  }
+  if (status === "fechado_perdido") {
+    return "border-stone-200 bg-stone-100 text-stone-600";
+  }
+  return "border-stone-200 bg-white text-stone-700";
+}
+
+function temperatureClass(value?: string | null) {
+  if (value === "muito_quente" || value === "quente") {
+    return "border-orange-200 bg-orange-50 text-orange-700";
+  }
+  if (value === "morno") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-stone-200 bg-stone-100 text-stone-600";
+}
+
+async function copyToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const element = document.createElement("textarea");
+  element.value = value;
+  element.setAttribute("readonly", "true");
+  element.style.position = "fixed";
+  element.style.left = "-9999px";
+  document.body.appendChild(element);
+  element.select();
+  document.execCommand("copy");
+  document.body.removeChild(element);
+}
+
+export default function ClinicMessagesPage() {
+  const queryClient = useQueryClient();
+  const [hasToken, setHasToken] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [temperatureFilter, setTemperatureFilter] = useState("");
+  const [demoStatusFilter, setDemoStatusFilter] = useState("");
+  const [hasDemoFilter, setHasDemoFilter] = useState("");
+  const [templateKey, setTemplateKey] = useState("");
+  const [preview, setPreview] = useState<MessagePreview | null>(null);
+
+  useEffect(() => {
+    setHasToken(Boolean(getAdminAccessToken()));
+  }, []);
+
+  const messagesQuery = useQuery<ClinicMessagesResponse>({
+    queryKey: [
+      "adm-clinic-messages",
+      search,
+      statusFilter,
+      temperatureFilter,
+      demoStatusFilter,
+      hasDemoFilter,
+    ],
+    queryFn: async () =>
+      (
+        await api.get("/admin/clinic-messages", {
+          params: {
+            q: search || undefined,
+            status: statusFilter || undefined,
+            temperature: temperatureFilter || undefined,
+            demo_status: demoStatusFilter || undefined,
+            has_demo: hasDemoFilter === "" ? undefined : hasDemoFilter === "sim",
+            limit: 250,
+            offset: 0,
+          },
+        })
+      ).data,
+    enabled: hasToken,
+    retry: false,
+  });
+
+  const templatesQuery = useQuery<SalesTemplate[]>({
+    queryKey: ["adm-clinic-message-templates"],
+    queryFn: async () => (await api.get("/admin/clinic-messages/templates")).data,
+    enabled: hasToken,
+    retry: false,
+  });
+
+  const items = useMemo(() => messagesQuery.data?.data ?? [], [messagesQuery.data?.data]);
+  const templates = useMemo(
+    () => messagesQuery.data?.templates ?? templatesQuery.data ?? [],
+    [messagesQuery.data?.templates, templatesQuery.data],
+  );
+
+  const selectedItem = useMemo(() => {
+    return items.find((item) => item.prospect.id === selectedId) ?? items[0] ?? null;
+  }, [items, selectedId]);
+  const selectedProspectId = selectedItem?.prospect.id ?? null;
+  const selectedSuggestedTemplateKey = selectedItem?.suggested_template_key ?? "";
+
+  useEffect(() => {
+    if (!selectedId && selectedItem) {
+      setSelectedId(selectedItem.prospect.id);
+    }
+  }, [selectedId, selectedItem]);
+
+  useEffect(() => {
+    if (!selectedProspectId) return;
+    setTemplateKey(selectedSuggestedTemplateKey);
+    setPreview(null);
+  }, [selectedProspectId, selectedSuggestedTemplateKey]);
+
+  const previewMutation = useMutation({
+    mutationFn: async ({
+      prospectId,
+      selectedTemplateKey,
+    }: {
+      prospectId: string;
+      selectedTemplateKey: string;
+    }) =>
+      (
+        await api.post<MessagePreview>("/admin/clinic-messages/preview", {
+          prospect_id: prospectId,
+          template_key: selectedTemplateKey || null,
+          issue_demo_access: true,
+        })
+      ).data,
+    onSuccess: (data) => {
+      setPreview(data);
+      setTemplateKey(data.template_key);
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-messages"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel gerar a mensagem."));
+    },
+  });
+
+  const eventMutation = useMutation({
+    mutationFn: async ({
+      prospectId,
+      eventName,
+      currentPreview,
+      note,
+    }: {
+      prospectId: string;
+      eventName: "message_copied" | "demo_link_copied" | "contact_registered";
+      currentPreview?: MessagePreview | null;
+      note?: string | null;
+    }) =>
+      (
+        await api.post(`/admin/clinic-messages/${prospectId}/events`, {
+          event_name: eventName,
+          template_key: currentPreview?.template_key || templateKey || null,
+          message_snapshot: currentPreview?.message_text || null,
+          demo_login_url: currentPreview?.demo_login_url || null,
+          channel: "whatsapp_manual",
+          note,
+        })
+      ).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["adm-clinic-messages"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel registrar o evento."));
+    },
+  });
+
+  const totals = useMemo(() => {
+    const withDemo = items.filter((item) => item.demo_ready).length;
+    const blocked = items.filter((item) => item.prospect.do_not_contact).length;
+    const hot = items.filter((item) => ["quente", "muito_quente"].includes(item.prospect.temperature)).length;
+    return { withDemo, blocked, hot };
+  }, [items]);
+
+  async function generatePreview(copyAfter = false) {
+    if (!selectedItem) return;
+    try {
+      const data = await previewMutation.mutateAsync({
+        prospectId: selectedItem.prospect.id,
+        selectedTemplateKey: templateKey || selectedItem.suggested_template_key,
+      });
+      if (copyAfter) await copyMessage(data);
+    } catch {
+      return;
+    }
+  }
+
+  async function copyMessage(currentPreview = preview) {
+    if (!selectedItem || !currentPreview) {
+      await generatePreview(true);
+      return;
+    }
+    if (!currentPreview.can_copy) {
+      toast.error(currentPreview.warnings[0] || "Esta mensagem ainda nao pode ser copiada.");
+      return;
+    }
+    await copyToClipboard(currentPreview.message_text);
+    try {
+      await eventMutation.mutateAsync({
+        prospectId: selectedItem.prospect.id,
+        eventName: "message_copied",
+        currentPreview,
+      });
+      toast.success("Mensagem completa copiada.");
+    } catch {
+      return;
+    }
+  }
+
+  async function copyDemoLink() {
+    if (!selectedItem || !preview?.demo_login_url) {
+      toast.error("Gere a mensagem para emitir um link de demo primeiro.");
+      return;
+    }
+    await copyToClipboard(preview.demo_login_url);
+    try {
+      await eventMutation.mutateAsync({
+        prospectId: selectedItem.prospect.id,
+        eventName: "demo_link_copied",
+        currentPreview: preview,
+      });
+      toast.success("Link da demo copiado.");
+    } catch {
+      return;
+    }
+  }
+
+  async function markContactDone() {
+    if (!selectedItem) return;
+    try {
+      await eventMutation.mutateAsync({
+        prospectId: selectedItem.prospect.id,
+        eventName: "contact_registered",
+        currentPreview: preview,
+        note: "Contato manual registrado pela pagina de mensagens para clinicas.",
+      });
+      toast.success("Contato registrado na timeline.");
+    } catch {
+      return;
+    }
+  }
+
+  if (!hasToken) {
+    return (
+      <main className="min-h-screen bg-stone-100 p-6 text-stone-950">
+        <Card className="mx-auto mt-20 max-w-xl border-stone-200 bg-white">
+          <CardContent className="space-y-4 p-6">
+            <div className="grid h-12 w-12 place-items-center rounded-xl bg-stone-950 text-sm font-black text-white">
+              CF
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Area interna</p>
+              <h1 className="mt-1 text-2xl font-black">Entre no /adm primeiro</h1>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                Esta central usa o mesmo login administrativo do CRM comercial.
+              </p>
+            </div>
+            <Link
+              href="/adm"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-stone-950 px-4 text-sm font-bold text-white"
+            >
+              Abrir login do /adm
+              <ArrowLeft className="h-4 w-4 rotate-180" />
+            </Link>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-[#f5f2ea] text-stone-950">
+      <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/adm"
+              className="grid h-10 w-10 place-items-center rounded-xl border border-stone-200 bg-white text-stone-700 transition hover:bg-stone-100"
+            >
+              <ArrowLeft size={18} />
+            </Link>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-stone-500">
+                Admin comercial
+              </p>
+              <h1 className="text-xl font-black">Mensagens para clinicas</h1>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => messagesQuery.refetch()}>
+              <RefreshCw size={16} />
+              Atualizar
+            </Button>
+            <Link
+              href="/adm"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-stone-200 bg-white px-4 text-sm font-bold text-stone-800 transition hover:bg-stone-100"
+            >
+              Voltar ao CRM
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-[1600px] space-y-4 px-5 py-5">
+        <section className="overflow-hidden rounded-2xl border border-stone-200 bg-stone-950 text-white shadow-sm">
+          <div className="grid gap-4 p-5 lg:grid-cols-[1fr_420px] lg:p-7">
+            <div>
+              <Badge className="border-white/10 bg-white/10 text-white">Copiar, enviar, rastrear</Badge>
+              <h2 className="mt-4 max-w-3xl text-3xl font-black tracking-tight lg:text-4xl">
+                Uma central para montar a primeira mensagem de cada clinica com a demo no final.
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-300">
+                Ela usa os dados que voce ja cadastra no CRM: nome da clinica, dono,
+                dor percebida, status, WhatsApp e demo criada. Voce escolhe a clinica,
+                gera a mensagem pronta e copia tudo para enviar manualmente.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <MiniMetric icon={<Building2 size={18} />} label="Filtradas" value={messagesQuery.data?.total ?? 0} />
+              <MiniMetric icon={<ShieldCheck size={18} />} label="Com demo" value={totals.withDemo} />
+              <MiniMetric icon={<Sparkles size={18} />} label="Quentes" value={totals.hot} />
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_560px]">
+          <div className="space-y-4">
+            <Card className="border-stone-200 bg-white">
+              <CardContent className="space-y-3 p-4">
+                <div className="grid gap-3 lg:grid-cols-[1fr_180px_160px_160px_140px]">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                    <Input
+                      className="pl-9"
+                      placeholder="Buscar clinica, dono, cidade ou telefone"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                    />
+                  </div>
+                  <FilterSelect value={statusFilter} onChange={setStatusFilter} label="Todos os status">
+                    {STATUS_OPTIONS.map((status) => (
+                      <option key={status} value={status}>
+                        {humanize(status)}
+                      </option>
+                    ))}
+                  </FilterSelect>
+                  <FilterSelect value={temperatureFilter} onChange={setTemperatureFilter} label="Temperatura">
+                    {TEMPERATURE_OPTIONS.map((item) => (
+                      <option key={item} value={item}>
+                        {humanize(item)}
+                      </option>
+                    ))}
+                  </FilterSelect>
+                  <FilterSelect value={demoStatusFilter} onChange={setDemoStatusFilter} label="Demo">
+                    {DEMO_STATUS_OPTIONS.map((item) => (
+                      <option key={item} value={item}>
+                        {humanize(item)}
+                      </option>
+                    ))}
+                  </FilterSelect>
+                  <FilterSelect value={hasDemoFilter} onChange={setHasDemoFilter} label="Link">
+                    <option value="sim">Com demo</option>
+                    <option value="nao">Sem demo</option>
+                  </FilterSelect>
+                </div>
+                {totals.blocked ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    <AlertTriangle size={15} />
+                    {totals.blocked} clinica(s) filtrada(s) estao marcadas como nao contactar.
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+              <div className="grid grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500">
+                <span>Clinica</span>
+                <span>Status</span>
+                <span>Temp.</span>
+                <span>Demo</span>
+                <span>Ultima acao</span>
+              </div>
+              <div className="max-h-[680px] overflow-auto">
+                {messagesQuery.isLoading ? (
+                  <div className="p-6 text-sm text-stone-500">Carregando mensagens...</div>
+                ) : items.length ? (
+                  items.map((item) => {
+                    const selected = selectedItem?.prospect.id === item.prospect.id;
+                    return (
+                      <button
+                        key={item.prospect.id}
+                        type="button"
+                        onClick={() => setSelectedId(item.prospect.id)}
+                        className={cn(
+                          "grid w-full grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr] gap-3 border-b border-stone-100 px-4 py-4 text-left text-sm transition hover:bg-stone-50",
+                          selected && "bg-emerald-50/80",
+                        )}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate font-black text-stone-950">{item.prospect.clinic_name}</span>
+                          <span className="mt-1 flex items-center gap-1 truncate text-xs text-stone-500">
+                            <PhoneCall size={13} />
+                            {item.whatsapp_destination || "Sem WhatsApp"}
+                          </span>
+                        </span>
+                        <span>
+                          <Badge className={statusClass(item.prospect.status)}>{humanize(item.prospect.status)}</Badge>
+                        </span>
+                        <span>
+                          <Badge className={temperatureClass(item.prospect.temperature)}>
+                            {humanize(item.prospect.temperature)}
+                          </Badge>
+                        </span>
+                        <span className="text-xs font-semibold text-stone-700">
+                          {item.demo_ready ? humanize(item.prospect.demo_status) : "Sem demo"}
+                        </span>
+                        <span className="min-w-0 text-xs text-stone-500">
+                          {item.last_event_at ? formatDateTimeBR(item.last_event_at) : "Ainda nao copiou"}
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="p-8 text-center text-sm text-stone-500">
+                    Nenhuma clinica encontrada com os filtros atuais.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <aside className="space-y-4">
+            <Card className="border-stone-200 bg-white">
+              <CardContent className="space-y-5 p-5">
+                {selectedItem ? (
+                  <>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">
+                          Mensagem selecionada
+                        </p>
+                        <h2 className="mt-1 text-2xl font-black">{selectedItem.prospect.clinic_name}</h2>
+                        <p className="mt-1 text-sm text-stone-600">
+                          {selectedItem.prospect.city || "Cidade nao informada"}
+                          {selectedItem.prospect.state ? ` - ${selectedItem.prospect.state}` : ""}
+                        </p>
+                      </div>
+                      <Badge className={temperatureClass(selectedItem.prospect.temperature)}>
+                        {humanize(selectedItem.prospect.temperature)}
+                      </Badge>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <InfoBlock label="Contato" value={selectedItem.contact_name} icon={<MessageSquareText size={16} />} />
+                      <InfoBlock
+                        label="WhatsApp"
+                        value={selectedItem.whatsapp_destination || "Nao cadastrado"}
+                        icon={<PhoneCall size={16} />}
+                      />
+                      <InfoBlock
+                        label="Dor percebida"
+                        value={selectedItem.prospect.main_pain || "Nao informada"}
+                        icon={<Sparkles size={16} />}
+                      />
+                      <InfoBlock
+                        label="Demo"
+                        value={selectedItem.demo_ready ? humanize(selectedItem.prospect.demo_status) : "Gere a demo antes"}
+                        icon={<ShieldCheck size={16} />}
+                      />
+                    </div>
+
+                    <label className="block space-y-2">
+                      <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Template</span>
+                      <select
+                        className="h-11 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-800"
+                        value={templateKey}
+                        onChange={(event) => {
+                          setTemplateKey(event.target.value);
+                          setPreview(null);
+                        }}
+                      >
+                        {templates.map((template) => (
+                          <option key={template.key} value={template.key}>
+                            {template.label}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="block text-xs leading-5 text-stone-500">
+                        Sugestao do sistema: {humanize(selectedItem.suggested_template_key)}.
+                      </span>
+                    </label>
+
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500"
+                        onClick={() => generatePreview(false)}
+                        disabled={previewMutation.isPending || !selectedItem.demo_ready}
+                      >
+                        <Send size={16} />
+                        {previewMutation.isPending ? "Gerando..." : "Gerar mensagem pronta"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => copyMessage()}
+                        disabled={previewMutation.isPending || eventMutation.isPending}
+                      >
+                        <Copy size={16} />
+                        Copiar mensagem
+                      </Button>
+                    </div>
+
+                    {!selectedItem.demo_ready ? (
+                      <WarningBox text="Esta clinica ainda nao tem demo criada. Volte ao CRM, clique em Gerar demo e depois retorne para copiar a mensagem com link." />
+                    ) : null}
+                    {selectedItem.copy_blocked_reason ? <WarningBox text={selectedItem.copy_blocked_reason} /> : null}
+                    {preview?.warnings.map((warning) => <WarningBox key={warning} text={warning} />)}
+
+                    <textarea
+                      className="min-h-[290px] w-full resize-none rounded-2xl border border-stone-200 bg-stone-50 p-4 font-mono text-sm leading-6 text-stone-800 outline-none transition focus:border-emerald-400 focus:bg-white"
+                      value={
+                        preview?.message_text ||
+                        "Clique em Gerar mensagem pronta para criar o texto com a demo no final."
+                      }
+                      readOnly
+                    />
+
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <Button variant="outline" onClick={copyDemoLink} disabled={!preview?.demo_login_url}>
+                        <ExternalLink size={16} />
+                        Copiar link
+                      </Button>
+                      <Button variant="outline" onClick={markContactDone} disabled={eventMutation.isPending}>
+                        <CheckCircle2 size={16} />
+                        Marcar contato
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => generatePreview(true)}
+                        disabled={previewMutation.isPending || !selectedItem.demo_ready}
+                      >
+                        <Clipboard size={16} />
+                        Gerar e copiar
+                      </Button>
+                    </div>
+
+                    {preview?.demo_login_url ? (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                        <p className="font-bold">Link emitido para esta mensagem</p>
+                        <p className="mt-1 break-all">{preview.demo_login_url}</p>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="py-16 text-center">
+                    <MessageSquareText className="mx-auto h-10 w-10 text-stone-400" />
+                    <h2 className="mt-3 text-xl font-black">Selecione uma clinica</h2>
+                    <p className="mt-2 text-sm text-stone-500">
+                      A mensagem pronta aparece aqui assim que voce escolher uma linha.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </aside>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function MiniMetric({ icon, label, value }: { icon: ReactNode; label: string; value: number }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/10 p-4">
+      <div className="flex items-center justify-between text-white/70">
+        <span className="text-xs font-bold uppercase tracking-wide">{label}</span>
+        {icon}
+      </div>
+      <p className="mt-2 text-2xl font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function InfoBlock({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+      <div className="flex items-center gap-2 text-stone-500">
+        {icon}
+        <span className="text-xs font-bold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="mt-2 line-clamp-2 text-sm font-bold text-stone-900">{value}</p>
+    </div>
+  );
+}
+
+function FilterSelect({
+  value,
+  onChange,
+  label,
+  children,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <select
+      className="h-10 rounded-lg border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{label}</option>
+      {children}
+    </select>
+  );
+}
+
+function WarningBox({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{text}</span>
+    </div>
+  );
+}

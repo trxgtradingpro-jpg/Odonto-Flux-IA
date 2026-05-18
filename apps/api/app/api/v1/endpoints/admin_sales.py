@@ -10,19 +10,30 @@ from app.core.config import settings
 from app.core.exceptions import ApiError
 from app.core.security import TokenError, decode_token
 from app.db.session import get_db
-from app.models import Conversation, DemoActivityEvent, Lead, Message, Patient, ProspectAccount, ProspectNote, ProspectService, ProspectTimelineEvent, ProspectUnit
+from app.models import (
+    Conversation,
+    DemoActivityEvent,
+    Lead,
+    Message,
+    Patient,
+    ProspectAccount,
+    ProspectNote,
+    ProspectService,
+    ProspectTimelineEvent,
+    ProspectUnit,
+)
 from app.schemas.admin_sales import (
     AdminChangeInitialPasswordInput,
     AdminLoginInput,
     AdminLoginOutput,
     DemoAccessOutput,
     DemoActivityOutput,
-    DemoGuideCompleteStepInput,
+    DemoEventInput,
     DemoGuideBackStepInput,
+    DemoGuideCompleteStepInput,
     DemoGuideDismissInput,
     DemoGuideResumeInput,
     DemoGuideStateOutput,
-    DemoEventInput,
     DemoProvisionOutput,
     DemoRedeemTokenInput,
     MagicLinkInput,
@@ -32,11 +43,11 @@ from app.schemas.admin_sales import (
     ProspectListOutput,
     ProspectNoteInput,
     ProspectNoteOutput,
+    ProspectOutput,
+    ProspectOutreachInput,
     ProspectOutreachLabInput,
     ProspectOutreachLabOutput,
-    ProspectOutreachInput,
     ProspectOutreachOutput,
-    ProspectOutput,
     ProspectOverviewOutput,
     ProspectServiceInput,
     ProspectServiceOutput,
@@ -45,8 +56,15 @@ from app.schemas.admin_sales import (
     ProspectUnitInput,
     ProspectUnitOutput,
     ProspectUpdate,
+    SalesClinicMessageEventInput,
+    SalesClinicMessageEventOutput,
+    SalesClinicMessageListOutput,
+    SalesClinicMessagePreviewInput,
+    SalesClinicMessagePreviewOutput,
+    SalesMessageTemplateOutput,
 )
 from app.services import sales_demo_service as sales
+from app.services import sales_message_service as sales_messages
 
 router = APIRouter(tags=["admin_sales"])
 
@@ -411,6 +429,131 @@ def list_prospects(
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.get("/admin/clinic-messages/templates", response_model=list[SalesMessageTemplateOutput])
+def list_clinic_message_templates(principal=Depends(get_current_principal)):
+    sales.require_sales_principal(principal)
+    return sales_messages.list_sales_message_templates()
+
+
+@router.get("/admin/clinic-messages", response_model=SalesClinicMessageListOutput)
+def list_clinic_messages(
+    status: str | None = None,
+    temperature: str | None = None,
+    demo_status: str | None = None,
+    has_demo: bool | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_principal(principal)
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    query = select(ProspectAccount)
+    count_query = select(func.count(ProspectAccount.id))
+    filters = []
+    if status:
+        filters.append(ProspectAccount.status == status)
+    if temperature:
+        filters.append(ProspectAccount.temperature == temperature)
+    if demo_status:
+        filters.append(ProspectAccount.demo_status == demo_status)
+    if has_demo is True:
+        filters.append(ProspectAccount.demo_tenant_id.is_not(None))
+    elif has_demo is False:
+        filters.append(ProspectAccount.demo_tenant_id.is_(None))
+    if q:
+        term = f"%{q.lower()}%"
+        filters.append(
+            func.lower(
+                func.concat(
+                    ProspectAccount.clinic_name,
+                    " ",
+                    func.coalesce(ProspectAccount.city, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.whatsapp_phone, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.phone, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.owner_name, ""),
+                    " ",
+                    func.coalesce(ProspectAccount.manager_name, ""),
+                )
+            ).like(term)
+        )
+    for item in filters:
+        query = query.where(item)
+        count_query = count_query.where(item)
+    rows = db.execute(
+        query.order_by(ProspectAccount.updated_at.desc()).limit(limit).offset(offset)
+    ).scalars().all()
+    total = db.scalar(count_query) or 0
+    return {
+        "data": [sales_messages.serialize_sales_message_item(db, row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "templates": sales_messages.list_sales_message_templates(),
+    }
+
+
+@router.post("/admin/clinic-messages/preview", response_model=SalesClinicMessagePreviewOutput)
+def preview_clinic_message(
+    payload: SalesClinicMessagePreviewInput,
+    request: Request,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, payload.prospect_id)
+    return sales_messages.build_sales_message_preview(
+        db,
+        prospect=prospect,
+        template_key=payload.template_key,
+        actor_id=principal.user.id,
+        base_url=_base_url(request),
+        issue_demo_access=payload.issue_demo_access,
+    )
+
+
+@router.post(
+    "/admin/clinic-messages/{prospect_id}/events",
+    response_model=SalesClinicMessageEventOutput,
+)
+def record_clinic_message_event(
+    prospect_id: UUID,
+    payload: SalesClinicMessageEventInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    prospect = _get_prospect(db, prospect_id)
+    event = sales_messages.record_sales_message_event(
+        db,
+        prospect=prospect,
+        event_name=payload.event_name,
+        actor_id=principal.user.id,
+        template_key=payload.template_key,
+        message_snapshot=payload.message_snapshot,
+        demo_login_url=payload.demo_login_url,
+        channel=payload.channel,
+        note=payload.note,
+    )
+    return {
+        "prospect": sales.serialize_prospect(db, prospect),
+        "event": {
+            "id": event.id,
+            "event_type": event.event_type,
+            "event_label": event.event_label,
+            "actor_type": event.actor_type,
+            "actor_id": event.actor_id,
+            "payload": event.payload_json or {},
+            "created_at": event.created_at,
+        },
     }
 
 

@@ -303,6 +303,67 @@ class ProspectOverviewOutput(BaseModel):
     recent_activity: list[ProspectTimelineEventOutput]
 
 
+class SalesMessageTemplateOutput(BaseModel):
+    key: str
+    label: str
+    description: str
+    recommended_for: list[str]
+    body: str
+
+
+class SalesClinicMessageItemOutput(BaseModel):
+    prospect: ProspectOutput
+    suggested_template_key: str
+    contact_name: str
+    whatsapp_destination: str | None
+    demo_ready: bool
+    copy_blocked_reason: str | None
+    last_event_name: str | None
+    last_event_at: datetime | None
+    last_template_key: str | None
+
+
+class SalesClinicMessageListOutput(BaseModel):
+    data: list[SalesClinicMessageItemOutput]
+    total: int
+    limit: int
+    offset: int
+    templates: list[SalesMessageTemplateOutput]
+
+
+class SalesClinicMessagePreviewInput(BaseModel):
+    prospect_id: UUID
+    template_key: str | None = None
+    issue_demo_access: bool = True
+
+
+class SalesClinicMessagePreviewOutput(BaseModel):
+    prospect: ProspectOutput
+    template_key: str
+    template_label: str
+    message_text: str
+    demo_login_url: str | None
+    can_copy: bool
+    warnings: list[str]
+    missing_variables: list[str]
+    resolved_variables: dict
+    suggested_template_key: str
+
+
+class SalesClinicMessageEventInput(BaseModel):
+    event_name: Literal["message_previewed", "message_copied", "demo_link_copied", "contact_registered"]
+    template_key: str | None = None
+    message_snapshot: str | None = Field(default=None, max_length=5000)
+    demo_login_url: str | None = Field(default=None, max_length=1200)
+    channel: str = Field(default="whatsapp_manual", max_length=80)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class SalesClinicMessageEventOutput(BaseModel):
+    prospect: ProspectOutput
+    event: ProspectTimelineEventOutput
+
+
 class DemoProvisionOutput(BaseModel):
     prospect: ProspectOutput
     access_token: str
