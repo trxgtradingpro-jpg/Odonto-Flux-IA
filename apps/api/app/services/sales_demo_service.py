@@ -398,6 +398,97 @@ def _revoke_user_refresh_tokens(db: Session, *, user_id: UUID) -> None:
     db.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
 
 
+def _demo_has_expired(prospect: ProspectAccount) -> bool:
+    return bool(prospect.demo_expires_at and prospect.demo_expires_at <= _now())
+
+
+def cleanup_demo_resources(
+    db: Session,
+    *,
+    prospect: ProspectAccount,
+    reason: str,
+    actor_id: UUID | None = None,
+    delete_prospect: bool = False,
+) -> dict[str, object]:
+    demo_tenant_id = prospect.demo_tenant_id
+    demo_user_id = prospect.demo_user_id
+    demo_tenant = db.get(Tenant, demo_tenant_id) if demo_tenant_id else None
+    demo_user = db.get(User, demo_user_id) if demo_user_id else None
+
+    if demo_user_id:
+        _revoke_user_refresh_tokens(db, user_id=demo_user_id)
+
+    if demo_tenant:
+        db.delete(demo_tenant)
+    elif demo_user and (not demo_tenant_id or demo_user.tenant_id == demo_tenant_id):
+        db.delete(demo_user)
+
+    normalized_reason = "expired" if str(reason or "").strip().lower() == "expired" else "deleted"
+    now = _now()
+    prospect.demo_tenant_id = None
+    prospect.demo_user_id = None
+    prospect.demo_login_email = None
+    prospect.demo_access_token_hash = None
+    prospect.demo_access_token_expires_at = None
+    prospect.demo_access_revoked_at = now
+    prospect.demo_status = "expirada" if normalized_reason == "expired" else "removida"
+    prospect.demo_checklist = {}
+    prospect.demo_expires_at = now if normalized_reason == "expired" else None
+    db.add(prospect)
+
+    if not delete_prospect:
+        add_timeline(
+            db,
+            prospect,
+            event_type=f"demo.{normalized_reason}_cleanup",
+            event_label="Demo expirada e limpa automaticamente"
+            if normalized_reason == "expired"
+            else "Demo e dados vinculados removidos",
+            actor_id=actor_id,
+            actor_type="system" if actor_id is None else "admin",
+            payload={
+                "reason": normalized_reason,
+                "demo_tenant_id": str(demo_tenant_id) if demo_tenant_id else None,
+                "demo_user_id": str(demo_user_id) if demo_user_id else None,
+            },
+        )
+
+    db.flush()
+    return {
+        "tenant_deleted": bool(demo_tenant_id),
+        "user_deleted": bool(demo_user_id),
+        "reason": normalized_reason,
+    }
+
+
+def cleanup_expired_demos(db: Session) -> dict[str, int]:
+    prospects = db.execute(
+        select(ProspectAccount).where(
+            ProspectAccount.demo_tenant_id.is_not(None),
+            ProspectAccount.demo_expires_at.is_not(None),
+            ProspectAccount.demo_expires_at <= _now(),
+        )
+    ).scalars().all()
+
+    cleaned = 0
+    for prospect in prospects:
+        cleanup_demo_resources(
+            db,
+            prospect=prospect,
+            reason="expired",
+            actor_id=None,
+        )
+        cleaned += 1
+
+    if cleaned:
+        db.commit()
+
+    return {
+        "processed": len(prospects),
+        "cleaned": cleaned,
+    }
+
+
 def _retire_bootstrap_access(
     db: Session,
     *,
@@ -2524,6 +2615,14 @@ def dismiss_demo_guide(
 
 
 def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | None, base_url: str) -> dict:
+    if prospect.demo_tenant_id and _demo_has_expired(prospect):
+        cleanup_demo_resources(
+            db,
+            prospect=prospect,
+            reason="expired",
+            actor_id=actor_id,
+        )
+
     if prospect.demo_tenant_id:
         services = _ensure_demo_services(db, prospect)
         demo_tenant = db.get(Tenant, prospect.demo_tenant_id)
@@ -2959,6 +3058,19 @@ def _latest_ai_output(db: Session, prospect_id: UUID) -> dict:
 
 
 def issue_demo_access(db: Session, prospect: ProspectAccount, *, actor_id: UUID | None) -> str:
+    if _demo_has_expired(prospect):
+        cleanup_demo_resources(
+            db,
+            prospect=prospect,
+            reason="expired",
+            actor_id=actor_id,
+        )
+        db.commit()
+        raise ApiError(
+            status_code=400,
+            code="DEMO_EXPIRED",
+            message="Esta demo expirou e foi removida. Gere uma nova demo para continuar.",
+        )
     if not prospect.demo_tenant_id or not prospect.demo_user_id:
         raise ApiError(status_code=400, code="DEMO_NOT_CREATED", message="Gere a demo antes de emitir acesso")
     raw_token = secrets.token_urlsafe(36)
@@ -3031,11 +3143,28 @@ def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None)
         raise ApiError(status_code=401, code="DEMO_TOKEN_INVALID", message="Acesso de demo invalido")
     if prospect.demo_access_revoked_at:
         raise ApiError(status_code=401, code="DEMO_TOKEN_REVOKED", message="Acesso de demo revogado")
+    if _demo_has_expired(prospect):
+        cleanup_demo_resources(
+            db,
+            prospect=prospect,
+            reason="expired",
+            actor_id=None,
+        )
+        db.commit()
+        raise ApiError(
+            status_code=401,
+            code="DEMO_EXPIRED",
+            message="Esta demo expirou e foi removida automaticamente.",
+        )
     if prospect.demo_access_token_expires_at and prospect.demo_access_token_expires_at < _now():
-        prospect.demo_status = "expirada"
+        prospect.demo_access_revoked_at = _now()
         db.add(prospect)
         db.commit()
-        raise ApiError(status_code=401, code="DEMO_TOKEN_EXPIRED", message="Acesso de demo expirado")
+        raise ApiError(
+            status_code=401,
+            code="DEMO_TOKEN_EXPIRED",
+            message="O link de acesso da demo expirou. Gere um novo link para continuar.",
+        )
 
     user = db.get(User, prospect.demo_user_id)
     if not user or not user.is_active:

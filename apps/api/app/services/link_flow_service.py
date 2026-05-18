@@ -41,6 +41,7 @@ LINK_FLOW_ALLOWED_EVENTS = {
     "webchat_message_sent",
     "webchat_first_ai_response",
     "webchat_session_resumed",
+    "webchat_summary_updated",
     "webchat_session_closed",
     "webchat_error",
 }
@@ -447,7 +448,8 @@ def record_link_flow_appointment_result(
         session.linked_appointment_id = appointment_id
     if not session.completed_at:
         session.completed_at = now
-    session.status = "completed"
+    if conversation.channel != "webchat":
+        session.status = "completed"
     db.add(session)
     event_payload = {
         "appointment_id": str(appointment_id),
@@ -460,6 +462,37 @@ def record_link_flow_appointment_result(
         payload=event_payload,
         unique_payload_key="appointment_id",
         unique_payload_value=str(appointment_id),
+    )
+
+
+def close_link_flow_session(
+    db: Session,
+    *,
+    conversation: Conversation,
+    reason: str,
+    payload: dict | None = None,
+) -> LinkFlowEvent | None:
+    session = link_flow_session_for_conversation(db, conversation=conversation)
+    if not session:
+        return None
+
+    now = _now()
+    if not session.completed_at:
+        session.completed_at = now
+    if not session.closed_at:
+        session.closed_at = now
+    session.status = "closed"
+    db.add(session)
+    return register_link_flow_event_once(
+        db,
+        session=session,
+        event_name="webchat_session_closed",
+        payload={
+            "reason": reason,
+            **(payload if isinstance(payload, dict) else {}),
+        },
+        unique_payload_key="reason",
+        unique_payload_value=reason,
     )
 
 

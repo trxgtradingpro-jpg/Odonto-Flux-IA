@@ -50,6 +50,7 @@ from app.services.demo_whatsapp_simulation_service import (
 )
 from app.services.llm_service import classify_intent, run_llm_task
 from app.services.link_flow_service import (
+    close_link_flow_session,
     record_link_flow_appointment_result,
     record_link_flow_booking_attempt_started,
 )
@@ -69,6 +70,7 @@ from app.services.whatsapp_service import (
     queue_outbound_message,
     resolve_whatsapp_reply_route,
 )
+from app.utils.phone import normalize_phone
 
 AI_AUTORESPONDER_PROMPT_VERSION = "v1.4"
 INACTIVE_CONVERSATION_RESTART_MINUTES = 20
@@ -133,6 +135,10 @@ BOOKING_RESTART_PATTERNS = (
 
 CPF_PATTERN = re.compile(r"\b(\d{3}\.?\d{3}\.?\d{3}-?\d{2})\b")
 BIRTH_DATE_PATTERN = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b")
+PHONE_PATTERN = re.compile(
+    r"(?:(?:telefone|celular|whatsapp|fone)\s*[:\-]?\s*)?(\+?\d[\d\s().-]{8,}\d)",
+    re.IGNORECASE,
+)
 
 REGISTRATION_SKIP_PATTERNS = (
     "depois",
@@ -1278,7 +1284,11 @@ def _is_placeholder_name(value: str | None) -> bool:
     text = str(value or "").strip().lower()
     if not text:
         return True
-    return text.startswith("contato whatsapp ")
+    return text.startswith("contato whatsapp ") or text.startswith("paciente webchat")
+
+
+def _is_webchat_placeholder_phone(value: str | None) -> bool:
+    return str(value or "").strip().lower().startswith("webchat")
 
 
 def _normalize_person_name(value: str) -> str:
@@ -1638,6 +1648,30 @@ def _extract_cpf_from_text(text: str) -> str | None:
     return None
 
 
+def _extract_phone_from_text(text: str) -> str | None:
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return None
+
+    cpf_digits = _extract_cpf_from_text(raw_text)
+    for match in PHONE_PATTERN.finditer(raw_text):
+        raw_phone = str(match.group(1) or "").strip()
+        if not raw_phone:
+            continue
+        normalized_phone = normalize_phone(raw_phone)
+        if len(normalized_phone) < 10 or len(normalized_phone) > 15:
+            continue
+        if cpf_digits and normalized_phone.endswith(cpf_digits):
+            continue
+        context = raw_text[max(0, match.start() - 18) : match.start()].lower()
+        if not any(marker in context for marker in ("telefone", "celular", "whatsapp", "fone")):
+            compact_digits = re.sub(r"\D", "", raw_phone)
+            if compact_digits != raw_text.strip():
+                continue
+        return normalized_phone
+    return None
+
+
 def _birth_date_label_present(text: str) -> bool:
     normalized = _normalize_for_match(text)
     return any(
@@ -1949,6 +1983,18 @@ def _upsert_patient_cpf(
     db.flush()
 
 
+def _has_patient_registration_phone(patient: Patient | None, *, conversation: Conversation) -> bool:
+    if not patient:
+        return False
+    phone = str(patient.phone or "").strip()
+    if not phone or _is_webchat_placeholder_phone(phone):
+        return False
+    normalized_phone = normalize_phone(phone)
+    if conversation.channel == "webchat":
+        return len(normalized_phone) >= 10
+    return bool(normalized_phone)
+
+
 def _patient_registration_snapshot(db: Session, *, conversation: Conversation) -> dict[str, Any]:
     patient = None
     if conversation.patient_id:
@@ -1964,6 +2010,7 @@ def _patient_registration_snapshot(db: Session, *, conversation: Conversation) -
         "full_name": str(patient.full_name or "").strip() if patient else "",
         "birth_date": patient.birth_date if patient else None,
         "cpf": cpf_digits,
+        "phone": str(patient.phone or "").strip() if patient else "",
     }
 
 
@@ -1977,6 +2024,8 @@ def _missing_patient_registration_fields(db: Session, *, conversation: Conversat
         missing.append("cpf")
     if not snapshot.get("birth_date"):
         missing.append("birth_date")
+    if conversation.channel == "webchat" and not _has_patient_registration_phone(patient, conversation=conversation):
+        missing.append("phone")
     return missing
 
 
@@ -1985,6 +2034,7 @@ def _registration_field_label(field: str) -> str:
         "full_name": "nome completo",
         "cpf": "CPF",
         "birth_date": "data de nascimento",
+        "phone": "celular/WhatsApp com DDD",
     }
     return labels.get(field, field)
 
@@ -2053,6 +2103,37 @@ def _capture_patient_registration_from_inbound(
             patient=patient,
         )
         changes["patient_cpf"] = cpf_digits
+
+    extracted_phone = _extract_phone_from_text(inbound_text)
+    if extracted_phone and not _has_patient_registration_phone(patient, conversation=conversation):
+        conflicting_patient = db.scalar(
+            select(Patient).where(
+                Patient.tenant_id == conversation.tenant_id,
+                Patient.normalized_phone == extracted_phone,
+                Patient.id != patient.id,
+            )
+        )
+        if conflicting_patient:
+            logger.info(
+                "ai_autoresponder.patient_phone_conflict",
+                tenant_id=str(conversation.tenant_id),
+                conversation_id=str(conversation.id),
+                patient_id=str(patient.id),
+                conflicting_patient_id=str(conflicting_patient.id),
+            )
+        else:
+            patient.phone = extracted_phone
+            patient.normalized_phone = extracted_phone
+            lead = db.scalar(
+                select(Lead).where(
+                    Lead.tenant_id == conversation.tenant_id,
+                    Lead.patient_id == patient.id,
+                )
+            )
+            if lead and not str(lead.phone or "").strip():
+                lead.phone = extracted_phone
+                db.add(lead)
+            changes["patient_phone"] = extracted_phone
 
     if changes:
         db.add(patient)
@@ -4554,7 +4635,7 @@ def _build_booking_cpf_request_response(
     missing_fields: list[str] | None = None,
     registration_retry_sent: bool = False,
 ) -> dict[str, Any]:
-    fields = [field for field in (missing_fields or ["cpf"]) if field in {"full_name", "cpf", "birth_date"}]
+    fields = [field for field in (missing_fields or ["cpf"]) if field in {"full_name", "cpf", "birth_date", "phone"}]
     if not fields:
         fields = ["cpf"]
     fields_text = _format_registration_missing_fields(fields)
@@ -9692,7 +9773,7 @@ def process_inbound_message(
                 db.add(conversation)
             followup_outbox = None
             followup_message = None
-            if scheduling_mode in {"appointment_created", "appointment_already_created"} and conversation.channel == "whatsapp":
+            if scheduling_mode in {"appointment_created", "appointment_already_created"}:
                 procedure_type = str(scheduling_metadata.get("procedure_type") or "").strip() or None
                 unit_name = str(scheduling_metadata.get("unit_name") or "").strip() or None
                 unit_address = str(scheduling_metadata.get("unit_address") or "").strip() or None
@@ -9770,15 +9851,17 @@ def process_inbound_message(
                 db.add(followup_message)
                 db.flush()
 
-                followup_outbox = queue_outbound_message(
+                followup_dispatch_result = dispatch_patient_message(
                     db,
                     tenant_id=tenant_id,
-                    conversation_id=conversation.id,
-                    to=destination,
+                    conversation=conversation,
+                    outbound_message=followup_message,
                     body=followup_dispatch_body,
                     message_type=followup_type,
                     interactive=followup_dispatch_interactive,
+                    inbound_message=inbound_message,
                     provider_context=provider_context,
+                    destination=destination,
                     metadata={
                         "source": "ai_autoresponder",
                         "mode": followup_response.get("mode"),
@@ -9786,14 +9869,21 @@ def process_inbound_message(
                         "outbound_message_id": str(followup_message.id),
                     },
                 )
-
                 followup_payload = followup_message.payload if isinstance(followup_message.payload, dict) else {}
-                followup_payload["queued_outbox_id"] = str(followup_outbox.id)
+                if followup_dispatch_result.outbox_id:
+                    followup_payload["queued_outbox_id"] = str(followup_dispatch_result.outbox_id)
                 followup_message.payload = followup_payload
                 db.add(followup_message)
 
             if close_conversation_requested:
                 conversation.status = "finalizada"
+                if conversation.channel == "webchat":
+                    close_link_flow_session(
+                        db,
+                        conversation=conversation,
+                        reason="conversation_closed_by_user",
+                        payload={"source": "ai_autoresponder"},
+                    )
 
             if handoff_required:
                 _notify_handoff(

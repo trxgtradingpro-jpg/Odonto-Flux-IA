@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -6,7 +7,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.exceptions import ApiError
-from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, WhatsAppAccount
+from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, User, WhatsAppAccount
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
 from app.schemas.admin_sales import ProspectUpdate
 from app.services import sales_demo_service
@@ -624,6 +625,131 @@ def test_generate_demo_populates_business_week_with_conversation_backed_appointm
 
     assert second_result["prospect"].demo_tenant_id == demo_tenant_id
     assert len(appointments_after) == len(appointments_before)
+
+
+def test_cleanup_demo_resources_removes_demo_tenant_data(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    demo_tenant_id = generated["prospect"].demo_tenant_id
+    demo_user_id = generated["prospect"].demo_user_id
+    assert demo_tenant_id is not None
+    assert demo_user_id is not None
+
+    appointments_before = db_session.scalar(
+        select(func.count()).select_from(Appointment).where(Appointment.tenant_id == demo_tenant_id)
+    )
+    conversations_before = db_session.scalar(
+        select(func.count()).select_from(Conversation).where(Conversation.tenant_id == demo_tenant_id)
+    )
+    assert appointments_before and appointments_before > 0
+    assert conversations_before and conversations_before > 0
+
+    sales_demo_service.cleanup_demo_resources(
+        db_session,
+        prospect=generated["prospect"],
+        reason="expired",
+        actor_id=None,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    appointments_after = db_session.scalar(
+        select(func.count()).select_from(Appointment).where(Appointment.tenant_id == demo_tenant_id)
+    )
+    conversations_after = db_session.scalar(
+        select(func.count()).select_from(Conversation).where(Conversation.tenant_id == demo_tenant_id)
+    )
+
+    assert prospect.demo_tenant_id is None
+    assert prospect.demo_user_id is None
+    assert prospect.demo_status == "expirada"
+    assert db_session.get(Tenant, demo_tenant_id) is None
+    assert db_session.get(User, demo_user_id) is None
+    assert appointments_after == 0
+    assert conversations_after == 0
+
+
+def test_cleanup_expired_demos_purges_due_demo_and_clears_links(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    demo_tenant_id = generated["prospect"].demo_tenant_id
+    assert demo_tenant_id is not None
+
+    generated["prospect"].demo_expires_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(generated["prospect"])
+    db_session.commit()
+
+    result = sales_demo_service.cleanup_expired_demos(db_session)
+    db_session.refresh(prospect)
+
+    assert result == {"processed": 1, "cleaned": 1}
+    assert prospect.demo_tenant_id is None
+    assert prospect.demo_user_id is None
+    assert prospect.demo_status == "expirada"
+    assert db_session.get(Tenant, demo_tenant_id) is None
+
+
+def test_redeem_demo_token_removes_expired_demo_data(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    demo_tenant_id = generated["prospect"].demo_tenant_id
+    generated["prospect"].demo_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.add(generated["prospect"])
+    db_session.commit()
+
+    with pytest.raises(ApiError) as exc:
+        sales_demo_service.redeem_demo_token(
+            db_session,
+            token=generated["access_token"],
+            session_id="expired-demo-session",
+        )
+
+    db_session.refresh(prospect)
+
+    assert exc.value.code == "DEMO_EXPIRED"
+    assert prospect.demo_tenant_id is None
+    assert prospect.demo_user_id is None
+    assert prospect.demo_status == "expirada"
+    assert db_session.get(Tenant, demo_tenant_id) is None
 
 
 def test_simulate_sales_outreach_lab_saves_last_run_and_marks_conversion(monkeypatch, seeded_db, db_session):

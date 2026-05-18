@@ -12,6 +12,7 @@ from app.services.backup_service import run_due_automatic_backups
 from app.services.billing_gateway_service import run_delinquency_check
 from app.services.demo_whatsapp_simulation_service import process_demo_whatsapp_reply_simulation
 from app.services.monitoring_service import monitoring_snapshot
+from app.services.sales_demo_service import cleanup_expired_demos
 from app.services.whatsapp_service import process_inbound_audio_message, process_outbox_batch
 
 
@@ -199,5 +200,14 @@ def run_automatic_backups_task():
     db = SessionLocal()
     try:
         return run_due_automatic_backups(db)
+    finally:
+        db.close()
+
+
+@shared_task(name='app.tasks.jobs.cleanup_expired_demos_task')
+def cleanup_expired_demos_task():
+    db = SessionLocal()
+    try:
+        return cleanup_expired_demos(db)
     finally:
         db.close()

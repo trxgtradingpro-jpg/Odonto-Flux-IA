@@ -372,6 +372,45 @@ def test_link_flow_appointment_created_event_for_legacy_flow(seeded_db, db_sessi
     assert session.completed_at is not None
 
 
+def test_webchat_appointment_creation_keeps_public_session_active(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    unit, _patient, professional, conversation, session = _booking_context(db_session, tenant)
+    session.cta_mode = "webchat"
+    session.channel = "webchat"
+    session.public_access_token_hash = "public-token-hash"
+    conversation.channel = "webchat"
+    db_session.add(session)
+    db_session.add(conversation)
+    db_session.flush()
+
+    starts_at = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    ends_at = datetime(2026, 6, 1, 11, 0, tzinfo=UTC)
+
+    result = _appointment_response_from_selected_slot(
+        db_session,
+        conversation=conversation,
+        unit=unit,
+        selected_slot={
+            "label": "01/06/2026 10:00",
+            "starts_at_utc": starts_at,
+            "ends_at_utc": ends_at,
+            "professional_id": str(professional.id),
+            "professional_name": professional.full_name,
+        },
+        procedure_type="avaliacao",
+        period="manha",
+        requested_date=starts_at.date(),
+    )
+
+    assert result["mode"] == "appointment_created"
+    assert session.completed_at is not None
+    assert session.status == "linked"
+    db_session.flush()
+    db_session.refresh(session)
+    assert session.closed_at is None
+    assert session.linked_appointment_id is not None
+
+
 def test_webchat_public_session_requires_valid_token(seeded_db, db_session):
     tenant = seeded_db["tenant_b"]
     config = _enable_webchat_intake(db_session, tenant)

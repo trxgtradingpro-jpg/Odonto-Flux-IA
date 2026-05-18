@@ -623,6 +623,14 @@ def update_prospect(
 def delete_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_sales_write(principal)
     prospect = _get_prospect(db, prospect_id)
+    if prospect.demo_tenant_id or prospect.demo_user_id:
+        sales.cleanup_demo_resources(
+            db,
+            prospect=prospect,
+            reason="deleted",
+            actor_id=principal.user.id,
+            delete_prospect=True,
+        )
     db.delete(prospect)
     db.commit()
     return {"message": "Prospect removido."}

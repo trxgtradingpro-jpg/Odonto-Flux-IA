@@ -41,6 +41,10 @@ celery_app.conf.update(
             'task': 'app.tasks.jobs.run_automatic_backups_task',
             'schedule': 900.0,
         },
+        'cleanup-expired-demos': {
+            'task': 'app.tasks.jobs.cleanup_expired_demos_task',
+            'schedule': 300.0,
+        },
     },
     imports=('app.tasks.jobs',),
 )

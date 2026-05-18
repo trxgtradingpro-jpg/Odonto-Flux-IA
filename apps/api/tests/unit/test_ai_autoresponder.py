@@ -6,6 +6,7 @@ from app.models import (
     AIAutoresponderDecision,
     Appointment,
     Conversation,
+    LinkFlowSession,
     Message,
     OutboxMessage,
     Patient,
@@ -86,14 +87,15 @@ def _ensure_valid_whatsapp_account(db_session, *, tenant_id):
 
 def _create_conversation_with_inbound(db_session, *, tenant_id, inbound_text: str, channel: str = "whatsapp"):
     suffix = uuid4().hex[:8]
-    phone = f"5511940{suffix}"
+    is_webchat = channel == "webchat"
+    phone = f"webchat{suffix}" if is_webchat else f"5511940{suffix}"
     patient = Patient(
         tenant_id=tenant_id,
-        full_name=f"Paciente Teste {suffix}",
+        full_name="Paciente Webchat" if is_webchat else f"Paciente Teste {suffix}",
         phone=phone,
         normalized_phone=phone,
         status="ativo",
-        origin="link_flow_webchat" if channel == "webchat" else "whatsapp",
+        origin="link_flow_webchat" if is_webchat else "whatsapp",
         lgpd_consent=True,
         marketing_opt_in=True,
         tags_cache=[],
@@ -135,12 +137,13 @@ def _append_inbound_message(
     inbound_text: str,
     message_type: str = "text",
     payload: dict | None = None,
+    channel: str = "whatsapp",
 ):
     inbound_message = Message(
         tenant_id=tenant_id,
         conversation_id=conversation_id,
         direction="inbound",
-        channel="whatsapp",
+        channel=channel,
         sender_type="patient",
         body=inbound_text,
         message_type=message_type,
@@ -2287,6 +2290,8 @@ def test_scheduling_days_request_returns_day_options_instead_of_time_slots(seede
 def test_webchat_day_request_falls_back_to_numbered_text_options(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    _ensure_professional(db_session, tenant_id=tenant_id, unit_id=unit.id)
 
     conversation, inbound = _create_conversation_with_inbound(
         db_session,
@@ -2318,6 +2323,131 @@ def test_webchat_day_request_falls_back_to_numbered_text_options(seeded_db, db_s
     assert outbound.message_type == "text"
     assert "Escolha o dia:" in (outbound.body or "")
     assert "1)" in (outbound.body or "")
+
+
+def test_webchat_confirmation_keeps_session_open_and_requests_registration_fields(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar uma avaliacao esta semana.",
+        channel="webchat",
+    )
+    patient = db_session.get(Patient, conversation.patient_id)
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    professional = _ensure_professional(db_session, tenant_id=tenant_id, unit_id=unit.id, full_name="Dra. Webchat")
+    assert patient is not None
+
+    patient.unit_id = unit.id
+    conversation.unit_id = unit.id
+    db_session.add(patient)
+    db_session.add(conversation)
+    db_session.flush()
+
+    selected_day = (datetime.now(UTC) + timedelta(days=2)).date()
+    starts_at_utc = datetime.now(UTC) + timedelta(days=2, hours=3)
+    ends_at_utc = starts_at_utc + timedelta(minutes=60)
+    session = LinkFlowSession(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        mode="link_flow",
+        cta_mode="webchat",
+        channel="webchat",
+        token_hash=f"token-{conversation.id}",
+        public_access_token_hash=f"public-{conversation.id}",
+        status="linked",
+        landing_path="/agendar/tenant-a",
+        utm_payload={},
+        linked_conversation_id=conversation.id,
+        linked_patient_id=patient.id,
+        linked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(session)
+    db_session.flush()
+
+    confirm_prompt = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="webchat",
+        sender_type="ai",
+        body=(
+            "Perfeito, esta quase pronto. Posso confirmar seu agendamento?\n"
+            "Confirmacao:\n1) Sim\n2) Nao\n3) Trocar horario"
+        ),
+        message_type="text",
+        payload={
+            "mode": "booking_wizard_confirm",
+            "scheduling": {
+                "procedure_type": "Clareamento dental",
+                "unit_id": str(unit.id),
+                "unit_name": unit.name,
+                "requested_date": selected_day.isoformat(),
+                "selected_slot": {
+                    "id": "time_1000",
+                    "label": "sexta-feira, 22/05 as 10:00",
+                    "starts_at_utc": starts_at_utc.isoformat(),
+                    "ends_at_utc": ends_at_utc.isoformat(),
+                    "starts_at_local": starts_at_utc.isoformat(),
+                    "professional_id": str(professional.id),
+                    "professional_name": professional.full_name,
+                    "time": "10:00",
+                },
+            },
+        },
+        status="sent",
+    )
+    db_session.add(confirm_prompt)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="sim",
+        channel="webchat",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    db_session.refresh(session)
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") in {"appointment_created", "appointment_already_created"}
+    assert appointment is not None
+    assert outbound is not None
+    assert outbound.channel == "webchat"
+    assert outbound.status == "sent"
+    assert (outbound.payload or {}).get("mode") == "booking_request_cpf_after_booking"
+    assert "cpf" in (outbound.body or "").lower()
+    assert "celular" in (outbound.body or "").lower()
+    assert session.status == "linked"
+    assert session.closed_at is None
+    assert session.linked_appointment_id == appointment.id
 
 
 def test_new_request_ignores_stale_wizard_confirmation_state(seeded_db, db_session):
