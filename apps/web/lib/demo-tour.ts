@@ -23,7 +23,6 @@ export type DemoTourStep =
   | "idle"
   | "breathing"
   | "spotlight_whatsapp"
-  | "waiting_external_message"
   | "spotlight_conversation"
   | "spotlight_ai_intent"
   | "spotlight_ai_response"

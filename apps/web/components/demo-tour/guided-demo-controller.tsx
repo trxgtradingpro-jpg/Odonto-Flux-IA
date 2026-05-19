@@ -71,7 +71,6 @@ const WHATSAPP_LAUNCH_EXIT_MS = 240;
 const STEP_ORDER: DemoTourStep[] = [
   "breathing",
   "spotlight_whatsapp",
-  "waiting_external_message",
   "spotlight_conversation",
   "spotlight_ai_intent",
   "spotlight_ai_response",
@@ -95,10 +94,6 @@ function isActiveStatus(progress: DemoTourProgress) {
   return progress.status === "active";
 }
 
-function formatWaitingLabel(elapsedSeconds: number) {
-  return `Aguardando mensagem... ${String(elapsedSeconds).padStart(2, "0")}s`;
-}
-
 export function GuidedDemoController({ pathname, session }: DemoGuidedControllerProps) {
   const router = useRouter();
   const isDemoUser = (session?.roles ?? []).includes("demo_client");
@@ -108,7 +103,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
   const [viewportTick, setViewportTick] = useState(0);
   const [whatsappLaunchState, setWhatsappLaunchState] = useState<"idle" | "loading" | "exiting">("idle");
   const [whatsappLaunchCountdown, setWhatsappLaunchCountdown] = useState<number | null>(null);
-  const [waitingElapsedSeconds, setWaitingElapsedSeconds] = useState(0);
   const progressRef = useRef(progress);
   const bootstrapKeyRef = useRef<string | null>(null);
   const launchTimerIdsRef = useRef<number[]>([]);
@@ -208,7 +202,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       entry.stage === "appointment_ready"
         ? "appointment_detected"
         : entry.stage === "awaiting_appointment"
-          ? "waiting_external_message"
+          ? "spotlight_whatsapp"
           : "breathing";
 
     setProgress({
@@ -219,8 +213,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         publicEntryPath: entry.publicEntryPath || null,
         conversationId: entry.trackedConversationId || null,
         patientId: entry.trackedPatientId || null,
-        waitingStartedAt:
-          initialStep === "waiting_external_message" ? entry.startedAt || new Date().toISOString() : null,
+        waitingStartedAt: null,
       }),
       step: initialStep,
       status: "active",
@@ -236,7 +229,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     const shouldStayInConversations =
       progressRef.current.step === "breathing" ||
       progressRef.current.step === "spotlight_whatsapp" ||
-      progressRef.current.step === "waiting_external_message" ||
       progressRef.current.step === "spotlight_conversation" ||
       progressRef.current.step === "spotlight_ai_intent" ||
       progressRef.current.step === "spotlight_ai_response" ||
@@ -301,10 +293,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
           return next;
         }
 
-        if (
-          detail.type === "conversation_detected" &&
-          ["waiting_external_message", "spotlight_whatsapp", "breathing"].includes(next.step)
-        ) {
+        if (detail.type === "conversation_detected" && ["spotlight_whatsapp", "breathing"].includes(next.step)) {
           next = {
             ...next,
             step: "spotlight_conversation",
@@ -350,25 +339,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       setWhatsappLaunchCountdown(null);
     }
   }, [progress.step]);
-
-  useEffect(() => {
-    if (progress.step !== "waiting_external_message" || progress.status !== "active") {
-      setWaitingElapsedSeconds(0);
-      return;
-    }
-
-    const startedAt = progress.context.waitingStartedAt
-      ? new Date(progress.context.waitingStartedAt).getTime()
-      : Date.now();
-    const syncElapsed = () => {
-      const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-      setWaitingElapsedSeconds(elapsed);
-    };
-
-    syncElapsed();
-    const intervalId = window.setInterval(syncElapsed, 1_000);
-    return () => window.clearInterval(intervalId);
-  }, [progress.context.waitingStartedAt, progress.status, progress.step]);
 
   const isWebchatEntry = progress.context.entryChannel === "webchat";
 
@@ -445,9 +415,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
         const publicEntryPath = progress.context.publicEntryPath;
         if (!publicEntryPath) return;
         dispatchDemoTourCommand({ type: "open_whatsapp", popup: null });
-        goToStep("waiting_external_message", "active", {
-          waitingStartedAt: new Date().toISOString(),
-        });
         return;
       }
 
@@ -482,9 +449,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
             setWhatsappLaunchState("exiting");
             const exitTimerId = window.setTimeout(() => {
               dispatchDemoTourCommand({ type: "open_whatsapp", popup: whatsappPopupRef.current });
-              goToStep("waiting_external_message", "active", {
-                waitingStartedAt: new Date().toISOString(),
-              });
               setWhatsappLaunchState("idle");
               setWhatsappLaunchCountdown(null);
               launchTimerIdsRef.current = launchTimerIdsRef.current.filter((timerId) => timerId !== exitTimerId);
@@ -531,12 +495,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     }
   };
 
-  const handleSecondaryAction = () => {
-    if (progress.step === "waiting_external_message") {
-      dispatchDemoTourCommand({ type: "check_message" });
-    }
-  };
-
   const currentOverlay = useMemo<DemoOverlayConfig | null>(() => {
     const initialTestActions: DemoOverlayAction[] = [
       { label: "Teste sem WhatsApp", onClick: handleSimulateMessage },
@@ -577,21 +535,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
           compact: false,
           primaryLoading: whatsappLaunchState === "loading",
           visualState: whatsappLaunchState === "exiting" ? "exiting" : "idle",
-          showTargetFrame: false,
-          testActions: initialTestActions,
-        };
-      case "waiting_external_message":
-        return {
-          align: "center",
-          badge: "Aguardando teste",
-          title: isWebchatEntry ? "Envie uma mensagem no webchat" : "Envie uma mensagem no WhatsApp",
-          description:
-            isWebchatEntry
-              ? "Converse no webchat embutido e arraste de volta para o WhatsApp da clinica. Quando a mensagem chegar, vamos destacar a conversa em tempo real."
-              : "Converse como paciente e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real.",
-          secondaryLabel: "J\u00e1 enviei a mensagem",
-          statusLabel: formatWaitingLabel(waitingElapsedSeconds),
-          compact: false,
           showTargetFrame: false,
           testActions: initialTestActions,
         };
@@ -668,7 +611,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     progress.context.publicEntryPath,
     progress.seenEvents.appointment_detected,
     progress.step,
-    waitingElapsedSeconds,
     whatsappLaunchCountdown,
     whatsappLaunchState,
   ]);
@@ -696,7 +638,6 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
           primaryLoading={currentOverlay.primaryLoading}
           visualState={currentOverlay.visualState}
           onPrimaryAction={currentOverlay.primaryLabel ? handlePrimaryAction : undefined}
-          onSecondaryAction={currentOverlay.secondaryLabel ? handleSecondaryAction : undefined}
         />
       ) : null}
 
