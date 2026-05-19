@@ -4011,56 +4011,42 @@ export default function ConversasPage() {
         </div>
 
         <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
-          <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between gap-3 border-b border-white/70 bg-white/90 px-4 py-4 shadow-sm backdrop-blur">
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Webchat público</p>
-                <h2 className="truncate text-xl font-semibold text-stone-900">Teste do paciente na mesma aba</h2>
-                <p className="mt-1 text-xs text-stone-500">Arraste para a direita para voltar ao WhatsApp da clínica.</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
-                  onClick={closeDemoWebchatWorkspace}
-                >
-                  <ArrowLeft size={15} />
-                  Voltar para WhatsApp
-                </button>
-              </div>
-            </div>
-
-            <div className="relative min-h-0 flex-1 bg-white">
-              {demoPublicEntryPath ? (
-                <iframe
-                  title="Webchat público da demo"
-                  src={demoPublicEntryPath}
-                  className="h-full w-full border-0 bg-white"
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center px-6 text-center">
-                  <div className="max-w-md">
-                    <p className="text-lg font-semibold text-stone-900">Webchat público indisponível</p>
-                    <p className="mt-2 text-sm leading-6 text-stone-600">
-                      A demo ainda não tem uma landing pública de webchat configurada para este teste.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <div
-                className="absolute inset-y-0 left-0 z-10 w-7 touch-pan-y"
-                onPointerDown={handleDemoWorkspacePointerDown}
-                onPointerMove={handleDemoWorkspacePointerMove}
-                onPointerUp={finishDemoWorkspaceGesture}
-                onPointerCancel={cancelDemoWorkspaceGesture}
+          <div className="relative h-full min-h-0 bg-white">
+            {demoPublicEntryPath ? (
+              <iframe
+                title="Webchat público da demo"
+                src={demoPublicEntryPath}
+                className="h-full w-full border-0 bg-white"
               />
-              <div className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center">
-                <div className="ml-2 rounded-full border border-white/80 bg-white/92 px-2 py-4 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-500 shadow-[0_18px_40px_rgba(15,23,42,0.14)]">
-                  Arraste
+            ) : (
+              <div className="flex h-full items-center justify-center px-6 text-center">
+                <div className="max-w-md">
+                  <p className="text-lg font-semibold text-stone-900">Webchat público indisponível</p>
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
+                    A demo ainda não tem uma landing pública de webchat configurada para este teste.
+                  </p>
                 </div>
               </div>
+            )}
+
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-end p-3 sm:p-4">
+              <button
+                type="button"
+                className="pointer-events-auto inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/80 bg-white/94 px-4 text-sm font-medium text-stone-700 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur transition hover:border-stone-300 hover:bg-white"
+                onClick={closeDemoWebchatWorkspace}
+              >
+                <ArrowLeft size={15} />
+                Voltar para WhatsApp
+              </button>
             </div>
+
+            <div
+              className="absolute inset-y-0 left-0 z-10 w-7 touch-pan-y"
+              onPointerDown={handleDemoWorkspacePointerDown}
+              onPointerMove={handleDemoWorkspacePointerMove}
+              onPointerUp={finishDemoWorkspaceGesture}
+              onPointerCancel={cancelDemoWorkspaceGesture}
+            />
           </div>
         </div>
       </div>
