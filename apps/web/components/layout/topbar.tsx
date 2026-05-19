@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { Bell, CalendarDays, LogOut, Menu } from "lucide-react";
+import { Bell, LogOut, Menu } from "lucide-react";
 
 import { Badge, Button } from "@odontoflux/ui";
 
@@ -11,8 +11,7 @@ import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
-import { clinicInitials, formatDateBR, initials, ROLE_LABELS } from "@/lib/formatters";
-import { BRAND_MONOGRAM, BRAND_NAME } from "@/lib/brand";
+import { clinicInitials } from "@/lib/formatters";
 import { QuickFocusPageKey } from "./quick-focus-pages";
 import { QuickAccessPill } from "./quick-access-pill";
 
@@ -39,7 +38,6 @@ export function Topbar({
   const notifications = notificationsQuery.data?.notifications ?? [];
   const badges = notificationsQuery.data?.badges;
   const totalAlerts = (badges?.pendingConfirmations ?? 0) + (badges?.conversations ?? 0);
-  const today = formatDateBR(new Date());
   const clinicDisplayName = session?.tenant_name ?? branding?.clinicName ?? "Clinica atual";
   const activeWorkspaceLabel = ownerUnitScope.canSwitchUnits
     ? ownerUnitScope.selectedUnitName || "Todas as unidades"
@@ -85,23 +83,9 @@ export function Topbar({
             <p className="text-[11px] text-muted-foreground">{activeWorkspaceLabel}</p>
           </div>
         </div>
-        <div className="hidden items-center gap-2 rounded-xl border border-primary/15 bg-primary/5 px-2.5 py-1.5 lg:flex">
-          <div className="grid h-8 w-8 place-items-center rounded-md bg-primary text-xs font-black text-primary-foreground">
-            {BRAND_MONOGRAM}
-          </div>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/80">SaaS ativo</p>
-            <p className="text-sm font-bold text-foreground">{BRAND_NAME}</p>
-          </div>
-        </div>
       </div>
 
       <div className="flex min-w-0 items-center gap-1 sm:gap-2">
-        <div className="hidden items-center gap-2 rounded-xl border border-border bg-muted/70 px-3 py-1.5 lg:flex">
-          <CalendarDays size={14} className="text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">{today}</span>
-        </div>
-
         {quickAccessPages.length && onOpenQuickAccess ? (
           <QuickAccessPill pages={quickAccessPages} onOpen={onOpenQuickAccess} className="hidden md:flex" />
         ) : null}
@@ -171,16 +155,6 @@ export function Topbar({
               </div>
             </div>
           ) : null}
-        </div>
-
-        <div className="hidden items-center gap-2 rounded-xl border border-border bg-card px-2 py-1 md:flex">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground">
-            {initials(session?.full_name)}
-          </div>
-          <div className="pr-1">
-            <p className="text-xs font-semibold text-foreground">{session?.full_name ?? "Usuario"}</p>
-            <p className="text-[11px] text-muted-foreground">{ROLE_LABELS[session?.roles?.[0] ?? ""] ?? "Perfil"}</p>
-          </div>
         </div>
 
         <Button variant="outline" onClick={onLogout} className="shrink-0 gap-1.5 px-2 sm:px-3">
