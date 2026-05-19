@@ -103,6 +103,7 @@ def me(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
         'email': principal.user.email,
         'full_name': principal.user.full_name,
         'tenant_id': principal.user.tenant_id,
+        'tenant_slug': tenant.slug if tenant else None,
         'unit_id': principal.user.unit_id,
         'unit_name': unit.name if unit else None,
         'tenant_trade_name': tenant.trade_name if tenant else None,

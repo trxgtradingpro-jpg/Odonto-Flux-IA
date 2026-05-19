@@ -137,9 +137,17 @@ test.describe("demo guide regression", () => {
 
     await page.getByText("Abrir webchat", { exact: true }).click();
 
-    await expect(page.getByTitle("Webchat público da demo")).toBeVisible({ timeout: 30000 });
+    const embeddedFrame = page.locator("iframe").first();
+    await expect(embeddedFrame).toBeVisible({ timeout: 30000 });
+    await expect(embeddedFrame).toHaveAttribute("src", /embed=demo-webchat/);
+    await expect(embeddedFrame).not.toHaveAttribute("src", /demo-webchat-clinica/);
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
     await expect(page.getByText("Voltar para WhatsApp", { exact: true })).toBeVisible();
+
+    const webchatFrame = page.frameLocator("iframe").first();
+    await expect(webchatFrame.getByText("Oi, eu sou a assistente de agendamento.")).toBeVisible();
+    await expect(webchatFrame.getByText("Antes de continuar, me passe seu celular")).toBeVisible();
+    await expect(webchatFrame.getByText("Agendamento publico nao encontrado.")).toHaveCount(0);
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
       .toBeTruthy();

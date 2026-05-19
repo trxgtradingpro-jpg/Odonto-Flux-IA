@@ -199,6 +199,30 @@ function readStoredWebchatSessionIdFromPublicEntryPath(publicEntryPath?: string 
   }
 }
 
+function resolveDemoPublicEntryPath(publicEntryPath?: string | null, tenantSlug?: string | null) {
+  const rawPath = String(publicEntryPath || "").trim();
+  const normalizedTenantSlug = String(tenantSlug || "").trim();
+  const tenantFallback = normalizedTenantSlug ? `/agendar/${encodeURIComponent(normalizedTenantSlug)}` : null;
+
+  if (!rawPath) return tenantFallback;
+
+  let pathname = rawPath;
+  try {
+    pathname = rawPath.startsWith("http") ? new URL(rawPath).pathname : rawPath;
+  } catch {
+    pathname = rawPath;
+  }
+
+  const match = pathname.match(/\/agendar\/([^/?#]+)/i);
+  const pathSlug = match?.[1] ? decodeURIComponent(match[1]) : null;
+  if (tenantFallback && pathSlug && pathSlug !== normalizedTenantSlug) {
+    return tenantFallback;
+  }
+
+  if (tenantFallback && !pathSlug) return tenantFallback;
+  return rawPath;
+}
+
 function webchatSyntheticContact(sessionId?: string | null) {
   const normalized = String(sessionId || "").replace(/-/g, "").trim().toLowerCase();
   if (!normalized) return null;
@@ -1759,11 +1783,15 @@ export default function ConversasPage() {
     () => normalizePhoneForComparison(demoWhatsAppEntryPhone),
     [demoWhatsAppEntryPhone],
   );
+  const demoResolvedPublicEntryPath = useMemo(
+    () => resolveDemoPublicEntryPath(demoPublicEntryPath, sessionQuery.data?.tenant_slug),
+    [demoPublicEntryPath, sessionQuery.data?.tenant_slug],
+  );
   const demoWorkspaceWebchatSrc = useMemo(() => {
-    const rawPath = String(demoPublicEntryPath || "").trim();
+    const rawPath = String(demoResolvedPublicEntryPath || "").trim();
     if (!rawPath) return null;
     return `${rawPath}${rawPath.includes("?") ? "&" : "?"}embed=demo-webchat`;
-  }, [demoPublicEntryPath]);
+  }, [demoResolvedPublicEntryPath]);
   const canResolveDemoConversationFromPhone =
     demoWhatsAppExperienceStage === "awaiting_appointment" || demoWhatsAppExperienceStage === "appointment_ready";
 
@@ -1778,7 +1806,7 @@ export default function ConversasPage() {
     if (!canResolveDemoConversationFromPhone) return null;
 
     if (demoEntryChannel === "webchat") {
-      const webchatSessionId = readStoredWebchatSessionIdFromPublicEntryPath(demoPublicEntryPath);
+      const webchatSessionId = readStoredWebchatSessionIdFromPublicEntryPath(demoResolvedPublicEntryPath);
       const linkedThreadId = webchatSessionId ? `link_flow:${webchatSessionId}` : null;
       if (linkedThreadId) {
         const directMatch = conversations.find((item) => item.external_thread_id === linkedThreadId) ?? null;
@@ -1832,7 +1860,7 @@ export default function ConversasPage() {
     })[0];
   }, [
     demoEntryChannel,
-    demoPublicEntryPath,
+    demoResolvedPublicEntryPath,
     canResolveDemoConversationFromPhone,
     dataset?.conversations,
     demoTrackedPhoneDigits,
@@ -1870,7 +1898,7 @@ export default function ConversasPage() {
   }, [messagesQuery.data?.data]);
   const demoWhatsAppEntryPhoneLabel = demoWhatsAppEntryPhone ? formatPhoneBR(demoWhatsAppEntryPhone) : null;
   const demoUsesWebchatEntry = demoEntryChannel === "webchat";
-  const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoPublicEntryPath);
+  const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoResolvedPublicEntryPath);
   const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
   const demoTourConversationId =
     demoTrackedConversation?.id ??
@@ -1896,7 +1924,7 @@ export default function ConversasPage() {
 
   useEffect(() => {
     if (!isDemoUser) return;
-    if (!demoWhatsAppEntryLink && !(demoUsesWebchatEntry && demoPublicEntryPath)) return;
+    if (!demoWhatsAppEntryLink && !(demoUsesWebchatEntry && demoResolvedPublicEntryPath)) return;
     if (!["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage)) return;
 
     dispatchDemoTourEvent({
@@ -1904,11 +1932,11 @@ export default function ConversasPage() {
       whatsappLink: demoWhatsAppEntryLink,
       phoneLabel: demoWhatsAppEntryPhoneLabel,
       entryChannel: demoEntryChannel,
-      publicEntryPath: demoPublicEntryPath,
+      publicEntryPath: demoResolvedPublicEntryPath,
     });
   }, [
     demoEntryChannel,
-    demoPublicEntryPath,
+    demoResolvedPublicEntryPath,
     demoUsesWebchatEntry,
     demoWhatsAppEntryLink,
     demoWhatsAppEntryPhoneLabel,
@@ -2087,7 +2115,7 @@ export default function ConversasPage() {
 
   const launchDemoWhatsAppRedirect = useCallback((options?: { popup?: Window | null; openInWorkspace?: boolean }) => {
     if (demoUsesWebchatEntry) {
-      if (!demoPublicEntryPath) {
+      if (!demoResolvedPublicEntryPath) {
         if (options?.popup && !options.popup.closed) {
           options.popup.close();
         }
@@ -2118,7 +2146,7 @@ export default function ConversasPage() {
         whatsappLink: null,
         phoneLabel: demoWhatsAppEntryPhoneLabel,
         entryChannel: demoEntryChannel,
-        publicEntryPath: demoPublicEntryPath,
+        publicEntryPath: demoResolvedPublicEntryPath,
       });
 
       if (options?.popup && !options.popup.closed) {
@@ -2130,11 +2158,11 @@ export default function ConversasPage() {
       }
 
       if (options?.popup && !options.popup.closed) {
-        options.popup.location.href = demoPublicEntryPath;
+        options.popup.location.href = demoResolvedPublicEntryPath;
         return;
       }
 
-      const popup = window.open(demoPublicEntryPath, "_blank", "noopener,noreferrer");
+      const popup = window.open(demoResolvedPublicEntryPath, "_blank", "noopener,noreferrer");
       if (!popup) {
         toast.error("Nao foi possivel abrir a landing publica da demo. Libere pop-ups para esta demo.");
       }
@@ -2172,7 +2200,7 @@ export default function ConversasPage() {
       whatsappLink: demoWhatsAppEntryLink,
       phoneLabel: demoWhatsAppEntryPhoneLabel,
       entryChannel: demoEntryChannel,
-      publicEntryPath: demoPublicEntryPath,
+      publicEntryPath: demoResolvedPublicEntryPath,
     });
 
     if (options?.popup && !options.popup.closed) {
@@ -2186,7 +2214,7 @@ export default function ConversasPage() {
     }
   }, [
     demoEntryChannel,
-    demoPublicEntryPath,
+    demoResolvedPublicEntryPath,
     demoUsesWebchatEntry,
     demoTrackedConversation?.id,
     demoTrackedPatient?.id,
@@ -3571,7 +3599,7 @@ export default function ConversasPage() {
       {isDemoUser &&
       ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
       !demoWorkspaceOpen &&
-      (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoPublicEntryPath)) ? (
+      (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath)) ? (
         <div className="pointer-events-none fixed bottom-6 right-6 z-[70]">
           <Button
             type="button"
@@ -4017,10 +4045,10 @@ export default function ConversasPage() {
 
         <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
           <div className="relative h-full min-h-0 bg-white">
-              {demoPublicEntryPath ? (
+              {demoResolvedPublicEntryPath ? (
                 <iframe
                   title="Webchat público da demo"
-                  src={demoWorkspaceWebchatSrc || demoPublicEntryPath}
+                  src={demoWorkspaceWebchatSrc || demoResolvedPublicEntryPath}
                   className="h-full w-full border-0 bg-white"
                 />
             ) : (

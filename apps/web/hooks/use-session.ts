@@ -11,6 +11,7 @@ type SessionResponse = {
   email: string;
   full_name: string;
   tenant_id: string | null;
+  tenant_slug?: string | null;
   unit_id?: string | null;
   unit_name?: string | null;
   tenant_trade_name?: string | null;
