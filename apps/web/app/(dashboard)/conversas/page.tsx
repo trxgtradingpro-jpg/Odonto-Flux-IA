@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -122,6 +122,8 @@ const QUICK_FILTERS = [
   { id: "aguardando", label: "Aguardando" },
   { id: "nao_respondida", label: "Não respondidas" },
 ] as const;
+
+const DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX = 84;
 
 type StatusFilterId = (typeof STATUS_FILTERS)[number]["id"];
 type PriorityFilter = "all" | "alta" | "media" | "baixa";
@@ -1059,6 +1061,8 @@ export default function ConversasPage() {
   const [demoWhatsAppEntryLink, setDemoWhatsAppEntryLink] = useState<string | null>(null);
   const [demoEntryChannel, setDemoEntryChannel] = useState<"whatsapp" | "webchat" | null>(null);
   const [demoPublicEntryPath, setDemoPublicEntryPath] = useState<string | null>(null);
+  const [demoWorkspacePanel, setDemoWorkspacePanel] = useState<"whatsapp" | "webchat">("whatsapp");
+  const [demoWorkspaceDragOffset, setDemoWorkspaceDragOffset] = useState(0);
   const [demoWhatsAppStartedAt, setDemoWhatsAppStartedAt] = useState<string | null>(null);
   const [demoWhatsAppTrackedConversationId, setDemoWhatsAppTrackedConversationId] = useState<string | null>(null);
   const [demoWhatsAppTrackedPatientId, setDemoWhatsAppTrackedPatientId] = useState<string | null>(null);
@@ -1070,6 +1074,7 @@ export default function ConversasPage() {
   const [demoSimulationMessages, setDemoSimulationMessages] = useState<DemoSimulationMessage[]>([]);
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const demoWorkspaceViewportRef = useRef<HTMLDivElement | null>(null);
   const draftMessageRef = useRef<HTMLTextAreaElement | null>(null);
   const actionsMenuRef = useRef<HTMLDivElement | null>(null);
   const aiAssistPanelRef = useRef<HTMLDivElement | null>(null);
@@ -1089,6 +1094,7 @@ export default function ConversasPage() {
   const demoSimulationRunningRef = useRef(false);
   const startDemoConversationSequenceRef = useRef<() => void>(() => undefined);
   const stopDemoConversationSequenceRef = useRef<(nextStage: DemoConversationTourStage) => void>(() => undefined);
+  const demoWorkspaceSwipeRef = useRef<{ startX: number; panel: "whatsapp" | "webchat" } | null>(null);
 
   const aiSettingsQuery = useQuery<{ global?: { enabled?: boolean } }>({
     queryKey: ["ai-autoresponder-settings"],
@@ -1857,6 +1863,8 @@ export default function ConversasPage() {
   }, [messagesQuery.data?.data]);
   const demoWhatsAppEntryPhoneLabel = demoWhatsAppEntryPhone ? formatPhoneBR(demoWhatsAppEntryPhone) : null;
   const demoUsesWebchatEntry = demoEntryChannel === "webchat";
+  const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoPublicEntryPath);
+  const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
   const demoTourConversationId =
     demoTrackedConversation?.id ??
     demoWhatsAppTrackedConversationId ??
@@ -1900,6 +1908,13 @@ export default function ConversasPage() {
     demoWhatsAppExperienceStage,
     isDemoUser,
   ]);
+
+  useEffect(() => {
+    if (demoWorkspaceEnabled) return;
+    setDemoWorkspacePanel("whatsapp");
+    setDemoWorkspaceDragOffset(0);
+    demoWorkspaceSwipeRef.current = null;
+  }, [demoWorkspaceEnabled]);
 
   useEffect(() => {
     if (!isDemoUser) return;
@@ -2040,7 +2055,17 @@ export default function ConversasPage() {
     selectedPatient?.id,
   ]);
 
-  const launchDemoWhatsAppRedirect = useCallback((options?: { popup?: Window | null }) => {
+  const openDemoWebchatWorkspace = useCallback(() => {
+    setDemoWorkspacePanel("webchat");
+    setDemoWorkspaceDragOffset(0);
+  }, []);
+
+  const closeDemoWebchatWorkspace = useCallback(() => {
+    setDemoWorkspacePanel("whatsapp");
+    setDemoWorkspaceDragOffset(0);
+  }, []);
+
+  const launchDemoWhatsAppRedirect = useCallback((options?: { popup?: Window | null; openInWorkspace?: boolean }) => {
     if (demoUsesWebchatEntry) {
       if (!demoPublicEntryPath) {
         if (options?.popup && !options.popup.closed) {
@@ -2075,6 +2100,14 @@ export default function ConversasPage() {
         entryChannel: demoEntryChannel,
         publicEntryPath: demoPublicEntryPath,
       });
+
+      if (options?.popup && !options.popup.closed) {
+        options.popup.close();
+      }
+      if (options?.openInWorkspace) {
+        openDemoWebchatWorkspace();
+        return;
+      }
 
       if (options?.popup && !options.popup.closed) {
         options.popup.location.href = demoPublicEntryPath;
@@ -2140,6 +2173,7 @@ export default function ConversasPage() {
     demoTrackedPatientAppointments,
     demoWhatsAppEntryLink,
     demoWhatsAppEntryPhoneLabel,
+    openDemoWebchatWorkspace,
   ]);
 
   useEffect(() => {
@@ -2516,16 +2550,85 @@ export default function ConversasPage() {
     handleSendMessage();
   };
 
+  const handleDemoWorkspacePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!demoWorkspaceEnabled) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    demoWorkspaceSwipeRef.current = {
+      startX: event.clientX,
+      panel: demoWorkspacePanel,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [demoWorkspaceEnabled, demoWorkspacePanel]);
+
+  const handleDemoWorkspacePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = demoWorkspaceSwipeRef.current;
+    const viewport = demoWorkspaceViewportRef.current;
+    if (!gesture || !viewport || viewport.clientWidth <= 0) return;
+
+    const rawDelta = event.clientX - gesture.startX;
+    const clampedDelta = Math.max(Math.min(rawDelta, viewport.clientWidth * 0.35), -viewport.clientWidth * 0.35);
+    if (gesture.panel === "whatsapp" && clampedDelta > 0) {
+      setDemoWorkspaceDragOffset(clampedDelta * 0.16);
+      return;
+    }
+    if (gesture.panel === "webchat" && clampedDelta < 0) {
+      setDemoWorkspaceDragOffset(clampedDelta * 0.16);
+      return;
+    }
+    setDemoWorkspaceDragOffset(clampedDelta);
+  }, []);
+
+  const finishDemoWorkspaceGesture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = demoWorkspaceSwipeRef.current;
+    if (!gesture) return;
+
+    const deltaX = event.clientX - gesture.startX;
+    if (gesture.panel === "whatsapp" && deltaX <= -DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX) {
+      setDemoWorkspacePanel("webchat");
+    } else if (gesture.panel === "webchat" && deltaX >= DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX) {
+      setDemoWorkspacePanel("whatsapp");
+    }
+
+    setDemoWorkspaceDragOffset(0);
+    demoWorkspaceSwipeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
+  const cancelDemoWorkspaceGesture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    demoWorkspaceSwipeRef.current = null;
+    setDemoWorkspaceDragOffset(0);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
+
   const handleOpenDemoWhatsApp = () => {
-    launchDemoWhatsAppRedirect();
+    launchDemoWhatsAppRedirect({ openInWorkspace: demoUsesWebchatEntry });
   };
+
+  const demoWorkspaceTransform = `translate3d(calc(${demoWorkspaceOpen ? "-50%" : "0%"} + ${demoWorkspaceDragOffset}px), 0, 0)`;
 
   if (inboxQuery.isLoading) return <LoadingState message="Carregando inbox operacional..." />;
   if (inboxQuery.isError || !dataset) return <ErrorState message="Não foi possível carregar o inbox." />;
 
   return (
-    <>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
+    <div
+      ref={demoWorkspaceViewportRef}
+      className="relative min-h-0 flex-1 overflow-hidden"
+      onPointerDown={handleDemoWorkspacePointerDown}
+      onPointerMove={handleDemoWorkspacePointerMove}
+      onPointerUp={finishDemoWorkspaceGesture}
+      onPointerCancel={cancelDemoWorkspaceGesture}
+      style={{ touchAction: demoWorkspaceEnabled ? "pan-y" : "auto" }}
+    >
+      <div
+        className="flex h-full w-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+        style={{ transform: demoWorkspaceTransform }}
+      >
+        <div className="relative h-full min-w-full shrink-0 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
         <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 lg:p-4">
           <div className="flex min-h-0 flex-1 overflow-hidden border border-white/60 bg-white/88 shadow-[0_22px_70px_rgba(15,23,42,0.10)] backdrop-blur md:rounded-[32px]">
             <aside
@@ -3879,7 +3982,56 @@ export default function ConversasPage() {
         loading={closeConversationMutation.isPending}
         onConfirm={() => closeConversationMutation.mutate()}
       />
-    </>
+        </div>
+
+        <div className="relative h-full min-w-full shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between gap-3 border-b border-white/70 bg-white/90 px-4 py-4 shadow-sm backdrop-blur">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Webchat público</p>
+                <h2 className="truncate text-xl font-semibold text-stone-900">Teste do paciente na mesma aba</h2>
+                <p className="mt-1 text-xs text-stone-500">Arraste para a direita para voltar ao WhatsApp da clínica.</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition hover:border-stone-300"
+                  onClick={closeDemoWebchatWorkspace}
+                >
+                  <ArrowLeft size={15} />
+                  Voltar para WhatsApp
+                </button>
+              </div>
+            </div>
+
+            <div className="relative min-h-0 flex-1 bg-white">
+              {demoPublicEntryPath ? (
+                <iframe
+                  title="Webchat público da demo"
+                  src={demoPublicEntryPath}
+                  className="h-full w-full border-0 bg-white"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center">
+                  <div className="max-w-md">
+                    <p className="text-lg font-semibold text-stone-900">Webchat público indisponível</p>
+                    <p className="mt-2 text-sm leading-6 text-stone-600">
+                      A demo ainda não tem uma landing pública de webchat configurada para este teste.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center">
+                <div className="ml-2 rounded-full border border-white/80 bg-white/92 px-2 py-4 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-500 shadow-[0_18px_40px_rgba(15,23,42,0.14)]">
+                  Arraste
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

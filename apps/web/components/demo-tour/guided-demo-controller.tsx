@@ -444,7 +444,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       if (isWebchatEntry) {
         const publicEntryPath = progress.context.publicEntryPath;
         if (!publicEntryPath) return;
-        window.open(publicEntryPath, "_blank", "noopener,noreferrer");
+        dispatchDemoTourCommand({ type: "open_whatsapp", popup: null });
         goToStep("waiting_external_message", "active", {
           waitingStartedAt: new Date().toISOString(),
         });
@@ -557,7 +557,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
               : "Esta demo ainda nao tem um numero real conectado",
           description:
             isWebchatEntry
-              ? "Abra a landing publica da demo e envie uma mensagem no chat embutido. A conversa deve aparecer aqui em tempo real."
+              ? "Abra o webchat publico embutido na mesma tela e envie uma mensagem. A conversa deve aparecer aqui em tempo real."
               : hasRealWhatsAppLink
               ? "Abra o WhatsApp da demo e envie uma mensagem simples, como se fosse um paciente querendo agendar."
               : "Use um dos testes guiados abaixo ou conecte um numero real da clinica dentro do tenant da demo. O numero de teste do /adm identifica quem vai testar, mas nao e o numero da clinica.",
@@ -587,7 +587,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
           title: isWebchatEntry ? "Envie uma mensagem no webchat" : "Envie uma mensagem no WhatsApp",
           description:
             isWebchatEntry
-              ? "Converse na landing publica da demo e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real."
+              ? "Converse no webchat embutido e arraste de volta para o WhatsApp da clinica. Quando a mensagem chegar, vamos destacar a conversa em tempo real."
               : "Converse como paciente e volte para esta tela. Quando a mensagem chegar, vamos destacar a conversa em tempo real.",
           secondaryLabel: "J\u00e1 enviei a mensagem",
           statusLabel: formatWaitingLabel(waitingElapsedSeconds),
