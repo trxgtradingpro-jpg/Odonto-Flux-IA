@@ -70,11 +70,13 @@ import {
   storeDemoEntryTargetPath,
 } from "@/lib/demo-session";
 import {
+  DEMO_WEBCHAT_WORKSPACE_EVENT_NAME,
   DEMO_TOUR_COMMAND_EVENT_NAME,
   DEMO_TOUR_TEST_ACTION_EVENT_NAME,
   DEMO_TOUR_TARGETS,
   dispatchDemoTourEvent,
   type DemoTourCommandDetail,
+  type DemoWebchatWorkspaceDetail,
   type DemoTourTestActionDetail,
 } from "@/lib/demo-tour";
 import { BRAND_NAME } from "@/lib/brand";
@@ -1917,6 +1919,19 @@ export default function ConversasPage() {
   }, [demoWorkspaceEnabled]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const detail: DemoWebchatWorkspaceDetail = { open: demoWorkspaceOpen };
+    const scopedWindow = window as Window & { __odontofluxDemoWebchatWorkspaceOpen?: boolean };
+    scopedWindow.__odontofluxDemoWebchatWorkspaceOpen = demoWorkspaceOpen;
+    window.dispatchEvent(new CustomEvent(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, { detail }));
+    return () => {
+      scopedWindow.__odontofluxDemoWebchatWorkspaceOpen = false;
+      window.dispatchEvent(new CustomEvent(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, { detail: { open: false } }));
+    };
+  }, [demoWorkspaceOpen]);
+
+  useEffect(() => {
     if (!isDemoUser) return;
     if (!demoTrackedConversation?.id) return;
     if (selectedConversationId !== demoTrackedConversation.id) return;
@@ -2191,6 +2206,11 @@ export default function ConversasPage() {
         return;
       }
 
+      if (detail.type === "close_webchat_workspace") {
+        closeDemoWebchatWorkspace();
+        return;
+      }
+
       if (detail.type === "check_message") {
         if (demoTrackedConversation?.id) {
           setDemoWhatsAppTrackedConversationId(demoTrackedConversation.id);
@@ -2214,6 +2234,7 @@ export default function ConversasPage() {
     return () =>
       window.removeEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
   }, [
+    closeDemoWebchatWorkspace,
     demoUsesWebchatEntry,
     demoTrackedConversation?.id,
     demoTrackedPatient?.id,
@@ -2628,10 +2649,10 @@ export default function ConversasPage() {
       style={{ touchAction: demoWorkspaceEnabled ? "pan-y" : "auto" }}
     >
       <div
-        className="flex h-full w-full will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+        className="flex h-full w-[200%] max-w-none will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
         style={{ transform: demoWorkspaceTransform }}
       >
-        <div className="relative h-full min-w-full shrink-0 overflow-hidden">
+        <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
         <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 lg:p-4">
           <div className="flex min-h-0 flex-1 overflow-hidden border border-white/60 bg-white/88 shadow-[0_22px_70px_rgba(15,23,42,0.10)] backdrop-blur md:rounded-[32px]">
@@ -3989,7 +4010,7 @@ export default function ConversasPage() {
       />
         </div>
 
-        <div className="relative h-full min-w-full shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
+        <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
           <div className="flex h-full flex-col">
             <div className="flex items-center justify-between gap-3 border-b border-white/70 bg-white/90 px-4 py-4 shadow-sm backdrop-blur">
               <div className="min-w-0">

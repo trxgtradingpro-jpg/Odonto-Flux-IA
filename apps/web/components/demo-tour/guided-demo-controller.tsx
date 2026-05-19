@@ -8,6 +8,7 @@ import { ensureDemoSessionId, readDemoWhatsAppEntry } from "@/lib/demo-session";
 import {
   createInitialDemoTourProgress,
   dispatchDemoTourCommand,
+  DEMO_WEBCHAT_WORKSPACE_EVENT_NAME,
   dispatchDemoTourTestAction,
   DEMO_TOUR_EVENT_NAME,
   DEMO_TOUR_TARGETS,
@@ -19,6 +20,7 @@ import {
   type DemoTourIdentity,
   type DemoTourProgress,
   type DemoTourStep,
+  type DemoWebchatWorkspaceDetail,
 } from "@/lib/demo-tour";
 import {
   DEMO_GUIDE_AUTOSTART_KEY,
@@ -103,6 +105,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
   const [viewportTick, setViewportTick] = useState(0);
   const [whatsappLaunchState, setWhatsappLaunchState] = useState<"idle" | "loading" | "exiting">("idle");
   const [whatsappLaunchCountdown, setWhatsappLaunchCountdown] = useState<number | null>(null);
+  const [webchatWorkspaceOpen, setWebchatWorkspaceOpen] = useState(false);
   const progressRef = useRef(progress);
   const bootstrapKeyRef = useRef<string | null>(null);
   const launchTimerIdsRef = useRef<number[]>([]);
@@ -126,6 +129,22 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
   }, [identity, progress]);
 
   useEffect(() => () => clearLaunchTimers(), []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const scopedWindow = window as Window & { __odontofluxDemoWebchatWorkspaceOpen?: boolean };
+    setWebchatWorkspaceOpen(Boolean(scopedWindow.__odontofluxDemoWebchatWorkspaceOpen));
+
+    const handleWorkspaceUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<DemoWebchatWorkspaceDetail>).detail;
+      setWebchatWorkspaceOpen(Boolean(detail?.open));
+    };
+
+    window.addEventListener(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, handleWorkspaceUpdate as EventListener);
+    return () =>
+      window.removeEventListener(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, handleWorkspaceUpdate as EventListener);
+  }, []);
 
   const updateProgress = (recipe: (current: DemoTourProgress) => DemoTourProgress) => {
     setProgress((current) => ({
@@ -286,6 +305,14 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
       const detail = (event as CustomEvent<DemoTourEventDetail>).detail;
       if (!detail) return;
 
+      if (
+        detail.type === "conversation_detected" &&
+        ["spotlight_whatsapp", "breathing"].includes(progressRef.current.step) &&
+        progressRef.current.context.entryChannel === "webchat"
+      ) {
+        dispatchDemoTourCommand({ type: "close_webchat_workspace" });
+      }
+
       updateProgress((current) => {
         let next = markDemoTourEventSeen(current, detail);
 
@@ -363,6 +390,7 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     progress.status === "active" &&
     progress.step !== "idle" &&
     progress.step !== "completed" &&
+    !(progress.step === "spotlight_whatsapp" && isWebchatEntry && webchatWorkspaceOpen) &&
     !(progress.step === "appointment_detected" && pathname === "/agenda");
 
   useEffect(() => {

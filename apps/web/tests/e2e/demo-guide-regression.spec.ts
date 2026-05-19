@@ -134,5 +134,13 @@ test.describe("demo guide regression", () => {
     await expect(page.getByText("Abrir webchat", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
     await expect(page.getByText("Teste o webchat publico da demo")).toBeVisible();
+
+    await page.getByText("Abrir webchat", { exact: true }).click();
+
+    await expect(page.getByTitle("Webchat público da demo")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
+      .toBeTruthy();
   });
 });

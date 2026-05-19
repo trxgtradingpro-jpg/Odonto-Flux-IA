@@ -5,6 +5,7 @@ import type { SessionContext } from "@/hooks/use-session";
 export const DEMO_TOUR_EVENT_NAME = "odontoflux:demo-tour-event";
 export const DEMO_TOUR_TEST_ACTION_EVENT_NAME = "odontoflux:demo-tour-test-action";
 export const DEMO_TOUR_COMMAND_EVENT_NAME = "odontoflux:demo-tour-command";
+export const DEMO_WEBCHAT_WORKSPACE_EVENT_NAME = "odontoflux:demo-webchat-workspace";
 export const DEMO_TOUR_STORAGE_PREFIX = "odontoflux_demo_tour";
 
 export const DEMO_TOUR_TARGETS = {
@@ -122,8 +123,15 @@ export type DemoTourCommandDetail =
       popup?: Window | null;
     }
   | {
+      type: "close_webchat_workspace";
+    }
+  | {
       type: "check_message";
     };
+
+export type DemoWebchatWorkspaceDetail = {
+  open: boolean;
+};
 
 function nowIso() {
   return new Date().toISOString();
