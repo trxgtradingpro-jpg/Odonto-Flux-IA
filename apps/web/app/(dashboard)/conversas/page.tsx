@@ -1932,7 +1932,7 @@ export default function ConversasPage() {
 
       const rect = anchor.getBoundingClientRect();
       setDemoEntryShortcutStyle({
-        top: Math.max(12, rect.top - 52),
+        top: Math.max(60, rect.top),
         right: Math.max(12, window.innerWidth - rect.right),
       });
     };
@@ -3712,12 +3712,12 @@ export default function ConversasPage() {
 
       {showDemoEntryShortcut && demoEntryShortcutStyle ? (
         <div className="pointer-events-none fixed inset-0 z-[130]">
-          <div className="absolute" style={demoEntryShortcutStyle}>
+          <div className="demo-entry-shortcut-callout absolute" style={demoEntryShortcutStyle}>
             <Button
               type="button"
               data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
               data-demo-entry-shortcut="true"
-              className="pointer-events-auto h-11 whitespace-nowrap rounded-full px-4 shadow-[0_24px_50px_rgba(6,37,31,0.22)]"
+              className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
               onPointerDown={handleOpenDemoWhatsAppPointerDown}
               onClick={handleOpenDemoWhatsAppClick}
             >

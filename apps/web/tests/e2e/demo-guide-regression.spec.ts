@@ -132,11 +132,13 @@ test.describe("demo guide regression", () => {
     );
 
     const demoEntryShortcut = page.locator('[data-demo-entry-shortcut="true"]').first();
+    const detailsButton = page.getByRole("button", { name: /Detalhes/i }).first();
 
     await page.goto("/conversas", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
 
     await expect(demoEntryShortcut).toBeVisible({ timeout: 30000 });
+    await expect(detailsButton).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
     await expect(page.locator('[data-demo-webchat-workspace="true"]')).toHaveCount(1, { timeout: 30000 });
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
@@ -144,6 +146,12 @@ test.describe("demo guide regression", () => {
     await expect(page.getByText("A IA entendeu o motivo do contato.")).toHaveCount(0);
     await expect(page.getByText("A IA respondeu com base nos dados reais da clinica.")).toHaveCount(0);
     await expect(page.getByText("Finalize um agendamento para atualizar a agenda ao vivo.")).toHaveCount(0);
+
+    const shortcutBox = await demoEntryShortcut.boundingBox();
+    const detailsBox = await detailsButton.boundingBox();
+    expect(shortcutBox).not.toBeNull();
+    expect(detailsBox).not.toBeNull();
+    expect((shortcutBox?.y ?? 0) + (shortcutBox?.height ?? 0)).toBeLessThan((detailsBox?.y ?? 0) + 2);
 
     const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
