@@ -1759,6 +1759,11 @@ export default function ConversasPage() {
     () => normalizePhoneForComparison(demoWhatsAppEntryPhone),
     [demoWhatsAppEntryPhone],
   );
+  const demoWorkspaceWebchatSrc = useMemo(() => {
+    const rawPath = String(demoPublicEntryPath || "").trim();
+    if (!rawPath) return null;
+    return `${rawPath}${rawPath.includes("?") ? "&" : "?"}embed=demo-webchat`;
+  }, [demoPublicEntryPath]);
   const canResolveDemoConversationFromPhone =
     demoWhatsAppExperienceStage === "awaiting_appointment" || demoWhatsAppExperienceStage === "appointment_ready";
 
@@ -4012,12 +4017,12 @@ export default function ConversasPage() {
 
         <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
           <div className="relative h-full min-h-0 bg-white">
-            {demoPublicEntryPath ? (
-              <iframe
-                title="Webchat público da demo"
-                src={demoPublicEntryPath}
-                className="h-full w-full border-0 bg-white"
-              />
+              {demoPublicEntryPath ? (
+                <iframe
+                  title="Webchat público da demo"
+                  src={demoWorkspaceWebchatSrc || demoPublicEntryPath}
+                  className="h-full w-full border-0 bg-white"
+                />
             ) : (
               <div className="flex h-full items-center justify-center px-6 text-center">
                 <div className="max-w-md">

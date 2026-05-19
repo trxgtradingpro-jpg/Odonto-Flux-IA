@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { cn } from "@odontoflux/ui";
 
 import { publicApiFetch } from "@/lib/public-api";
@@ -243,11 +243,13 @@ function PublicWebchat({
   clinicName,
   session,
   onExpired,
+  embedded = false,
 }: {
   clinicSlug: string;
   clinicName: string;
   session: PublicBookingSession;
   onExpired: (message?: string) => void;
+  embedded?: boolean;
 }) {
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -356,8 +358,15 @@ function PublicWebchat({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
-      <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white/92 px-4 py-3 sm:px-5">
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-1 flex-col overflow-hidden",
+        embedded
+          ? "bg-white"
+          : "rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur",
+      )}
+    >
+      {!embedded ? <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white/92 px-4 py-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--booking-primary)] text-white shadow-sm">
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
@@ -370,11 +379,14 @@ function PublicWebchat({
         <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
           Online
         </div>
-      </div>
+      </div> : null}
 
       <div
         ref={viewportRef}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_42%,_rgba(237,241,239,0.95))] px-4 py-5 sm:px-5"
+        className={cn(
+          "min-h-0 flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_42%,_rgba(237,241,239,0.95))]",
+          embedded ? "px-4 py-4 sm:px-5" : "px-4 py-5 sm:px-5",
+        )}
       >
         {loadingMessages ? (
           <div className="max-w-[88%] rounded-[24px] border border-stone-200 bg-white px-4 py-3 text-sm text-[var(--booking-muted)] shadow-sm">
@@ -422,7 +434,7 @@ function PublicWebchat({
         ) : null}
       </div>
 
-      <div className="border-t border-stone-200 bg-white/94 px-4 py-3 sm:px-5">
+      <div className={cn("border-t border-stone-200 bg-white/94 px-4 py-3 sm:px-5", embedded && "shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}>
         {chatError ? (
           <p className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {chatError}
@@ -932,6 +944,7 @@ function PublicPhoneGate({
 
 export default function PublicBookingPage() {
   const params = useParams<{ clinicSlug: string }>();
+  const searchParams = useSearchParams();
   const clinicSlug = String(params.clinicSlug || "").trim();
   const bootstrappedRef = useRef(false);
 
@@ -1139,6 +1152,7 @@ export default function PublicBookingPage() {
 
   const clinicName = profile?.clinic.name || session?.clinic.name || "clinica";
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
+  const isDemoEmbeddedWebchat = isWebchat && searchParams.get("embed") === "demo-webchat";
   const linkFlowUnavailable =
     profile && (!profile.link_flow.enabled || !profile.link_flow.operational)
       ? profile.link_flow.unavailable_message ||
@@ -1253,11 +1267,23 @@ export default function PublicBookingPage() {
 
   return (
     <main
-      className="box-border h-[100dvh] overflow-hidden bg-[var(--booking-background)] px-4 py-4 text-[var(--booking-text)] sm:px-6 sm:py-5 lg:px-10"
+      className={cn(
+        "box-border overflow-hidden text-[var(--booking-text)]",
+        isDemoEmbeddedWebchat
+          ? "h-[100dvh] min-h-0 bg-transparent px-0 py-0"
+          : "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
+      )}
       style={pageStyle}
     >
-      <div className="box-border mx-auto flex h-full w-full max-w-7xl flex-col overflow-hidden rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur">
-        <header className="border-b border-white/60 px-5 py-5 sm:px-7">
+      <div
+        className={cn(
+          "box-border flex h-full w-full flex-col overflow-hidden",
+          isDemoEmbeddedWebchat
+            ? "bg-white"
+            : "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
+        )}
+      >
+        {!isDemoEmbeddedWebchat ? <header className="border-b border-white/60 px-5 py-5 sm:px-7">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-3">
@@ -1285,10 +1311,15 @@ export default function PublicBookingPage() {
               Link verificado da clinica
             </div>
           </div>
-        </header>
+        </header> : null}
 
-        <section className="relative flex min-h-0 flex-1 overflow-hidden p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6">
-          {isWebchat ? (
+        <section
+          className={cn(
+            "relative flex min-h-0 flex-1 overflow-hidden",
+            isDemoEmbeddedWebchat ? "p-0" : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
+          )}
+        >
+          {isWebchat && !isDemoEmbeddedWebchat ? (
             <>
               <div
                 className={cn(
@@ -1368,7 +1399,7 @@ export default function PublicBookingPage() {
             </>
           ) : null}
 
-          <div className="hidden min-h-0 lg:flex">
+          {!isDemoEmbeddedWebchat ? <div className="hidden min-h-0 lg:flex">
             {isWebchat ? (
               <BookingSummaryPanel
                 summary={summary}
@@ -1380,14 +1411,15 @@ export default function PublicBookingPage() {
             ) : (
               <WhatsAppOverviewPanel />
             )}
-          </div>
+          </div> : null}
 
-          <div className="flex min-h-0 flex-1">
+          <div className={cn("flex min-h-0 flex-1", isDemoEmbeddedWebchat && "w-full")}>
             {profile?.link_flow.operational && session && isWebchat ? (
               <PublicWebchat
                 clinicSlug={clinicSlug}
                 clinicName={clinicName}
                 session={session}
+                embedded={isDemoEmbeddedWebchat}
                 onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);
