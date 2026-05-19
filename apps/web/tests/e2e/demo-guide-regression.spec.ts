@@ -132,7 +132,7 @@ test.describe("demo guide regression", () => {
     await page.goto("http://127.0.0.1:3000/conversas", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
 
-    await expect(page.getByText("Abrir webchat da demo", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Testar chat do site", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
     await expect(page.locator('[data-demo-webchat-workspace="true"]')).toHaveCount(1, { timeout: 30000 });
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
@@ -144,7 +144,7 @@ test.describe("demo guide regression", () => {
     const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
 
-    await page.getByText("Abrir webchat da demo", { exact: true }).click();
+    await page.getByText("Testar chat do site", { exact: true }).click();
 
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "webchat");
     const embeddedFrame = page.locator("iframe").first();

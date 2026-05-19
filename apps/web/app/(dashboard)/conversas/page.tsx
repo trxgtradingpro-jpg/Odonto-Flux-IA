@@ -1901,6 +1901,18 @@ export default function ConversasPage() {
   const demoUsesWebchatEntry = demoEntryChannel === "webchat";
   const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoResolvedPublicEntryPath);
   const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
+  const showDemoEntryShortcut =
+    isDemoUser &&
+    ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
+    !demoWorkspaceOpen &&
+    Boolean(demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath));
+  const demoEntryShortcutLabel = demoUsesWebchatEntry
+    ? demoWhatsAppExperienceStage === "entry"
+      ? "Testar chat do site"
+      : "Reabrir chat do site"
+    : demoWhatsAppExperienceStage === "entry"
+      ? "Abrir WhatsApp da demo"
+      : "Reabrir WhatsApp";
   const demoTourConversationId =
     demoTrackedConversation?.id ??
     demoWhatsAppTrackedConversationId ??
@@ -2919,15 +2931,31 @@ export default function ConversasPage() {
                         <div className="hidden sm:flex">
                           <StatusBadge value={selectedConversation.status} />
                         </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-10 rounded-full px-3"
-                          onClick={() => setDetailsOpen(true)}
-                        >
-                          <Info size={15} />
-                          <span className="hidden sm:inline">Detalhes</span>
-                        </Button>
+                        <div className="relative flex shrink-0 items-center">
+                          {showDemoEntryShortcut ? (
+                            <div className="absolute bottom-full right-0 z-[70] mb-2 flex justify-end">
+                              <Button
+                                type="button"
+                                data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+                                className="h-11 whitespace-nowrap rounded-full px-4 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
+                                onPointerDown={handleOpenDemoWhatsAppPointerDown}
+                                onClick={handleOpenDemoWhatsAppClick}
+                              >
+                                <Share2 size={16} />
+                                {demoEntryShortcutLabel}
+                              </Button>
+                            </div>
+                          ) : null}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-10 rounded-full px-3"
+                            onClick={() => setDetailsOpen(true)}
+                          >
+                            <Info size={15} />
+                            <span className="hidden sm:inline">Detalhes</span>
+                          </Button>
+                        </div>
                         <div className="relative" ref={actionsMenuRef}>
                           <Button
                             type="button"
@@ -3628,30 +3656,6 @@ export default function ConversasPage() {
           </div>
         </div>
       </div>
-
-      {isDemoUser &&
-      ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
-      !demoWorkspaceOpen &&
-      (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath)) ? (
-        <div className="fixed bottom-6 right-6 z-[70]">
-          <Button
-            type="button"
-            data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
-            className="h-12 rounded-full px-5 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
-            onPointerDown={handleOpenDemoWhatsAppPointerDown}
-            onClick={handleOpenDemoWhatsAppClick}
-          >
-            <Share2 size={16} />
-            {demoUsesWebchatEntry
-              ? demoWhatsAppExperienceStage === "entry"
-                ? "Abrir webchat da demo"
-                : "Reabrir webchat"
-              : demoWhatsAppExperienceStage === "entry"
-                ? "Abrir WhatsApp da demo"
-                : "Reabrir WhatsApp"}
-          </Button>
-        </div>
-      ) : null}
 
       {showDemoSuggestionSpotlight ? (
         <DemoGuideSpotlightOverlay
