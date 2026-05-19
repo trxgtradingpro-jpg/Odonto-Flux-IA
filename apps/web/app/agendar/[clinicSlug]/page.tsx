@@ -384,7 +384,7 @@ function PublicWebchat({
       <div
         ref={viewportRef}
         className={cn(
-          "min-h-0 flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_42%,_rgba(237,241,239,0.95))]",
+          "whatsapp-chat-surface min-h-0 flex-1 space-y-4 overflow-y-auto",
           embedded ? "px-4 py-4 sm:px-5" : "px-4 py-5 sm:px-5",
         )}
       >
@@ -844,7 +844,7 @@ function WhatsAppCtaPanel({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col justify-between bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_42%,_rgba(237,241,239,0.95))] p-5">
+      <div className="whatsapp-chat-surface flex flex-1 flex-col justify-between p-5">
         <div className="space-y-4">
           <div className="max-w-[86%] rounded-[24px] rounded-bl-[10px] border border-stone-200 bg-white px-4 py-3 shadow-sm">
             <p className="text-sm font-medium text-stone-900">Seu atendimento esta pronto.</p>

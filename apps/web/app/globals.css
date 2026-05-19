@@ -105,6 +105,26 @@ body {
   background-attachment: local, local, local, fixed;
 }
 
+.whatsapp-chat-surface {
+  background-color: #efeae2;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.78),
+      rgba(255, 255, 255, 0.6)
+    ),
+    url("/images/whatsapp-chat-background.png");
+  background-position:
+    center center,
+    center top;
+  background-size:
+    cover,
+    420px auto;
+  background-repeat:
+    no-repeat,
+    repeat;
+}
+
 img,
 svg,
 video,

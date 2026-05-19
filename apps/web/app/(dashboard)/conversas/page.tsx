@@ -2973,7 +2973,7 @@ export default function ConversasPage() {
                               ? DEMO_TOUR_TARGETS.conversationThread
                               : undefined
                           }
-                          className="h-full overflow-y-auto overscroll-contain rounded-[28px] border border-stone-200/80 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.95),_rgba(246,244,240,0.96)_45%,_rgba(242,245,242,0.98))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
+                          className="whatsapp-chat-surface h-full overflow-y-auto overscroll-contain rounded-[28px] border border-stone-200/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
                         >
                           {messagesQuery.isLoading ? (
                             <p className="text-sm text-stone-500">Carregando mensagens...</p>

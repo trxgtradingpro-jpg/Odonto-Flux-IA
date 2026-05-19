@@ -856,7 +856,7 @@ export default function IALabPage() {
                   {autoConversationRunning ? "rodando agora" : "fluxo pausado"}
                 </Badge>
               </div>
-              <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+              <div className="whatsapp-chat-surface max-h-[360px] space-y-2 overflow-y-auto rounded-[22px] border border-emerald-100/70 p-3 pr-2">
                 {autoTranscript.map((item) => {
                   const isPatient = item.role === "patient";
                   const isClinic = item.role === "clinic";
