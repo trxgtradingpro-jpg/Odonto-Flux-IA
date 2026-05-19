@@ -62,16 +62,16 @@ test.describe("demo guide regression", () => {
 
     await page.goto("http://127.0.0.1:3000/conversas", { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByText("Abrir WhatsApp", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Abrir WhatsApp da demo", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
 
     await page.waitForTimeout(5000);
 
-    await expect(page.getByText("Abrir WhatsApp", { exact: true })).toBeVisible();
+    await expect(page.getByText("Abrir WhatsApp da demo", { exact: true })).toBeVisible();
     await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
   });
 
-  test("webchat demo entry opens guided webchat flow instead of requiring a real number", async ({ page, request }) => {
+  test("webchat demo entry opens without rendering guide overlays", async ({ page, request }) => {
     const loginResponse = await request.post(`${apiBaseUrl}/auth/login`, {
       data: {
         email: "owner@sorrisosul.com",
@@ -132,15 +132,19 @@ test.describe("demo guide regression", () => {
     await page.goto("http://127.0.0.1:3000/conversas", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
 
-    await expect(page.getByText("Abrir webchat", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("Abrir webchat da demo", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
-    await expect(page.getByText("Teste o webchat publico da demo")).toBeVisible();
     await expect(page.locator('[data-demo-webchat-workspace="true"]')).toHaveCount(1, { timeout: 30000 });
+    await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
+    await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
+    await expect(page.getByText("A IA entendeu o motivo do contato.")).toHaveCount(0);
+    await expect(page.getByText("A IA respondeu com base nos dados reais da clinica.")).toHaveCount(0);
+    await expect(page.getByText("Finalize um agendamento para atualizar a agenda ao vivo.")).toHaveCount(0);
 
     const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
 
-    await page.getByText("Abrir webchat", { exact: true }).click();
+    await page.getByText("Abrir webchat da demo", { exact: true }).click();
 
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "webchat");
     const embeddedFrame = page.locator("iframe").first();
@@ -151,6 +155,10 @@ test.describe("demo guide regression", () => {
     expect(frameBox).not.toBeNull();
     expect((frameBox?.width ?? 0) > ((page.viewportSize()?.width ?? 0) * 0.8)).toBeTruthy();
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
+    await expect(page.getByText("Nova conversa recebida")).toHaveCount(0);
+    await expect(page.getByText("A IA entendeu o motivo do contato.")).toHaveCount(0);
+    await expect(page.getByText("A IA respondeu com base nos dados reais da clinica.")).toHaveCount(0);
+    await expect(page.getByText("Finalize um agendamento para atualizar a agenda ao vivo.")).toHaveCount(0);
     await expect(page.getByText("Voltar para WhatsApp", { exact: true })).toBeVisible();
     await expect(page.getByText("SaaS ativo", { exact: true })).not.toBeVisible();
     await expect(page.getByRole("link", { name: "Dashboard" })).not.toBeVisible();

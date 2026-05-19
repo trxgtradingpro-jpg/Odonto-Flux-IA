@@ -5,7 +5,6 @@ import { flushSync } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 
 import { FullscreenWorkspaceShell } from "./fullscreen-workspace-shell";
-import { DemoGuidedTour } from "./demo-guided-tour";
 import { QuickAccessPill } from "./quick-access-pill";
 import { QuickFullscreenWorkspace } from "./quick-fullscreen-workspace";
 import { QUICK_FOCUS_PAGE_KEYS, QuickFocusPageKey } from "./quick-focus-pages";
@@ -312,7 +311,6 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
                 )}
               >
                 <div className={cn(isImmersiveWorkspace ? "flex min-h-0 flex-1 flex-col" : "content-shell")}>
-                  <DemoGuidedTour session={sessionQuery.data} pathname={pathname} />
                   {children}
                 </div>
               </main>
