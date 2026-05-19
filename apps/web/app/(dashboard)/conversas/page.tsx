@@ -2730,9 +2730,9 @@ export default function ConversasPage() {
 
     const deltaX = event.clientX - gesture.startX;
     if (gesture.panel === "whatsapp" && deltaX <= -DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX) {
-      setDemoWorkspacePanel("webchat");
+      openDemoWebchatWorkspace();
     } else if (gesture.panel === "webchat" && deltaX >= DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX) {
-      setDemoWorkspacePanel("whatsapp");
+      closeDemoWebchatWorkspace();
     }
 
     setDemoWorkspaceDragOffset(0);
@@ -2740,7 +2740,7 @@ export default function ConversasPage() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-  }, []);
+  }, [closeDemoWebchatWorkspace, openDemoWebchatWorkspace]);
 
   const cancelDemoWorkspaceGesture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     demoWorkspaceSwipeRef.current = null;

@@ -148,9 +148,19 @@ test.describe("demo guide regression", () => {
     const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
 
-    await demoEntryShortcut.click();
+    const workspaceBox = await workspace.boundingBox();
+    expect(workspaceBox).not.toBeNull();
+    const swipeStartX = (workspaceBox?.x ?? 0) + (workspaceBox?.width ?? 0) * 0.72;
+    const swipeEndX = (workspaceBox?.x ?? 0) + (workspaceBox?.width ?? 0) * 0.18;
+    const swipeY = (workspaceBox?.y ?? 0) + (workspaceBox?.height ?? 0) * 0.45;
+
+    await page.mouse.move(swipeStartX, swipeY);
+    await page.mouse.down();
+    await page.mouse.move(swipeEndX, swipeY, { steps: 12 });
+    await page.mouse.up();
 
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "webchat");
+    await expect(page.getByText("Abra o webchat da demo para iniciar a simulacao")).toHaveCount(0);
     const embeddedFrame = page.locator("iframe").first();
     await expect(embeddedFrame).toBeVisible({ timeout: 30000 });
     await expect(embeddedFrame).toHaveAttribute("src", /embed=demo-webchat/);
