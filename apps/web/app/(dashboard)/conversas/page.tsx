@@ -2184,7 +2184,10 @@ export default function ConversasPage() {
       if (!detail) return;
 
       if (detail.type === "open_whatsapp") {
-        launchDemoWhatsAppRedirect({ popup: detail.popup ?? null });
+        launchDemoWhatsAppRedirect({
+          popup: detail.popup ?? null,
+          openInWorkspace: demoUsesWebchatEntry,
+        });
         return;
       }
 
@@ -2211,6 +2214,7 @@ export default function ConversasPage() {
     return () =>
       window.removeEventListener(DEMO_TOUR_COMMAND_EVENT_NAME, handleDemoTourCommand as EventListener);
   }, [
+    demoUsesWebchatEntry,
     demoTrackedConversation?.id,
     demoTrackedPatient?.id,
     inboxQuery,
@@ -2616,7 +2620,7 @@ export default function ConversasPage() {
   return (
     <div
       ref={demoWorkspaceViewportRef}
-      className="relative min-h-0 flex-1 overflow-hidden"
+      className="relative h-full min-h-0 flex-1 overflow-hidden"
       onPointerDown={handleDemoWorkspacePointerDown}
       onPointerMove={handleDemoWorkspacePointerMove}
       onPointerUp={finishDemoWorkspaceGesture}
@@ -2624,11 +2628,11 @@ export default function ConversasPage() {
       style={{ touchAction: demoWorkspaceEnabled ? "pan-y" : "auto" }}
     >
       <div
-        className="flex h-full w-full transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+        className="flex h-full w-full will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
         style={{ transform: demoWorkspaceTransform }}
       >
         <div className="relative h-full min-w-full shrink-0 overflow-hidden">
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
+          <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
         <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 lg:p-4">
           <div className="flex min-h-0 flex-1 overflow-hidden border border-white/60 bg-white/88 shadow-[0_22px_70px_rgba(15,23,42,0.10)] backdrop-blur md:rounded-[32px]">
             <aside
@@ -3540,6 +3544,7 @@ export default function ConversasPage() {
 
       {isDemoUser &&
       ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
+      !demoWorkspaceOpen &&
       (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoPublicEntryPath)) ? (
         <div className="pointer-events-none fixed bottom-6 right-6 z-[70]">
           <Button
@@ -4022,7 +4027,14 @@ export default function ConversasPage() {
                 </div>
               )}
 
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center">
+              <div
+                className="absolute inset-y-0 left-0 z-10 w-7 touch-pan-y"
+                onPointerDown={handleDemoWorkspacePointerDown}
+                onPointerMove={handleDemoWorkspacePointerMove}
+                onPointerUp={finishDemoWorkspaceGesture}
+                onPointerCancel={cancelDemoWorkspaceGesture}
+              />
+              <div className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center">
                 <div className="ml-2 rounded-full border border-white/80 bg-white/92 px-2 py-4 text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-500 shadow-[0_18px_40px_rgba(15,23,42,0.14)]">
                   Arraste
                 </div>
