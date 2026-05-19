@@ -1099,6 +1099,7 @@ export default function ConversasPage() {
   const [demoConversationStage, setDemoConversationStage] = useState<DemoConversationTourStage>("idle");
   const [demoConversationCountdown, setDemoConversationCountdown] = useState<number | null>(null);
   const [demoSimulationMessages, setDemoSimulationMessages] = useState<DemoSimulationMessage[]>([]);
+  const [demoEntryShortcutStyle, setDemoEntryShortcutStyle] = useState<CSSProperties | null>(null);
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const demoWorkspaceViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1111,6 +1112,7 @@ export default function ConversasPage() {
   const conversationPanelRef = useRef<HTMLElement | null>(null);
   const conversationCardRef = useRef<HTMLDivElement | null>(null);
   const composerCardRef = useRef<HTMLDivElement | null>(null);
+  const demoEntryShortcutAnchorRef = useRef<HTMLDivElement | null>(null);
   const seenMessageIdsRef = useRef<Map<string, Set<string>>>(new Map());
   const bootstrappedConversationsRef = useRef<Set<string>>(new Set());
   const demoGuideSequenceStartedRef = useRef(false);
@@ -1916,6 +1918,55 @@ export default function ConversasPage() {
     : demoWhatsAppExperienceStage === "entry"
       ? "Abrir WhatsApp da demo"
       : "Reabrir WhatsApp";
+
+  useEffect(() => {
+    if (!showDemoEntryShortcut) {
+      setDemoEntryShortcutStyle(null);
+      return;
+    }
+
+    let frameId = 0;
+    const updateShortcutPosition = () => {
+      const anchor = demoEntryShortcutAnchorRef.current;
+      if (!anchor) return;
+
+      const rect = anchor.getBoundingClientRect();
+      setDemoEntryShortcutStyle({
+        top: Math.max(12, rect.top - 52),
+        right: Math.max(12, window.innerWidth - rect.right),
+      });
+    };
+
+    const scheduleShortcutPositionUpdate = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateShortcutPosition);
+    };
+
+    scheduleShortcutPositionUpdate();
+
+    const anchor = demoEntryShortcutAnchorRef.current;
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            scheduleShortcutPositionUpdate();
+          });
+
+    if (anchor && resizeObserver) {
+      resizeObserver.observe(anchor);
+    }
+
+    window.addEventListener("resize", scheduleShortcutPositionUpdate);
+    window.addEventListener("scroll", scheduleShortcutPositionUpdate, true);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleShortcutPositionUpdate);
+      window.removeEventListener("scroll", scheduleShortcutPositionUpdate, true);
+    };
+  }, [showDemoEntryShortcut, demoEntryShortcutLabel, selectedConversationId]);
+
   const demoTourConversationId =
     demoTrackedConversation?.id ??
     demoWhatsAppTrackedConversationId ??
@@ -2947,22 +2998,7 @@ export default function ConversasPage() {
                         <div className="hidden sm:flex">
                           <StatusBadge value={selectedConversation.status} />
                         </div>
-                        <div className="relative flex shrink-0 items-center">
-                          {showDemoEntryShortcut ? (
-                            <div className="absolute bottom-full right-0 z-[70] mb-2 flex justify-end">
-                              <Button
-                                type="button"
-                                data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
-                                data-demo-entry-shortcut="true"
-                                className="h-11 whitespace-nowrap rounded-full px-4 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
-                                onPointerDown={handleOpenDemoWhatsAppPointerDown}
-                                onClick={handleOpenDemoWhatsAppClick}
-                              >
-                                <Share2 size={16} />
-                                {demoEntryShortcutLabel}
-                              </Button>
-                            </div>
-                          ) : null}
+                        <div ref={demoEntryShortcutAnchorRef} className="relative flex shrink-0 items-center">
                           <Button
                             type="button"
                             variant="outline"
@@ -3673,6 +3709,24 @@ export default function ConversasPage() {
           </div>
         </div>
       </div>
+
+      {showDemoEntryShortcut && demoEntryShortcutStyle ? (
+        <div className="pointer-events-none fixed inset-0 z-[130]">
+          <div className="absolute" style={demoEntryShortcutStyle}>
+            <Button
+              type="button"
+              data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+              data-demo-entry-shortcut="true"
+              className="pointer-events-auto h-11 whitespace-nowrap rounded-full px-4 shadow-[0_24px_50px_rgba(6,37,31,0.22)]"
+              onPointerDown={handleOpenDemoWhatsAppPointerDown}
+              onClick={handleOpenDemoWhatsAppClick}
+            >
+              <Share2 size={16} />
+              {demoEntryShortcutLabel}
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {showDemoSuggestionSpotlight ? (
         <DemoGuideSpotlightOverlay
