@@ -881,6 +881,7 @@ function WhatsAppCtaPanel({
 
 function PublicPhoneGate({
   clinicName,
+  demoMode = false,
   phone,
   saving,
   error,
@@ -888,30 +889,44 @@ function PublicPhoneGate({
   onSubmit,
 }: {
   clinicName: string;
+  demoMode?: boolean;
   phone: string;
   saving: boolean;
   error: string | null;
   onPhoneChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const badgeLabel = demoMode ? "Simulacao da clinica" : "Atendimento protegido";
+  const heading = demoMode ? "Aqui a clinica vai simular um paciente" : "Antes de continuar, me passe seu celular";
+  const descriptionPrimary = demoMode
+    ? `Informe um celular para testar o fluxo de agendamento e ver como a conversa vai fluir no webchat da ${clinicName}.`
+    : `Vamos usar esse numero apenas para identificar voce com mais rapidez no agendamento oficial da ${clinicName}.`;
+  const descriptionSecondary = demoMode
+    ? "Assim a equipe acompanha, na pratica, cada etapa do atendimento, como se estivesse no lugar do paciente."
+    : "Pode informar seu celular ou WhatsApp com DDD. Assim a clinica ja aproveita esse dado no restante do atendimento.";
+  const phoneLabel = demoMode ? "Celular ou WhatsApp para a simulacao" : "Celular ou WhatsApp com DDD";
+  const submitLabel = saving
+    ? demoMode
+      ? "Iniciando simulacao..."
+      : "Confirmando celular..."
+    : demoMode
+      ? "Continuar simulacao"
+      : "Continuar atendimento";
+
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-stone-950/45 px-4 py-6 backdrop-blur-[2px]">
       <div className="w-full max-w-md rounded-[30px] border border-white/70 bg-white/96 p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]">
         <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-          Atendimento protegido
+          {badgeLabel}
         </div>
-        <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">Antes de continuar, me passe seu celular</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
-          Vamos usar esse numero apenas para identificar voce com mais rapidez no agendamento oficial da {clinicName}.
-        </p>
-        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
-          Pode informar seu celular ou WhatsApp com DDD. Assim a clinica ja aproveita esse dado no restante do atendimento.
-        </p>
+        <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">{heading}</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{descriptionPrimary}</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{descriptionSecondary}</p>
 
         <form onSubmit={onSubmit} className="mt-5 space-y-4">
           <label className="block">
-            <span className="mb-2 block text-sm font-medium text-stone-800">Celular ou WhatsApp com DDD</span>
+            <span className="mb-2 block text-sm font-medium text-stone-800">{phoneLabel}</span>
             <input
               autoFocus
               type="tel"
@@ -933,7 +948,7 @@ function PublicPhoneGate({
             disabled={!phone.trim() || saving}
             className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {saving ? "Confirmando celular..." : "Continuar atendimento"}
+            {submitLabel}
             <ArrowRight className="h-5 w-5" aria-hidden="true" />
           </button>
         </form>
@@ -946,6 +961,8 @@ export default function PublicBookingPage() {
   const params = useParams<{ clinicSlug: string }>();
   const searchParams = useSearchParams();
   const clinicSlug = String(params.clinicSlug || "").trim();
+  const isDemoEmbeddedRequest = searchParams.get("embed") === "demo-webchat";
+  const demoSessionResetKey = searchParams.get("demo_session_reset");
   const bootstrappedRef = useRef(false);
 
   const [profile, setProfile] = useState<PublicBookingProfile | null>(null);
@@ -980,6 +997,9 @@ export default function PublicBookingPage() {
 
         let bookingSession: PublicBookingSession | null = null;
         if (bookingProfile.link_flow.cta_mode === "webchat") {
+          if (isDemoEmbeddedRequest && demoSessionResetKey) {
+            storeWebchatSession(clinicSlug, null);
+          }
           const storedSession = readStoredWebchatSession(clinicSlug);
           if (storedSession?.public_access_token) {
             try {
@@ -1048,7 +1068,7 @@ export default function PublicBookingPage() {
     }
 
     void bootstrap();
-  }, [clinicSlug]);
+  }, [clinicSlug, demoSessionResetKey, isDemoEmbeddedRequest]);
 
   useEffect(() => {
     const previousHtmlOverflow = document.documentElement.style.overflow;
@@ -1152,7 +1172,7 @@ export default function PublicBookingPage() {
 
   const clinicName = profile?.clinic.name || session?.clinic.name || "clinica";
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
-  const isDemoEmbeddedWebchat = isWebchat && searchParams.get("embed") === "demo-webchat";
+  const isDemoEmbeddedWebchat = isWebchat && isDemoEmbeddedRequest;
   const linkFlowUnavailable =
     profile && (!profile.link_flow.enabled || !profile.link_flow.operational)
       ? profile.link_flow.unavailable_message ||
@@ -1450,6 +1470,7 @@ export default function PublicBookingPage() {
           {shouldBlockForPhone ? (
             <PublicPhoneGate
               clinicName={clinicName}
+              demoMode={isDemoEmbeddedWebchat}
               phone={contactPhoneDraft}
               saving={savingContactPhone}
               error={contactPhoneError}

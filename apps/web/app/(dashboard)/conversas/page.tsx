@@ -1089,6 +1089,7 @@ export default function ConversasPage() {
   const [demoPublicEntryPath, setDemoPublicEntryPath] = useState<string | null>(null);
   const [demoWorkspacePanel, setDemoWorkspacePanel] = useState<"whatsapp" | "webchat">("whatsapp");
   const [demoWorkspaceDragOffset, setDemoWorkspaceDragOffset] = useState(0);
+  const [demoWebchatLaunchToken, setDemoWebchatLaunchToken] = useState(0);
   const [demoWhatsAppStartedAt, setDemoWhatsAppStartedAt] = useState<string | null>(null);
   const [demoWhatsAppTrackedConversationId, setDemoWhatsAppTrackedConversationId] = useState<string | null>(null);
   const [demoWhatsAppTrackedPatientId, setDemoWhatsAppTrackedPatientId] = useState<string | null>(null);
@@ -1791,8 +1792,10 @@ export default function ConversasPage() {
   const demoWorkspaceWebchatSrc = useMemo(() => {
     const rawPath = String(demoResolvedPublicEntryPath || "").trim();
     if (!rawPath) return null;
-    return `${rawPath}${rawPath.includes("?") ? "&" : "?"}embed=demo-webchat`;
-  }, [demoResolvedPublicEntryPath]);
+    const embeddedPath = `${rawPath}${rawPath.includes("?") ? "&" : "?"}embed=demo-webchat`;
+    if (demoWebchatLaunchToken <= 0) return embeddedPath;
+    return `${embeddedPath}&demo_session_reset=${demoWebchatLaunchToken}`;
+  }, [demoResolvedPublicEntryPath, demoWebchatLaunchToken]);
   const canResolveDemoConversationFromPhone =
     demoWhatsAppExperienceStage === "awaiting_appointment" || demoWhatsAppExperienceStage === "appointment_ready";
 
@@ -2123,9 +2126,22 @@ export default function ConversasPage() {
   ]);
 
   const openDemoWebchatWorkspace = useCallback(() => {
+    const rawPath = String(demoResolvedPublicEntryPath || "").trim();
+    if (rawPath) {
+      try {
+        const demoUrl = new URL(rawPath, window.location.origin);
+        const [, clinicSlug] = demoUrl.pathname.split("/");
+        if (clinicSlug) {
+          window.localStorage.removeItem(`clinicflux.link_flow.webchat.${clinicSlug}`);
+        }
+      } catch {
+        // Ignore malformed demo paths and let the embedded page recover normally.
+      }
+    }
+    setDemoWebchatLaunchToken((current) => current + 1);
     setDemoWorkspacePanel("webchat");
     setDemoWorkspaceDragOffset(0);
-  }, []);
+  }, [demoResolvedPublicEntryPath]);
 
   const closeDemoWebchatWorkspace = useCallback(() => {
     setDemoWorkspacePanel("whatsapp");
@@ -2937,6 +2953,7 @@ export default function ConversasPage() {
                               <Button
                                 type="button"
                                 data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+                                data-demo-entry-shortcut="true"
                                 className="h-11 whitespace-nowrap rounded-full px-4 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
                                 onPointerDown={handleOpenDemoWhatsAppPointerDown}
                                 onClick={handleOpenDemoWhatsAppClick}
@@ -4089,12 +4106,24 @@ export default function ConversasPage() {
           style={{ transform: demoWorkspaceWebchatTransform }}
         >
           <div className="relative h-full min-h-0 bg-white">
-              {demoResolvedPublicEntryPath ? (
+            {demoResolvedPublicEntryPath ? (
+              demoWebchatLaunchToken > 0 ? (
                 <iframe
+                  key={demoWebchatLaunchToken}
                   title="Webchat público da demo"
                   src={demoWorkspaceWebchatSrc || demoResolvedPublicEntryPath}
                   className="h-full w-full border-0 bg-white"
                 />
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center">
+                  <div className="max-w-md">
+                    <p className="text-lg font-semibold text-stone-900">Abra o webchat da demo para iniciar a simulacao</p>
+                    <p className="mt-2 text-sm leading-6 text-stone-600">
+                      Quando voce abrir o workspace, a jornada publica vai comecar do zero para mostrar o fluxo completo.
+                    </p>
+                  </div>
+                </div>
+              )
             ) : (
               <div className="flex h-full items-center justify-center px-6 text-center">
                 <div className="max-w-md">
