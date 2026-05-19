@@ -1978,6 +1978,7 @@ def _manual_webchat_booking_snapshot(db: Session, *, conversation: Conversation)
         return None
 
     unit_name = None
+    unit_id_text = None
     unit_id_raw = draft.get("unit_id")
     try:
         unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
@@ -1992,19 +1993,49 @@ def _manual_webchat_booking_snapshot(db: Session, *, conversation: Conversation)
             )
         )
         unit_name = unit.name if unit else None
+        unit_id_text = str(unit.id) if unit else None
 
     procedure_type = str(draft.get("procedure_type") or "").strip() or None
-    preferred_date = _format_manual_booking_date(str(draft.get("preferred_date") or "").strip() or None)
+    preferred_date_raw = str(draft.get("preferred_date") or "").strip() or None
+    preferred_date = _format_manual_booking_date(preferred_date_raw)
     preferred_time = str(draft.get("preferred_time") or "").strip() or None
 
     if not any([unit_name, procedure_type, preferred_date, preferred_time]):
         return None
 
     return {
+        "unit_id": unit_id_text,
         "unit_name": unit_name,
         "procedure_type": procedure_type,
+        "preferred_date_iso": preferred_date_raw,
         "preferred_date": preferred_date,
         "preferred_time": preferred_time,
+    }
+
+
+def _saved_state_from_manual_webchat_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(snapshot, dict):
+        return None
+
+    service = _normalize_resume_value(snapshot.get("procedure_type"))
+    clinic_id = _normalize_resume_value(snapshot.get("unit_id"))
+    clinic_name = _normalize_resume_value(snapshot.get("unit_name"))
+    preferred_date_iso = _normalize_resume_value(snapshot.get("preferred_date_iso"))
+    preferred_time = _normalize_resume_value(snapshot.get("preferred_time"))
+    if not any((service, clinic_id, clinic_name, preferred_date_iso, preferred_time)):
+        return None
+
+    return {
+        "service": service or None,
+        "clinic_id": clinic_id or None,
+        "clinic_name": clinic_name or None,
+        "date": preferred_date_iso or None,
+        "time": preferred_time or None,
+        "selected_slot": None,
+        "session_token": None,
+        "requested_date": preferred_date_iso or None,
+        "period": None,
+        "source": "manual_webchat_summary",
     }
 
 
@@ -5616,7 +5647,9 @@ def _latest_saved_booking_state(db: Session, *, conversation: Conversation) -> d
         state["last_ai_message_id"] = str(message.id)
         state["last_ai_message_at"] = message.created_at.isoformat() if message.created_at else None
         return state
-    return None
+    return _saved_state_from_manual_webchat_snapshot(
+        _manual_webchat_booking_snapshot(db, conversation=conversation)
+    )
 
 
 def _build_resume_or_restart_response(
@@ -5697,6 +5730,35 @@ def _wizard_has_explicit_service_inbound(text: str) -> bool:
         "raspagem",
     )
     return any(keyword in normalized for keyword in keywords)
+
+
+def _is_manual_booking_progress_request(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+
+    direct_phrases = (
+        "configurei manualmente",
+        "configurado manualmente",
+        "atualizei manualmente",
+        "atualizei meu agendamento",
+        "considere essas informacoes",
+        "continue meu atendimento",
+        "o que eu salvei",
+        "oque eu salvei",
+        "o que ja salvei",
+        "oque ja salvei",
+        "ja configurei",
+        "vc viu",
+        "voce viu",
+    )
+    if any(phrase in normalized for phrase in direct_phrases):
+        return True
+
+    return "manual" in normalized and any(
+        keyword in normalized
+        for keyword in ("agendamento", "configurei", "atualizei", "salvei")
+    )
 
 
 def _wizard_active_units(db: Session, *, tenant_id: UUID) -> list[Unit]:
@@ -6334,6 +6396,36 @@ def _wizard_resume_saved_step_response(
 
     selected_slot_raw = saved_state.get("selected_slot")
     selected_slot = selected_slot_raw if isinstance(selected_slot_raw, dict) else None
+    preferred_time = _normalize_resume_value(saved_state.get("time"))
+    if not selected_slot and preferred_time:
+        slot_choices = _wizard_collect_time_choices(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=service,
+            period=period,
+            selected_date=requested_date,
+            config=config,
+        )
+        selected_slot = next(
+            (
+                choice
+                for choice in slot_choices
+                if _normalize_for_match(str(choice.get("time") or "")) == _normalize_for_match(preferred_time)
+                or _normalize_for_match(str(choice.get("label") or "")) == _normalize_for_match(preferred_time)
+            ),
+            None,
+        )
+        if selected_slot:
+            return _wizard_build_confirm_step_response(
+                procedure_type=service,
+                unit=unit,
+                selected_date=requested_date,
+                period=period,
+                selected_slot_choice=selected_slot,
+                session_token=session_token,
+            )
+
     if not selected_slot:
         return _wizard_build_time_step_response(
             db,
@@ -6657,13 +6749,45 @@ def _try_booking_wizard_response(
     force_wizard = any(keyword in normalized_inbound for keyword in BOOKING_WIZARD_FORCE_KEYWORDS)
     has_confirmation_choice = _wizard_parse_confirmation_choice(selection_token) is not None
     welcome_menu_choice = _wizard_select_welcome_menu_option(selection_token)
+    manual_progress_requested = _is_manual_booking_progress_request(inbound_text)
+    manual_followup_source = str(inbound_payload.get("source") or "").strip() == "public_webchat_summary_manual_update"
     selection_like = (
         _extract_option_index_choice(inbound_text) is not None
         or _extract_time_choice(inbound_text) is not None
         or bool(re.search(r"\b(?:svc|unit|day|time|confirm|cancel|reschedule)[_-]", _normalize_for_match(selection_token)))
     )
 
+    saved_state = _latest_saved_booking_state(db, conversation=conversation)
     latest_wizard = _latest_ai_wizard_message(db, conversation=conversation)
+    if _has_meaningful_saved_state(saved_state) and (
+        manual_followup_source
+        or manual_progress_requested
+        or (
+            conversation.channel == "webchat"
+            and _is_greeting_only_message(inbound_text)
+            and str((saved_state or {}).get("source") or "").strip() == "manual_webchat_summary"
+        )
+    ):
+        resumed_response = _wizard_resume_saved_step_response(
+            db,
+            conversation=conversation,
+            saved_state=saved_state or {},
+            config=config,
+            operation_timezone=operation_timezone,
+        )
+        resumed_metadata = (
+            resumed_response.get("metadata")
+            if isinstance(resumed_response.get("metadata"), dict)
+            else {}
+        )
+        resumed_metadata["reason"] = (
+            "manual_draft_resume_from_panel"
+            if manual_followup_source
+            else "manual_draft_resume_from_patient"
+        )
+        resumed_response["metadata"] = resumed_metadata
+        return resumed_response
+
     if latest_wizard:
         latest_payload = latest_wizard.payload if isinstance(latest_wizard.payload, dict) else {}
         latest_mode = str(latest_payload.get("mode") or "").strip()

@@ -7,6 +7,7 @@ from app.models import (
     AIAutoresponderDecision,
     Appointment,
     Conversation,
+    LinkFlowEvent,
     LinkFlowSession,
     Message,
     OutboxMessage,
@@ -3060,6 +3061,98 @@ def test_idle_conversation_over_twenty_minutes_restarts_with_welcome_menu(seeded
     scheduling_metadata = (outbound.payload or {}).get("scheduling") or {}
     assert scheduling_metadata.get("reason") in {"idle_timeout_restart", "idle_timeout_resume_options"}
     assert float(scheduling_metadata.get("idle_minutes") or 0) >= 20
+
+
+def test_webchat_manual_summary_resume_uses_saved_panel_data(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, _first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="oi",
+        channel="webchat",
+    )
+    patient = db_session.get(Patient, conversation.patient_id)
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade principal")
+    professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name="Dra. Lorenson",
+        specialty="avaliacao",
+        procedures=["Avaliacao odontologica"],
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="08:00",
+        shift_end="18:00",
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.flush()
+
+    session = LinkFlowSession(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        mode="link_flow",
+        cta_mode="webchat",
+        channel="webchat",
+        token_hash=f"manual-{conversation.id}",
+        status="linked",
+        landing_path="/agendar/tenant-a",
+        utm_payload={},
+        linked_conversation_id=conversation.id,
+        linked_patient_id=patient.id if patient else None,
+        linked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(session)
+    db_session.flush()
+
+    db_session.add(
+        LinkFlowEvent(
+            tenant_id=tenant_id,
+            link_flow_session_id=session.id,
+            event_name="webchat_summary_updated",
+            payload={
+                "unit_id": str(unit.id),
+                "procedure_type": "Avaliacao odontologica",
+                "preferred_date": "2026-05-20",
+                "preferred_time": "10:00",
+            },
+        )
+    )
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="eu ja configurei manualmente",
+        channel="webchat",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") in {"booking_wizard_time_select", "booking_wizard_confirm"}
+    assert outbound is not None
+    assert "Avaliacao odontologica" in (outbound.body or "")
+    assert "Unidade principal" in (outbound.body or "")
+    assert "me confirma qual atendimento você quer fazer" not in (outbound.body or "").lower()
 
 
 def test_welcome_message_uses_custom_greeting_from_knowledge_base(seeded_db, db_session):
