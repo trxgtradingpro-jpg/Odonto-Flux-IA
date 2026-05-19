@@ -147,6 +147,9 @@ test.describe("demo guide regression", () => {
     await expect(embeddedFrame).toBeVisible({ timeout: 30000 });
     await expect(embeddedFrame).toHaveAttribute("src", /embed=demo-webchat/);
     await expect(embeddedFrame).not.toHaveAttribute("src", /demo-webchat-clinica/);
+    const frameBox = await embeddedFrame.boundingBox();
+    expect(frameBox).not.toBeNull();
+    expect((frameBox?.width ?? 0) > ((page.viewportSize()?.width ?? 0) * 0.8)).toBeTruthy();
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
     await expect(page.getByText("Voltar para WhatsApp", { exact: true })).toBeVisible();
     await expect(page.getByText("SaaS ativo", { exact: true })).not.toBeVisible();

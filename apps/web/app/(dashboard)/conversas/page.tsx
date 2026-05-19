@@ -2674,7 +2674,12 @@ export default function ConversasPage() {
     launchDemoWhatsAppRedirect({ openInWorkspace: demoUsesWebchatEntry });
   };
 
-  const demoWorkspaceTransform = `translate3d(calc(${demoWorkspaceOpen ? "-50%" : "0%"} + ${demoWorkspaceDragOffset}px), 0, 0)`;
+  const demoWorkspaceWhatsAppTransform = demoWorkspaceOpen
+    ? `translate3d(calc(-100% + ${demoWorkspaceDragOffset}px), 0, 0)`
+    : `translate3d(${demoWorkspaceDragOffset}px, 0, 0)`;
+  const demoWorkspaceWebchatTransform = demoWorkspaceOpen
+    ? `translate3d(${demoWorkspaceDragOffset}px, 0, 0)`
+    : `translate3d(calc(100% + ${demoWorkspaceDragOffset}px), 0, 0)`;
 
   if (inboxQuery.isLoading) return <LoadingState message="Carregando inbox operacional..." />;
   if (inboxQuery.isError || !dataset) return <ErrorState message="Não foi possível carregar o inbox." />;
@@ -2691,11 +2696,14 @@ export default function ConversasPage() {
       onPointerCancel={cancelDemoWorkspaceGesture}
       style={{ touchAction: demoWorkspaceEnabled ? "pan-y" : "auto" }}
     >
-      <div
-        className="flex h-full w-[200%] max-w-none will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
-        style={{ transform: demoWorkspaceTransform }}
-      >
-        <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden">
+      <div className="relative h-full w-full overflow-hidden">
+        <div
+          className={cn(
+            "absolute inset-0 min-w-0 overflow-hidden will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            demoWorkspaceOpen ? "pointer-events-none" : "pointer-events-auto",
+          )}
+          style={{ transform: demoWorkspaceWhatsAppTransform }}
+        >
           <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.92)_46%,_rgba(237,241,239,0.95))]">
         <div className="flex min-h-0 flex-1 overflow-hidden md:p-3 lg:p-4">
           <div className="flex min-h-0 flex-1 overflow-hidden border border-white/60 bg-white/88 shadow-[0_22px_70px_rgba(15,23,42,0.10)] backdrop-blur md:rounded-[32px]">
@@ -4053,7 +4061,13 @@ export default function ConversasPage() {
       />
         </div>
 
-        <div className="relative h-full w-1/2 min-w-0 shrink-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)]">
+        <div
+          className={cn(
+            "absolute inset-0 min-w-0 overflow-hidden border-l border-white/60 bg-[linear-gradient(180deg,#f4f8f7_0%,#ecf2f0_100%)] will-change-transform transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            demoWorkspaceOpen ? "pointer-events-auto" : "pointer-events-none",
+          )}
+          style={{ transform: demoWorkspaceWebchatTransform }}
+        >
           <div className="relative h-full min-h-0 bg-white">
               {demoResolvedPublicEntryPath ? (
                 <iframe
