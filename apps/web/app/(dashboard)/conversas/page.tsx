@@ -1118,6 +1118,7 @@ export default function ConversasPage() {
   const demoTrackedAppointmentHandledRef = useRef(false);
   const demoSimulationIndexRef = useRef(0);
   const demoSimulationRunningRef = useRef(false);
+  const demoLaunchButtonPointerHandledRef = useRef(false);
   const startDemoConversationSequenceRef = useRef<() => void>(() => undefined);
   const stopDemoConversationSequenceRef = useRef<(nextStage: DemoConversationTourStage) => void>(() => undefined);
   const demoWorkspaceSwipeRef = useRef<{ startX: number; panel: "whatsapp" | "webchat" } | null>(null);
@@ -2674,6 +2675,20 @@ export default function ConversasPage() {
     launchDemoWhatsAppRedirect({ openInWorkspace: demoUsesWebchatEntry });
   };
 
+  const handleOpenDemoWhatsAppPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    demoLaunchButtonPointerHandledRef.current = true;
+    handleOpenDemoWhatsApp();
+  };
+
+  const handleOpenDemoWhatsAppClick = () => {
+    if (demoLaunchButtonPointerHandledRef.current) {
+      demoLaunchButtonPointerHandledRef.current = false;
+      return;
+    }
+    handleOpenDemoWhatsApp();
+  };
+
   const demoWorkspaceWhatsAppTransform = demoWorkspaceOpen
     ? `translate3d(calc(-100% + ${demoWorkspaceDragOffset}px), 0, 0)`
     : `translate3d(${demoWorkspaceDragOffset}px, 0, 0)`;
@@ -3618,12 +3633,13 @@ export default function ConversasPage() {
       ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
       !demoWorkspaceOpen &&
       (demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath)) ? (
-        <div className="pointer-events-none fixed bottom-6 right-6 z-[70]">
+        <div className="fixed bottom-6 right-6 z-[70]">
           <Button
             type="button"
             data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
-            className="pointer-events-auto h-12 rounded-full px-5 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
-            onClick={handleOpenDemoWhatsApp}
+            className="h-12 rounded-full px-5 shadow-[0_20px_45px_rgba(6,37,31,0.18)]"
+            onPointerDown={handleOpenDemoWhatsAppPointerDown}
+            onClick={handleOpenDemoWhatsAppClick}
           >
             <Share2 size={16} />
             {demoUsesWebchatEntry
