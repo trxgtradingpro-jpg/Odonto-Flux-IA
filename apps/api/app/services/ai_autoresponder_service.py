@@ -23,6 +23,7 @@ from app.models import (
     AppointmentEvent,
     Conversation,
     Lead,
+    LinkFlowEvent,
     LinkFlowSession,
     Message,
     MessageEvent,
@@ -1944,6 +1945,69 @@ def _linked_webchat_session(db: Session, *, conversation: Conversation) -> LinkF
     )
 
 
+def _latest_webchat_summary_draft(db: Session, *, conversation: Conversation) -> dict[str, Any]:
+    session = _linked_webchat_session(db, conversation=conversation)
+    if not session:
+        return {}
+    event = db.scalar(
+        select(LinkFlowEvent)
+        .where(
+            LinkFlowEvent.link_flow_session_id == session.id,
+            LinkFlowEvent.event_name == "webchat_summary_updated",
+        )
+        .order_by(LinkFlowEvent.occurred_at.desc(), LinkFlowEvent.created_at.desc())
+        .limit(1)
+    )
+    return event.payload if event and isinstance(event.payload, dict) else {}
+
+
+def _format_manual_booking_date(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = date.fromisoformat(raw[:10])
+    except ValueError:
+        return raw
+    return parsed.strftime("%d/%m/%Y")
+
+
+def _manual_webchat_booking_snapshot(db: Session, *, conversation: Conversation) -> dict[str, Any] | None:
+    draft = _latest_webchat_summary_draft(db, conversation=conversation)
+    if not draft:
+        return None
+
+    unit_name = None
+    unit_id_raw = draft.get("unit_id")
+    try:
+        unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
+    except (TypeError, ValueError):
+        unit_id = None
+    if unit_id:
+        unit = db.scalar(
+            select(Unit).where(
+                Unit.id == unit_id,
+                Unit.tenant_id == conversation.tenant_id,
+                Unit.is_active.is_(True),
+            )
+        )
+        unit_name = unit.name if unit else None
+
+    procedure_type = str(draft.get("procedure_type") or "").strip() or None
+    preferred_date = _format_manual_booking_date(str(draft.get("preferred_date") or "").strip() or None)
+    preferred_time = str(draft.get("preferred_time") or "").strip() or None
+
+    if not any([unit_name, procedure_type, preferred_date, preferred_time]):
+        return None
+
+    return {
+        "unit_name": unit_name,
+        "procedure_type": procedure_type,
+        "preferred_date": preferred_date,
+        "preferred_time": preferred_time,
+    }
+
+
 def _placeholder_webchat_patient(patient: Patient | None) -> bool:
     if not patient:
         return False
@@ -2823,6 +2887,30 @@ def _appointment_lookup_response(
     appointments = _active_patient_appointments(db, conversation=conversation, limit=5)
 
     if not appointments:
+        manual_snapshot = _manual_webchat_booking_snapshot(db, conversation=conversation)
+        if manual_snapshot:
+            lines = [
+                "Ainda nao existe um horario confirmado no sistema para o seu cadastro.",
+                "Mas estes dados ja ficaram salvos no seu atendimento:",
+            ]
+            if manual_snapshot.get("procedure_type"):
+                lines.append(f"• Servico: {manual_snapshot['procedure_type']}")
+            if manual_snapshot.get("unit_name"):
+                lines.append(f"• Unidade: {manual_snapshot['unit_name']}")
+            if manual_snapshot.get("preferred_date"):
+                lines.append(f"• Data desejada: {manual_snapshot['preferred_date']}")
+            if manual_snapshot.get("preferred_time"):
+                lines.append(f"• Horario desejado: {manual_snapshot['preferred_time']}")
+            lines.append("Se quiser, eu posso continuar a confirmacao desse horario para voce agora.")
+            return {
+                "mode": "appointment_lookup_response",
+                "response_text": "\n".join(lines),
+                "metadata": {
+                    "reason": "appointment_lookup_manual_draft",
+                    "appointments": [],
+                    "manual_booking_snapshot": manual_snapshot,
+                },
+            }
         return {
             "mode": "appointment_lookup_response",
             "response_text": (
