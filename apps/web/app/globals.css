@@ -125,6 +125,12 @@ body {
     repeat;
 }
 
+html[data-demo-webchat-workspace-open="true"] [data-app-shell-sidebar="true"],
+html[data-demo-webchat-workspace-open="true"] [data-app-shell-topbar="true"],
+html[data-demo-webchat-workspace-open="true"] [data-app-shell-support-fab="true"] {
+  display: none !important;
+}
+
 img,
 svg,
 video,

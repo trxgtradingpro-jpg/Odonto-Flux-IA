@@ -394,6 +394,22 @@ export function GuidedDemoController({ pathname, session }: DemoGuidedController
     !(progress.step === "appointment_detected" && pathname === "/agenda");
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    const shouldHideChrome = pathname === "/conversas" && isWebchatEntry && webchatWorkspaceOpen;
+    if (shouldHideChrome) {
+      document.documentElement.dataset.demoWebchatWorkspaceOpen = "true";
+    } else if (document.documentElement.dataset.demoWebchatWorkspaceOpen === "true") {
+      delete document.documentElement.dataset.demoWebchatWorkspaceOpen;
+    }
+
+    return () => {
+      if (document.documentElement.dataset.demoWebchatWorkspaceOpen === "true") {
+        delete document.documentElement.dataset.demoWebchatWorkspaceOpen;
+      }
+    };
+  }, [isWebchatEntry, pathname, webchatWorkspaceOpen]);
+
+  useEffect(() => {
     if (!showOverlay) return;
 
     const handleViewportChange = () => setViewportTick((current) => current + 1);

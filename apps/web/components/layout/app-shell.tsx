@@ -16,6 +16,7 @@ import { brandingSurfaceClass, useBranding } from "@/hooks/use-branding";
 import { OwnerUnitScopeProvider } from "@/hooks/use-owner-unit-scope";
 import { useSession } from "@/hooks/use-session";
 import { api } from "@/lib/api";
+import { DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, type DemoWebchatWorkspaceDetail } from "@/lib/demo-tour";
 import { clearDemoEntryTargetPath, readDemoEntryTargetPath } from "@/lib/demo-session";
 import { canAccessPage, findManagedPageByPathname, getAccessiblePages, getFirstAccessiblePageHref } from "@/lib/page-access";
 import { Button, cn } from "@odontoflux/ui";
@@ -47,6 +48,7 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
   const [quickFocusPageKey, setQuickFocusPageKey] = useState<QuickFocusPageKey | null>(null);
   const [showFloatingQuickAccess, setShowFloatingQuickAccess] = useState(false);
   const [hideSidebarForGuide, setHideSidebarForGuide] = useState(false);
+  const [hideChromeForDemoWorkspace, setHideChromeForDemoWorkspace] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const sessionQuery = useSession();
   const brandingQuery = useBranding();
@@ -56,7 +58,8 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
   const isConversationWorkspace = pathname === "/conversas";
   const isAgendaWorkspace = pathname === "/agenda";
   const isImmersiveWorkspace = isConversationWorkspace || isAgendaWorkspace;
-  const reserveGuideDockedRail = hideSidebarForGuide && isImmersiveWorkspace;
+  const hideDashboardChrome = isConversationWorkspace && hideChromeForDemoWorkspace;
+  const reserveGuideDockedRail = hideSidebarForGuide && isImmersiveWorkspace && !hideDashboardChrome;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -111,6 +114,31 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const syncWorkspaceChrome = (detail?: DemoWebchatWorkspaceDetail | null) => {
+      const shouldHide = Boolean(isConversationWorkspace && detail?.open);
+      setHideChromeForDemoWorkspace((current) => (current === shouldHide ? current : shouldHide));
+      if (shouldHide) {
+        setMobileSidebarOpen(false);
+      }
+    };
+
+    const scopedWindow = window as Window & {
+      __odontofluxDemoWebchatWorkspaceOpen?: boolean;
+    };
+    syncWorkspaceChrome({ open: scopedWindow.__odontofluxDemoWebchatWorkspaceOpen ?? false });
+
+    const handleWorkspaceUpdate = (event: Event) => {
+      syncWorkspaceChrome((event as CustomEvent<DemoWebchatWorkspaceDetail>).detail);
+    };
+
+    window.addEventListener(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, handleWorkspaceUpdate as EventListener);
+    return () =>
+      window.removeEventListener(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, handleWorkspaceUpdate as EventListener);
+  }, [isConversationWorkspace]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -240,7 +268,7 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
         <div className={`branded-app-shell flex h-dvh w-full overflow-hidden ${surfaceClass}`}>
           <Sidebar
             collapsed={collapsed}
-            autoHide={hideSidebarForGuide}
+            autoHide={hideSidebarForGuide || hideDashboardChrome}
             mobileOpen={mobileSidebarOpen}
             onCloseMobile={() => setMobileSidebarOpen(false)}
             session={sessionQuery.data}
@@ -256,15 +284,17 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
                 isImmersiveWorkspace ? "flex flex-col overflow-hidden" : "overflow-y-auto",
               )}
             >
-              <Topbar
-                onLogout={onLogout}
-                collapsed={collapsed}
-                onToggleSidebar={handleToggleSidebar}
-                session={sessionQuery.data}
-                branding={branding}
-                quickAccessPages={quickAccessPages}
-                onOpenQuickAccess={handleOpenQuickFocus}
-              />
+              {!hideDashboardChrome ? (
+                <Topbar
+                  onLogout={onLogout}
+                  collapsed={collapsed}
+                  onToggleSidebar={handleToggleSidebar}
+                  session={sessionQuery.data}
+                  branding={branding}
+                  quickAccessPages={quickAccessPages}
+                  onOpenQuickAccess={handleOpenQuickFocus}
+                />
+              ) : null}
               <main
                 className={cn(
                   "min-w-0 transition-[padding] duration-700 ease-in-out",

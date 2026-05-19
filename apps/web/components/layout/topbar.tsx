@@ -47,6 +47,7 @@ export function Topbar({
 
   return (
     <header
+      data-app-shell-topbar="true"
       className="flex min-h-16 shrink-0 min-w-0 items-center justify-between gap-2 border-b border-border bg-card/90 px-3 py-2 backdrop-blur-md sm:px-4 md:px-6 lg:px-8"
       style={{
         boxShadow: "0 8px 24px rgba(0,0,0,0.05)",

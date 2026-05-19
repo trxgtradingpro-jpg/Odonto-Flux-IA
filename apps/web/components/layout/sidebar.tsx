@@ -218,6 +218,7 @@ export function Sidebar({
       ) : null}
 
       <aside
+        data-app-shell-sidebar="true"
         className={cn(
           "fixed inset-y-0 left-0 z-40 flex h-dvh max-w-[84vw] shrink-0 flex-col overflow-y-auto overflow-x-hidden overscroll-contain border-r border-border bg-card transition-[width,transform,opacity,border-color,box-shadow] duration-700 ease-in-out [scrollbar-gutter:stable]",
           "w-[286px] -translate-x-full shadow-none",

@@ -130,19 +130,27 @@ test.describe("demo guide regression", () => {
     );
 
     await page.goto("http://127.0.0.1:3000/conversas", { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle");
 
     await expect(page.getByText("Abrir webchat", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
     await expect(page.getByText("Teste o webchat publico da demo")).toBeVisible();
+    await expect(page.locator('[data-demo-webchat-workspace="true"]')).toHaveCount(1, { timeout: 30000 });
+
+    const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
+    await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
 
     await page.getByText("Abrir webchat", { exact: true }).click();
 
+    await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "webchat");
     const embeddedFrame = page.locator("iframe").first();
     await expect(embeddedFrame).toBeVisible({ timeout: 30000 });
     await expect(embeddedFrame).toHaveAttribute("src", /embed=demo-webchat/);
     await expect(embeddedFrame).not.toHaveAttribute("src", /demo-webchat-clinica/);
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
     await expect(page.getByText("Voltar para WhatsApp", { exact: true })).toBeVisible();
+    await expect(page.getByText("SaaS ativo", { exact: true })).not.toBeVisible();
+    await expect(page.getByRole("link", { name: "Dashboard" })).not.toBeVisible();
 
     const webchatFrame = page.frameLocator("iframe").first();
     await expect(webchatFrame.getByText("Oi, eu sou a assistente de agendamento.")).toBeVisible();
@@ -151,5 +159,12 @@ test.describe("demo guide regression", () => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
       .toBeTruthy();
+
+    await page.getByText("Voltar para WhatsApp", { exact: true }).click();
+
+    await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
+    await expect(page.getByText("SaaS ativo", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /webchat/i }).first()).toBeVisible();
   });
 });

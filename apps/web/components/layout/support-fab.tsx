@@ -185,6 +185,7 @@ export function SupportFab() {
       ) : null}
 
       <button
+        data-app-shell-support-fab="true"
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={`fixed z-[70] inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300 sm:h-14 sm:w-14 ${fabPositionClass}`}

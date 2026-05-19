@@ -1956,9 +1956,15 @@ export default function ConversasPage() {
 
     const detail: DemoWebchatWorkspaceDetail = { open: demoWorkspaceOpen };
     const scopedWindow = window as Window & { __odontofluxDemoWebchatWorkspaceOpen?: boolean };
+    if (demoWorkspaceOpen) {
+      document.documentElement.dataset.demoWebchatWorkspaceOpen = "true";
+    } else {
+      delete document.documentElement.dataset.demoWebchatWorkspaceOpen;
+    }
     scopedWindow.__odontofluxDemoWebchatWorkspaceOpen = demoWorkspaceOpen;
     window.dispatchEvent(new CustomEvent(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, { detail }));
     return () => {
+      delete document.documentElement.dataset.demoWebchatWorkspaceOpen;
       scopedWindow.__odontofluxDemoWebchatWorkspaceOpen = false;
       window.dispatchEvent(new CustomEvent(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, { detail: { open: false } }));
     };
@@ -2611,6 +2617,8 @@ export default function ConversasPage() {
   const handleDemoWorkspacePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!demoWorkspaceEnabled) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-demo-workspace-ignore-swipe="true"]')) return;
     demoWorkspaceSwipeRef.current = {
       startX: event.clientX,
       panel: demoWorkspacePanel,
@@ -2674,6 +2682,8 @@ export default function ConversasPage() {
   return (
     <div
       ref={demoWorkspaceViewportRef}
+      data-demo-webchat-workspace="true"
+      data-demo-webchat-workspace-panel={demoWorkspaceOpen ? "webchat" : "whatsapp"}
       className="relative h-full min-h-0 flex-1 overflow-hidden"
       onPointerDown={handleDemoWorkspacePointerDown}
       onPointerMove={handleDemoWorkspacePointerMove}
@@ -4065,7 +4075,9 @@ export default function ConversasPage() {
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-end p-3 sm:p-4">
               <button
                 type="button"
+                data-demo-workspace-ignore-swipe="true"
                 className="pointer-events-auto inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/80 bg-white/94 px-4 text-sm font-medium text-stone-700 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur transition hover:border-stone-300 hover:bg-white"
+                onPointerDown={(event) => event.stopPropagation()}
                 onClick={closeDemoWebchatWorkspace}
               >
                 <ArrowLeft size={15} />
