@@ -302,6 +302,8 @@ type BrandingConfig = {
   fullscreen_foreground_color: string;
   surface_style: "soft" | "flat" | "glass";
   logo_data_url?: string | null;
+  demo_background_image_url?: string | null;
+  demo_background_opacity: number;
 };
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {
@@ -410,13 +412,15 @@ const DEFAULT_BRANDING_CONFIG: BrandingConfig = {
   fullscreen_foreground_color: "#ffffff",
   surface_style: "soft",
   logo_data_url: null,
+  demo_background_image_url: "/images/dental-floss-smile-background.png",
+  demo_background_opacity: 0.18,
 };
 
 const BRANDING_PRESETS: Array<{
   id: string;
   name: string;
   description: string;
-  config: Omit<BrandingConfig, "logo_data_url">;
+  config: Omit<BrandingConfig, "logo_data_url" | "demo_background_image_url" | "demo_background_opacity">;
 }> = [
   {
     id: "neon-clinic",
@@ -1236,6 +1240,17 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
         : typeof theme.logo_data_url === "string"
           ? theme.logo_data_url
           : null;
+    const demoBackgroundImage =
+      typeof theme.demo_background_image_url === "string" && theme.demo_background_image_url.trim()
+        ? theme.demo_background_image_url
+        : DEFAULT_BRANDING_CONFIG.demo_background_image_url;
+    const rawDemoBackgroundOpacity =
+      typeof theme.demo_background_opacity === "number"
+        ? theme.demo_background_opacity
+        : Number(theme.demo_background_opacity);
+    const demoBackgroundOpacity = Number.isFinite(rawDemoBackgroundOpacity)
+      ? Math.min(Math.max(rawDemoBackgroundOpacity, 0), 1)
+      : DEFAULT_BRANDING_CONFIG.demo_background_opacity;
 
     setBrandingDraft({
       primary_color: readThemeColor(theme.primary_color, DEFAULT_BRANDING_CONFIG.primary_color),
@@ -1266,6 +1281,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
       surface_style:
         theme.surface_style === "flat" || theme.surface_style === "glass" ? theme.surface_style : "soft",
       logo_data_url: logo,
+      demo_background_image_url: demoBackgroundImage,
+      demo_background_opacity: demoBackgroundOpacity,
     });
     setBrandingLogoPreview(logo);
   }, [settingsQuery.data]);
@@ -2132,6 +2149,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     setBrandingDraft((current) => ({
       ...DEFAULT_BRANDING_CONFIG,
       logo_data_url: current.logo_data_url ?? null,
+      demo_background_image_url: current.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
+      demo_background_opacity: current.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
     }));
     toast.success("Cores do tema restauradas para o padrao.");
   };
@@ -2140,6 +2159,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     const nextDraft: BrandingConfig = {
       ...preset.config,
       logo_data_url: brandingDraft.logo_data_url ?? null,
+      demo_background_image_url: brandingDraft.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
+      demo_background_opacity: brandingDraft.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
     };
 
     setBrandingDraft(nextDraft);
@@ -2150,6 +2171,8 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     const nextDraft: BrandingConfig = {
       ...preset.config,
       logo_data_url: brandingDraft.logo_data_url ?? null,
+      demo_background_image_url: brandingDraft.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
+      demo_background_opacity: brandingDraft.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
     };
 
     setBrandingDraft(nextDraft);

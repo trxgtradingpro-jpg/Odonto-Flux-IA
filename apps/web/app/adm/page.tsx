@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -199,6 +199,11 @@ type ProspectDemoIntakeSettings = {
   cta_mode: ProspectDemoLinkFlowCtaMode;
 };
 
+type ProspectDemoBackgroundSettings = {
+  background_image_url: string;
+  background_image_opacity: number;
+};
+
 type PlatformWhatsAppAccountItem = {
   id: string;
   provider_name: string;
@@ -229,9 +234,14 @@ type ProspectEditFormState = {
   demo_ai_enabled: boolean;
   demo_whatsapp_enabled: boolean;
   demo_max_consecutive_auto_replies: number;
+  demo_background_image_url: string;
+  demo_background_opacity: number;
   notes: string;
   do_not_contact: boolean;
 };
+
+const DEFAULT_DEMO_BACKGROUND_IMAGE_URL = "/images/dental-floss-smile-background.png";
+const DEFAULT_DEMO_BACKGROUND_OPACITY = 0.18;
 
 const STATUS_OPTIONS = [
   "novo",
@@ -393,6 +403,69 @@ function getDemoIntakeSettingsSnapshot(prospect: Prospect): ProspectDemoIntakeSe
   };
 }
 
+function clampDemoBackgroundOpacity(value: number) {
+  if (!Number.isFinite(value)) return DEFAULT_DEMO_BACKGROUND_OPACITY;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function getDemoBackgroundSettingsSnapshot(prospect: Prospect): ProspectDemoBackgroundSettings {
+  const raw = prospect.proposal_snapshot?.demo_branding;
+  const value = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const imageUrl =
+    typeof value.background_image_url === "string" && value.background_image_url.trim()
+      ? value.background_image_url
+      : DEFAULT_DEMO_BACKGROUND_IMAGE_URL;
+  const rawOpacity =
+    typeof value.background_image_opacity === "number"
+      ? value.background_image_opacity
+      : Number(value.background_image_opacity);
+
+  return {
+    background_image_url: imageUrl,
+    background_image_opacity: clampDemoBackgroundOpacity(rawOpacity),
+  };
+}
+
+function buildDemoBackgroundSnapshot(imageUrl: string, opacity: number) {
+  return {
+    background_image_url: imageUrl || DEFAULT_DEMO_BACKGROUND_IMAGE_URL,
+    background_image_opacity: clampDemoBackgroundOpacity(opacity),
+  };
+}
+
+function buildDemoBackgroundPreviewStyle(imageUrl: string, opacity: number): CSSProperties {
+  const resolvedImageUrl = imageUrl || DEFAULT_DEMO_BACKGROUND_IMAGE_URL;
+  const overlayOpacity = 1 - clampDemoBackgroundOpacity(opacity);
+  const safeUrl = resolvedImageUrl.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return {
+    backgroundColor: "#f2f4f7",
+    backgroundImage: `linear-gradient(135deg, rgba(242, 244, 247, ${overlayOpacity}), rgba(242, 244, 247, ${overlayOpacity})), radial-gradient(circle at 8% 0%, rgba(15, 118, 110, 0.16), transparent 42%), radial-gradient(circle at 94% 100%, rgba(245, 158, 11, 0.14), transparent 38%), url("${safeUrl}")`,
+    backgroundPosition: "center center, left top, right bottom, center center",
+    backgroundSize: "cover, auto, auto, cover",
+    backgroundRepeat: "no-repeat",
+  };
+}
+
+function readImageFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Selecione um arquivo de imagem."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Nao foi possivel ler a imagem selecionada."));
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : null;
+      if (!dataUrl) {
+        reject(new Error("Nao foi possivel ler a imagem selecionada."));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function platformWhatsAppAccountLabel(account: PlatformWhatsAppAccountItem) {
   const primary = (account.display_phone || "").trim() || account.phone_number_id;
   const provider = humanize(account.provider_name || "numero");
@@ -403,6 +476,7 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
   const demoAi = getDemoAiSettingsSnapshot(prospect);
   const demoWhatsApp = getDemoWhatsAppSettingsSnapshot(prospect);
   const demoIntake = getDemoIntakeSettingsSnapshot(prospect);
+  const demoBackground = getDemoBackgroundSettingsSnapshot(prospect);
   return {
     clinic_name: prospect.clinic_name ?? "",
     owner_name: prospect.owner_name ?? "",
@@ -424,6 +498,8 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     demo_ai_enabled: demoAi.enabled,
     demo_whatsapp_enabled: demoAi.whatsapp_enabled,
     demo_max_consecutive_auto_replies: demoAi.max_consecutive_auto_replies,
+    demo_background_image_url: demoBackground.background_image_url,
+    demo_background_opacity: demoBackground.background_image_opacity,
     notes: prospect.notes ?? "",
     do_not_contact: Boolean(prospect.do_not_contact),
   };
@@ -440,6 +516,106 @@ function buildDemoIntakeSnapshot(
       cta_mode: ctaMode,
     },
   };
+}
+
+function DemoBackgroundFieldset({
+  imageUrl,
+  opacity,
+  disabled,
+  helper,
+  onUpload,
+  onResetToDefault,
+  onOpacityChange,
+}: {
+  imageUrl: string;
+  opacity: number;
+  disabled?: boolean;
+  helper: string;
+  onUpload: (event: ChangeEvent<HTMLInputElement>) => void;
+  onResetToDefault: () => void;
+  onOpacityChange: (opacity: number) => void;
+}) {
+  const opacityPercent = Math.round(clampDemoBackgroundOpacity(opacity) * 100);
+  const isDefaultBackground = imageUrl === DEFAULT_DEMO_BACKGROUND_IMAGE_URL;
+  const previewStyle = buildDemoBackgroundPreviewStyle(imageUrl, opacity);
+
+  return (
+    <Field
+      label="Fundo da demo"
+      helper={helper}
+      className="lg:col-span-4"
+    >
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="space-y-4 rounded-2xl border border-stone-200 bg-white p-4">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Imagem personalizada</label>
+              <Input type="file" accept="image/*" onChange={onUpload} disabled={disabled} className="mt-2" data-testid="demo-background-file-input" />
+              <p className="mt-2 text-xs text-stone-500">
+                {isDefaultBackground
+                  ? "Usando a imagem padrao atual do sistema."
+                  : "Uma imagem personalizada foi carregada para esta demo."}
+              </p>
+            </div>
+            <Button type="button" variant="outline" onClick={onResetToDefault} disabled={disabled}>
+              Usar imagem padrao
+            </Button>
+          </div>
+          <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Transparencia da imagem</p>
+                <p className="mt-1 text-sm text-stone-600">Ajuste quanto do fundo aparece na demo.</p>
+              </div>
+              <div className="rounded-full border border-stone-200 bg-white px-3 py-1 text-sm font-semibold text-stone-700">
+                {opacityPercent}%
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              data-testid="demo-background-opacity-slider"
+              value={opacityPercent}
+              onChange={(event) => onOpacityChange(Number(event.target.value) / 100)}
+              disabled={disabled}
+              className="mt-4 w-full accent-emerald-600"
+            />
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-[28px] border border-white/70 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+          <div className="border-b border-white/60 px-5 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Previa real da demo</p>
+            <p className="mt-1 text-sm text-stone-600">Esse fundo vai aparecer na area interna da clinica demo.</p>
+          </div>
+          <div className="p-4">
+            <div
+              data-testid="demo-background-preview"
+              className="rounded-[24px] border border-white/70 shadow-[0_18px_40px_rgba(15,23,42,0.10)]"
+              style={previewStyle}
+            >
+              <div className="space-y-4 rounded-[24px] p-4">
+                <div className="rounded-2xl border border-white/80 bg-white/92 p-4 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Clinica ativa</p>
+                  <p className="mt-2 text-xl font-black text-stone-950">Clinica demo</p>
+                  <p className="mt-1 text-sm leading-6 text-stone-600">
+                    Assim o fundo vai aparecer por tras do painel interno da demonstracao.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/80 bg-white/88 p-4 shadow-sm">
+                  <p className="text-sm font-semibold text-stone-900">WhatsApp, agenda e operacao</p>
+                  <p className="mt-1 text-sm leading-6 text-stone-600">
+                    Mantemos a mesma legibilidade do sistema, so trocando a imagem de fundo por clinica demo.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Field>
+  );
 }
 
 function getOutreachSnapshot(prospect: Prospect): OutreachSnapshot {
@@ -889,8 +1065,23 @@ function CreateProspectForm({
   const [demoAiEnabled, setDemoAiEnabled] = useState(true);
   const [demoWhatsappEnabled, setDemoWhatsappEnabled] = useState(true);
   const [demoMaxConsecutiveAutoReplies, setDemoMaxConsecutiveAutoReplies] = useState(10);
+  const [demoBackgroundImageUrl, setDemoBackgroundImageUrl] = useState(DEFAULT_DEMO_BACKGROUND_IMAGE_URL);
+  const [demoBackgroundOpacity, setDemoBackgroundOpacity] = useState(DEFAULT_DEMO_BACKGROUND_OPACITY);
   const [services, setServices] = useState("Consulta inicial, Avaliacao clinica, Retorno");
   const [notes, setNotes] = useState("");
+
+  const handleCreateDemoBackgroundUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      setDemoBackgroundImageUrl(dataUrl);
+      toast.success("Imagem da demo carregada na previa.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nao foi possivel carregar a imagem da demo.");
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -924,6 +1115,7 @@ function CreateProspectForm({
               whatsapp_enabled: demoWhatsappEnabled,
               max_consecutive_auto_replies: Math.min(Math.max(demoMaxConsecutiveAutoReplies, 1), 20),
             },
+            demo_branding: buildDemoBackgroundSnapshot(demoBackgroundImageUrl, demoBackgroundOpacity),
           },
           notes,
           services: serviceItems,
@@ -950,6 +1142,8 @@ function CreateProspectForm({
       setDemoAiEnabled(true);
       setDemoWhatsappEnabled(true);
       setDemoMaxConsecutiveAutoReplies(10);
+      setDemoBackgroundImageUrl(DEFAULT_DEMO_BACKGROUND_IMAGE_URL);
+      setDemoBackgroundOpacity(DEFAULT_DEMO_BACKGROUND_OPACITY);
       setNotes("");
       onCreated(data);
     },
@@ -1156,6 +1350,18 @@ function CreateProspectForm({
                   </div>
                 </div>
               </Field>
+              <DemoBackgroundFieldset
+                imageUrl={demoBackgroundImageUrl}
+                opacity={demoBackgroundOpacity}
+                helper="A imagem padrao ja entra carregada. Se quiser, troque por outra do dispositivo e ajuste a transparencia antes de salvar."
+                onUpload={handleCreateDemoBackgroundUpload}
+                onResetToDefault={() => {
+                  setDemoBackgroundImageUrl(DEFAULT_DEMO_BACKGROUND_IMAGE_URL);
+                  toast.success("Fundo da demo voltou para a imagem padrao.");
+                }}
+                onOpacityChange={setDemoBackgroundOpacity}
+                disabled={mutation.isPending}
+              />
               <Field label="Servicos da clinica" helper="Separe por virgula. A demo usa isso para equipe, agenda e IA." className="lg:col-span-4">
                 <textarea
                   className="min-h-[92px] w-full rounded-xl border border-stone-300 bg-white px-4 py-3 text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
@@ -1234,6 +1440,8 @@ function EditProspectDrawer({
           demo_ai_enabled: true,
           demo_whatsapp_enabled: true,
           demo_max_consecutive_auto_replies: 10,
+          demo_background_image_url: DEFAULT_DEMO_BACKGROUND_IMAGE_URL,
+          demo_background_opacity: DEFAULT_DEMO_BACKGROUND_OPACITY,
           notes: "",
           do_not_contact: false,
         },
@@ -1247,6 +1455,19 @@ function EditProspectDrawer({
 
   const updateField = <Key extends keyof ProspectEditFormState>(key: Key, value: ProspectEditFormState[Key]) => {
     setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleEditDemoBackgroundUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const dataUrl = await readImageFileAsDataUrl(file);
+      updateField("demo_background_image_url", dataUrl);
+      toast.success("Nova imagem da demo carregada na previa.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nao foi possivel carregar a imagem da demo.");
+    }
   };
 
   const mutation = useMutation({
@@ -1279,6 +1500,7 @@ function EditProspectDrawer({
               whatsapp_enabled: form.demo_whatsapp_enabled,
               max_consecutive_auto_replies: Math.min(Math.max(form.demo_max_consecutive_auto_replies, 1), 20),
             },
+            demo_branding: buildDemoBackgroundSnapshot(form.demo_background_image_url, form.demo_background_opacity),
           },
           notes: form.notes,
           do_not_contact: form.do_not_contact,
@@ -1464,6 +1686,22 @@ function EditProspectDrawer({
                   </div>
                 </div>
               </Field>
+              <DemoBackgroundFieldset
+                imageUrl={form.demo_background_image_url}
+                opacity={form.demo_background_opacity}
+                helper={
+                  prospect.demo_tenant_id
+                    ? "Ao salvar, a imagem e a transparencia passam a valer tambem na demo ja criada."
+                    : "Essa configuracao fica pronta e sera aplicada quando a demo desta clinica for gerada."
+                }
+                onUpload={handleEditDemoBackgroundUpload}
+                onResetToDefault={() => {
+                  updateField("demo_background_image_url", DEFAULT_DEMO_BACKGROUND_IMAGE_URL);
+                  toast.success("Fundo da demo voltou para a imagem padrao.");
+                }}
+                onOpacityChange={(opacity) => updateField("demo_background_opacity", opacity)}
+                disabled={mutation.isPending}
+              />
               <Field label="Cidade" helper="Cidade da clinica.">
                 <Input value={form.city} onChange={(event) => updateField("city", event.target.value)} disabled={mutation.isPending} />
               </Field>

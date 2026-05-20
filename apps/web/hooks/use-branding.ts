@@ -30,6 +30,8 @@ export type BrandingTheme = {
   fullscreenForegroundColor: string;
   surfaceStyle: SurfaceStyle;
   logoDataUrl: string | null;
+  demoBackgroundImageUrl: string;
+  demoBackgroundOpacity: number;
   clinicName: string;
 };
 
@@ -49,6 +51,8 @@ const DEFAULT_BRANDING: BrandingTheme = {
   fullscreenForegroundColor: "#ffffff",
   surfaceStyle: "soft",
   logoDataUrl: null,
+  demoBackgroundImageUrl: "/images/dental-floss-smile-background.png",
+  demoBackgroundOpacity: 0.18,
   clinicName: BRAND_NAME,
 };
 
@@ -82,6 +86,12 @@ function sanitizeHexColor(value: unknown, fallback: string): string {
 function parseSurfaceStyle(value: unknown): SurfaceStyle {
   if (value === "flat" || value === "glass") return value;
   return "soft";
+}
+
+function parseOpacity(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 0), 1);
 }
 
 export function useBranding() {
@@ -137,6 +147,12 @@ export function useBranding() {
         ),
         surfaceStyle: parseSurfaceStyle(themePayload.surface_style),
         logoDataUrl,
+        demoBackgroundImageUrl:
+          readString(themePayload.demo_background_image_url) ?? DEFAULT_BRANDING.demoBackgroundImageUrl,
+        demoBackgroundOpacity: parseOpacity(
+          themePayload.demo_background_opacity,
+          DEFAULT_BRANDING.demoBackgroundOpacity,
+        ),
         clinicName,
       };
     },

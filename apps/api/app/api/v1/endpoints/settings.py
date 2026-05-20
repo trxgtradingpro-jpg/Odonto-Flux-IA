@@ -57,6 +57,8 @@ class BrandingThemeInput(BaseModel):
     fullscreen_foreground_color: str = Field(default="#ffffff")
     surface_style: str = Field(default="soft")
     logo_data_url: str | None = None
+    demo_background_image_url: str | None = Field(default="/images/dental-floss-smile-background.png")
+    demo_background_opacity: float = Field(default=0.18, ge=0.0, le=1.0)
 
     @field_validator(
         "primary_color",

@@ -41,6 +41,11 @@ function getReadableForegroundTriplet(color: string): string {
   return luminance > 0.58 ? "17 24 39" : "255 255 255";
 }
 
+function buildCssUrlValue(url: string): string {
+  const safeValue = url.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `url("${safeValue}")`;
+}
+
 export function AppShell({ children, onLogout }: { children: React.ReactNode; onLogout: () => void }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -88,6 +93,8 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
     root.style.setProperty("--fullscreen-header", branding.fullscreenHeaderColor);
     root.style.setProperty("--fullscreen-accent", branding.fullscreenAccentColor);
     root.style.setProperty("--fullscreen-foreground", branding.fullscreenForegroundColor);
+    root.style.setProperty("--branded-demo-background-image", buildCssUrlValue(branding.demoBackgroundImageUrl));
+    root.style.setProperty("--branded-demo-background-opacity", String(branding.demoBackgroundOpacity));
   }, [branding]);
 
   const surfaceClass = useMemo(

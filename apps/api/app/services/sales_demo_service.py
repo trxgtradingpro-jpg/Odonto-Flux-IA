@@ -97,6 +97,29 @@ DEMO_INTAKE_DEFAULT_SETTINGS = {
     },
 }
 
+DEMO_BACKGROUND_DEFAULT_IMAGE_URL = "/images/dental-floss-smile-background.png"
+DEMO_BACKGROUND_DEFAULT_OPACITY = 0.18
+
+DEMO_BRANDING_THEME_DEFAULTS = {
+    "primary_color": "#0f766e",
+    "secondary_color": "#0ea5a4",
+    "accent_color": "#f59e0b",
+    "background_color": "#f2f4f7",
+    "surface_color": "#eef2f6",
+    "card_color": "#ffffff",
+    "text_color": "#1c1917",
+    "muted_text_color": "#475569",
+    "border_color": "#d6d3d1",
+    "fullscreen_background_color": "#0c0a09",
+    "fullscreen_header_color": "#111111",
+    "fullscreen_accent_color": "#10b981",
+    "fullscreen_foreground_color": "#ffffff",
+    "surface_style": "soft",
+    "logo_data_url": None,
+    "demo_background_image_url": DEMO_BACKGROUND_DEFAULT_IMAGE_URL,
+    "demo_background_opacity": DEMO_BACKGROUND_DEFAULT_OPACITY,
+}
+
 SCORE_RULES = {
     "demo_opened": 10,
     "login_completed": 10,
@@ -875,6 +898,52 @@ def _demo_intake_settings(prospect: ProspectAccount) -> dict:
     return _normalize_demo_intake_settings(raw if isinstance(raw, dict) else None)
 
 
+def _normalize_demo_background_settings(value: dict | None) -> dict[str, str | float]:
+    raw = value if isinstance(value, dict) else {}
+    image_url = str(raw.get("background_image_url") or "").strip() or DEMO_BACKGROUND_DEFAULT_IMAGE_URL
+    try:
+        opacity = float(raw.get("background_image_opacity", DEMO_BACKGROUND_DEFAULT_OPACITY))
+    except (TypeError, ValueError):
+        opacity = DEMO_BACKGROUND_DEFAULT_OPACITY
+    return {
+        "background_image_url": image_url,
+        "background_image_opacity": max(0.0, min(opacity, 1.0)),
+    }
+
+
+def _demo_background_settings(prospect: ProspectAccount) -> dict[str, str | float]:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    raw = snapshot.get("demo_branding")
+    return _normalize_demo_background_settings(raw if isinstance(raw, dict) else None)
+
+
+def ensure_demo_branding_ready(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    prospect: ProspectAccount | None = None,
+) -> dict:
+    linked_prospect = prospect or db.scalar(
+        select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1)
+    )
+    desired_background = (
+        _demo_background_settings(linked_prospect)
+        if linked_prospect
+        else _normalize_demo_background_settings(None)
+    )
+    theme_item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "branding.theme"))
+    current_theme = dict(theme_item.value) if theme_item and isinstance(theme_item.value, dict) else {}
+    next_theme = {
+        **DEMO_BRANDING_THEME_DEFAULTS,
+        **current_theme,
+        "demo_background_image_url": desired_background["background_image_url"],
+        "demo_background_opacity": desired_background["background_image_opacity"],
+    }
+    _upsert_setting(db, tenant_id=tenant_id, key="branding.theme", value=next_theme)
+    _upsert_setting(db, tenant_id=tenant_id, key="branding.logo_data_url", value=next_theme.get("logo_data_url"))
+    return next_theme
+
+
 def ensure_demo_intake_config_ready(
     db: Session,
     *,
@@ -928,6 +997,23 @@ def _sanitize_demo_whatsapp_assignment(
         )
 
     payload["demo_whatsapp"] = {"account_id": account_id}
+    return payload
+
+
+def _sanitize_demo_configuration_snapshot(
+    db: Session,
+    *,
+    snapshot: dict | None,
+    current_prospect_id: UUID | None,
+) -> dict:
+    payload = _sanitize_demo_whatsapp_assignment(
+        db,
+        snapshot=snapshot,
+        current_prospect_id=current_prospect_id,
+    )
+    payload["demo_branding"] = _normalize_demo_background_settings(
+        payload.get("demo_branding") if isinstance(payload.get("demo_branding"), dict) else None
+    )
     return payload
 
 
@@ -1818,7 +1904,7 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         if existing:
             raise ApiError(status_code=409, code="PROSPECT_DUPLICATE", message="Clinica prospectada possivelmente duplicada")
 
-    sanitized_snapshot = _sanitize_demo_whatsapp_assignment(
+    sanitized_snapshot = _sanitize_demo_configuration_snapshot(
         db,
         snapshot=payload.proposal_snapshot,
         current_prospect_id=None,
@@ -1895,7 +1981,7 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
 def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id: UUID | None) -> ProspectAccount:
     data = payload.model_dump(exclude_unset=True)
     if "proposal_snapshot" in data:
-        data["proposal_snapshot"] = _sanitize_demo_whatsapp_assignment(
+        data["proposal_snapshot"] = _sanitize_demo_configuration_snapshot(
             db,
             snapshot=data.get("proposal_snapshot"),
             current_prospect_id=prospect.id,
@@ -1908,6 +1994,7 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
     if prospect.demo_tenant_id:
         ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
+        ensure_demo_branding_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
     if prospect.do_not_contact and not prospect.opt_out_at:
         prospect.opt_out_at = _now()
     add_timeline(db, prospect, event_type="prospect.updated", event_label="Dados da clinica atualizados", actor_id=actor_id, actor_type="admin", payload=data)
@@ -2104,7 +2191,7 @@ def _service_catalog_items_from_services(services: list[ProspectService]) -> lis
     ]
 
 
-def _upsert_setting(db: Session, *, tenant_id: UUID, key: str, value: dict) -> None:
+def _upsert_setting(db: Session, *, tenant_id: UUID, key: str, value) -> None:
     item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == key))
     if not item:
         item = Setting(tenant_id=tenant_id, key=key, value=jsonable_encoder(value), is_secret=False)
@@ -2138,6 +2225,7 @@ def _sync_demo_service_catalog(
 
 def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount, ai_draft: dict, services: list[ProspectService]) -> None:
     catalog_items = _service_catalog_items_from_services(services)
+    demo_background = _demo_background_settings(prospect)
     settings_payloads = {
         "clinic.profile": {
             "name": prospect.clinic_name,
@@ -2184,6 +2272,12 @@ def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount,
             "test_phone_number": prospect.test_phone_number,
             "tracking_enabled": True,
         },
+        "branding.theme": {
+            **DEMO_BRANDING_THEME_DEFAULTS,
+            "demo_background_image_url": demo_background["background_image_url"],
+            "demo_background_opacity": demo_background["background_image_opacity"],
+        },
+        "branding.logo_data_url": None,
         "intake.config": _demo_intake_settings(prospect),
     }
     for key, value in settings_payloads.items():
@@ -2632,6 +2726,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         _sync_demo_service_catalog(db, tenant_id=prospect.demo_tenant_id, services=services, demo_units=demo_units)
         ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
+        ensure_demo_branding_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         if demo_tenant and demo_units and demo_user:
             _seed_demo_operational_data(
                 db,
@@ -2644,6 +2739,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
             checklist = {**(prospect.demo_checklist or {})}
             checklist["agenda_seeded"] = True
             checklist["conversations_seeded"] = True
+            checklist["branding_applied"] = True
             prospect.demo_checklist = checklist
             db.add(prospect)
         ensure_demo_showcase_state(db, prospect=prospect)
@@ -2777,6 +2873,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     prospect.status = "demo_criada"
     ensure_demo_intake_config_ready(db, tenant_id=tenant.id, prospect=prospect)
     ensure_demo_ai_autoresponder_ready(db, tenant_id=tenant.id, prospect=prospect)
+    ensure_demo_branding_ready(db, tenant_id=tenant.id, prospect=prospect)
     add_timeline(db, prospect, event_type="demo.created", event_label="Demo personalizada gerada", actor_id=actor_id, actor_type="admin", payload={"tenant_id": str(tenant.id)})
     db.add(prospect)
     db.commit()

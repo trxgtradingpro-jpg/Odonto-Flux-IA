@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from app.core.exceptions import ApiError
 from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, User, WhatsAppAccount
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
-from app.schemas.admin_sales import ProspectUpdate
+from app.schemas.admin_sales import ProspectCreate, ProspectUpdate
 from app.services import sales_demo_service
 from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
 
@@ -400,6 +400,24 @@ def test_generate_demo_disables_guided_tour_by_default(monkeypatch, seeded_db, d
     assert (guide_setting.value or {}).get("enabled") is False
 
 
+def test_create_prospect_defaults_demo_background_settings(seeded_db, db_session):
+    created = sales_demo_service.create_prospect(
+        db_session,
+        ProspectCreate(
+            clinic_name="Clinica Fundo Padrao",
+            whatsapp_phone="+55 11 97777-2222",
+            city="Sao Paulo",
+            state="SP",
+            main_address="Rua Demo, 123",
+        ),
+        actor_id=None,
+    )
+
+    demo_branding = (created.proposal_snapshot or {}).get("demo_branding", {})
+    assert demo_branding["background_image_url"] == sales_demo_service.DEMO_BACKGROUND_DEFAULT_IMAGE_URL
+    assert demo_branding["background_image_opacity"] == sales_demo_service.DEMO_BACKGROUND_DEFAULT_OPACITY
+
+
 def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch, seeded_db, db_session):
     prospect = _create_prospect(db_session)
     prospect.proposal_snapshot = {
@@ -409,7 +427,11 @@ def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch,
                 "enabled": True,
                 "cta_mode": "webchat",
             },
-        }
+        },
+        "demo_branding": {
+            "background_image_url": "data:image/png;base64,abc123",
+            "background_image_opacity": 0.42,
+        },
     }
     db_session.add(prospect)
     db_session.commit()
@@ -438,6 +460,16 @@ def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch,
     assert intake_setting.value["mode"] == "link_flow"
     assert intake_setting.value["link_flow"]["cta_mode"] == "webchat"
 
+    branding_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == generated["prospect"].demo_tenant_id,
+            Setting.key == "branding.theme",
+        )
+    )
+    assert branding_setting is not None
+    assert branding_setting.value["demo_background_image_url"] == "data:image/png;base64,abc123"
+    assert branding_setting.value["demo_background_opacity"] == 0.42
+
     updated = sales_demo_service.update_prospect(
         db_session,
         prospect,
@@ -450,6 +482,10 @@ def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch,
                         "enabled": True,
                         "cta_mode": "whatsapp_redirect",
                     },
+                },
+                "demo_branding": {
+                    "background_image_url": "/images/dental-floss-smile-background.png",
+                    "background_image_opacity": 0.67,
                 },
             },
         ),
@@ -464,6 +500,16 @@ def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch,
     assert refreshed_setting is not None
     assert refreshed_setting.value["mode"] == "hybrid"
     assert refreshed_setting.value["link_flow"]["cta_mode"] == "whatsapp_redirect"
+
+    refreshed_branding_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == updated.demo_tenant_id,
+            Setting.key == "branding.theme",
+        )
+    )
+    assert refreshed_branding_setting is not None
+    assert refreshed_branding_setting.value["demo_background_image_url"] == "/images/dental-floss-smile-background.png"
+    assert refreshed_branding_setting.value["demo_background_opacity"] == 0.67
 
 
 def test_redeem_demo_token_returns_test_phone_and_whatsapp_link(monkeypatch, seeded_db, db_session):
