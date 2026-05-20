@@ -125,6 +125,26 @@ body {
     repeat;
 }
 
+.whatsapp-chat-thread-surface {
+  background-color: #f6f1e8;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.38),
+      rgba(255, 255, 255, 0.22)
+    ),
+    url("/images/whatsapp-chat-background.png");
+  background-position:
+    center center,
+    center top;
+  background-size:
+    cover,
+    560px auto;
+  background-repeat:
+    no-repeat,
+    repeat;
+}
+
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-sidebar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-topbar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-support-fab="true"] {
@@ -398,7 +418,14 @@ th {
 .demo-entry-shortcut-callout {
   position: absolute;
   isolation: isolate;
+}
+
+.demo-entry-shortcut-callout-header {
   transform: translate3d(0, calc(-100% - 14px), 0);
+}
+
+.demo-entry-shortcut-callout-topbar {
+  transform: translate3d(-50%, 0, 0);
 }
 
 .demo-entry-shortcut-callout::before {

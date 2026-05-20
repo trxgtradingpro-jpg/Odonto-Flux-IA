@@ -150,6 +150,10 @@ function formatPublicMessageTime(value: string | null): string {
 
 function formatPublicDate(value: string | null): string {
   if (!value) return "Pendente";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-");
+    return `${day}/${month}/${year}`;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     const [year, month, day] = value.split("-");
@@ -384,7 +388,7 @@ function PublicWebchat({
       <div
         ref={viewportRef}
         className={cn(
-          "whatsapp-chat-surface min-h-0 flex-1 space-y-4 overflow-y-auto",
+          "whatsapp-chat-thread-surface min-h-0 flex-1 space-y-4 overflow-y-auto",
           embedded ? "px-4 py-4 sm:px-5" : "px-4 py-5 sm:px-5",
         )}
       >
@@ -787,7 +791,7 @@ function BookingSummaryPanel({
   );
 }
 
-function WhatsAppOverviewPanel() {
+function WhatsAppOverviewPanel({ className }: { className?: string }) {
   const items = [
     "Link oficial validado para levar o paciente ao WhatsApp da operacao.",
     "A conversa chega no mesmo inbox usado pela clinica.",
@@ -795,7 +799,12 @@ function WhatsAppOverviewPanel() {
   ];
 
   return (
-    <aside className="flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5">
+    <aside
+      className={cn(
+        "flex min-h-0 flex-col overflow-hidden rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur sm:p-5",
+        className,
+      )}
+    >
       <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
         <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
         Canal protegido
@@ -844,7 +853,7 @@ function WhatsAppCtaPanel({
         </div>
       </div>
 
-      <div className="whatsapp-chat-surface flex flex-1 flex-col justify-between p-5">
+      <div className="whatsapp-chat-thread-surface flex flex-1 flex-col justify-between p-5">
         <div className="space-y-4">
           <div className="max-w-[86%] rounded-[24px] rounded-bl-[10px] border border-stone-200 bg-white px-4 py-3 shadow-sm">
             <p className="text-sm font-medium text-stone-900">Seu atendimento esta pronto.</p>
@@ -915,7 +924,10 @@ function PublicPhoneGate({
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-stone-950/45 px-4 py-6 backdrop-blur-[2px]">
-      <div className="w-full max-w-md rounded-[30px] border border-white/70 bg-white/96 p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]">
+      <div
+        data-testid="public-phone-gate-card"
+        className="w-full max-w-md rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
+      >
         <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {badgeLabel}
@@ -1173,11 +1185,21 @@ export default function PublicBookingPage() {
   const clinicName = profile?.clinic.name || session?.clinic.name || "clinica";
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
   const isDemoEmbeddedWebchat = isWebchat && isDemoEmbeddedRequest;
+  const useOverviewSidePanel = !isWebchat || isDemoEmbeddedWebchat;
+  const sidePanelHandleText = useOverviewSidePanel ? "Canal" : "Resumo";
+  const sidePanelOpenLabel = useOverviewSidePanel
+    ? "Abrir painel do agendamento oficial"
+    : "Abrir resumo do atendimento";
+  const sidePanelCloseLabel = useOverviewSidePanel
+    ? "Fechar painel do agendamento oficial"
+    : "Fechar resumo do atendimento";
   const linkFlowUnavailable =
     profile && (!profile.link_flow.enabled || !profile.link_flow.operational)
       ? profile.link_flow.unavailable_message ||
         "Agendamento por link indisponivel no momento. Entre em contato com a clinica pelo canal oficial."
       : null;
+  const showPublicBookingLoadingPanel = loading && !linkFlowUnavailable && !error && !session;
+  const showPublicBookingErrorPanel = !showPublicBookingLoadingPanel && (!profile?.link_flow.operational || !session);
 
   const handleMobileSummaryGestureStart = useCallback(
     (event: ReactPointerEvent<HTMLElement>, action: "open" | "close") => {
@@ -1289,21 +1311,17 @@ export default function PublicBookingPage() {
     <main
       className={cn(
         "box-border overflow-hidden text-[var(--booking-text)]",
-        isDemoEmbeddedWebchat
-          ? "h-[100dvh] min-h-0 bg-transparent px-0 py-0"
-          : "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
+        "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
       )}
       style={pageStyle}
     >
       <div
         className={cn(
           "box-border flex h-full w-full flex-col overflow-hidden",
-          isDemoEmbeddedWebchat
-            ? "bg-white"
-            : "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
+          "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
         )}
       >
-        {!isDemoEmbeddedWebchat ? <header className="border-b border-white/60 px-5 py-5 sm:px-7">
+        <header className="border-b border-white/60 px-5 py-5 sm:px-7">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-3">
@@ -1331,15 +1349,15 @@ export default function PublicBookingPage() {
               Link verificado da clinica
             </div>
           </div>
-        </header> : null}
+        </header>
 
         <section
           className={cn(
             "relative flex min-h-0 flex-1 overflow-hidden",
-            isDemoEmbeddedWebchat ? "p-0" : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
+            "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
           )}
         >
-          {isWebchat && !isDemoEmbeddedWebchat ? (
+          {isWebchat ? (
             <>
               <div
                 className={cn(
@@ -1362,7 +1380,7 @@ export default function PublicBookingPage() {
                   <button
                     type="button"
                     onClick={() => setMobileSummaryOpen(false)}
-                    aria-label="Fechar resumo do atendimento"
+                    aria-label={sidePanelCloseLabel}
                     className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
@@ -1375,20 +1393,24 @@ export default function PublicBookingPage() {
                   >
                     <div className="h-1.5 w-16 rounded-full bg-stone-300/90 shadow-sm" aria-hidden="true" />
                   </div>
-                  <BookingSummaryPanel
-                    summary={summary}
-                    loading={loadingSummary}
-                    saving={savingSummary}
-                    onSave={handleSaveSummary}
-                    className="h-full pt-14"
-                  />
+                  {useOverviewSidePanel ? (
+                    <WhatsAppOverviewPanel className="h-full pt-14" />
+                  ) : (
+                    <BookingSummaryPanel
+                      summary={summary}
+                      loading={loadingSummary}
+                      saving={savingSummary}
+                      onSave={handleSaveSummary}
+                      className="h-full pt-14"
+                    />
+                  )}
                 </div>
               </div>
 
               <button
                 type="button"
                 data-testid="booking-summary-mobile-handle"
-                aria-label="Abrir resumo do atendimento"
+                aria-label={sidePanelOpenLabel}
                 className={cn(
                   "absolute left-0 top-1/2 z-30 -translate-y-1/2 touch-pan-y rounded-r-[26px] border border-white/80 bg-white/92 px-2 py-4 text-[var(--booking-primary)] shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur lg:hidden",
                   mobileSummaryOpen ? "pointer-events-none opacity-0" : "opacity-100",
@@ -1404,7 +1426,7 @@ export default function PublicBookingPage() {
                     className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
                     style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
                   >
-                    Resumo
+                    {sidePanelHandleText}
                   </span>
                 </span>
               </button>
@@ -1419,8 +1441,10 @@ export default function PublicBookingPage() {
             </>
           ) : null}
 
-          {!isDemoEmbeddedWebchat ? <div className="hidden min-h-0 lg:flex">
-            {isWebchat ? (
+          <div className="hidden min-h-0 lg:flex">
+            {useOverviewSidePanel ? (
+              <WhatsAppOverviewPanel className="h-full" />
+            ) : (
               <BookingSummaryPanel
                 summary={summary}
                 loading={loadingSummary}
@@ -1428,18 +1452,15 @@ export default function PublicBookingPage() {
                 onSave={handleSaveSummary}
                 className="h-full"
               />
-            ) : (
-              <WhatsAppOverviewPanel />
             )}
-          </div> : null}
+          </div>
 
-          <div className={cn("flex min-h-0 flex-1", isDemoEmbeddedWebchat && "w-full")}>
+          <div className="flex min-h-0 flex-1">
             {profile?.link_flow.operational && session && isWebchat ? (
               <PublicWebchat
                 clinicSlug={clinicSlug}
                 clinicName={clinicName}
                 session={session}
-                embedded={isDemoEmbeddedWebchat}
                 onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);
@@ -1455,7 +1476,20 @@ export default function PublicBookingPage() {
                 handleOpenWhatsApp={handleOpenWhatsApp}
               />
             ) : null}
-            {!profile?.link_flow.operational || !session ? (
+            {showPublicBookingLoadingPanel ? (
+              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+                <div className="max-w-md">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--booking-border)] bg-white shadow-sm">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--booking-primary)] border-r-transparent" />
+                  </div>
+                  <p className="mt-4 text-lg font-semibold text-stone-900">Carregando atendimento...</p>
+                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+                    Preparando a conversa oficial da clinica para voce.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {showPublicBookingErrorPanel ? (
               <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
                 <div className="max-w-md">
                   <p className="text-lg font-semibold text-stone-900">Nao foi possivel iniciar o atendimento agora.</p>

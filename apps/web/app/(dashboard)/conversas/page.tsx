@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -299,6 +300,8 @@ type DemoConversationTourStage =
   | "finish_countdown"
   | "interrupted"
   | "completed";
+
+type DemoEntryShortcutPlacement = "header" | "topbar";
 
 type DemoWhatsAppExperienceStage =
   | "idle"
@@ -1095,11 +1098,13 @@ export default function ConversasPage() {
   const [demoWhatsAppTrackedPatientId, setDemoWhatsAppTrackedPatientId] = useState<string | null>(null);
   const [demoWhatsAppBaselineAppointmentIds, setDemoWhatsAppBaselineAppointmentIds] = useState<string[]>([]);
   const [demoAgendaRedirectCountdown, setDemoAgendaRedirectCountdown] = useState<number | null>(null);
+  const [demoTopbarShortcutHost, setDemoTopbarShortcutHost] = useState<HTMLElement | null>(null);
   const [demoGuideState, setDemoGuideState] = useState<DemoGuideClientState>(emptyDemoGuideClientState);
   const [demoConversationStage, setDemoConversationStage] = useState<DemoConversationTourStage>("idle");
   const [demoConversationCountdown, setDemoConversationCountdown] = useState<number | null>(null);
   const [demoSimulationMessages, setDemoSimulationMessages] = useState<DemoSimulationMessage[]>([]);
   const [demoEntryShortcutStyle, setDemoEntryShortcutStyle] = useState<CSSProperties | null>(null);
+  const [demoEntryShortcutPlacement, setDemoEntryShortcutPlacement] = useState<DemoEntryShortcutPlacement>("header");
 
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const demoWorkspaceViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1903,34 +1908,90 @@ export default function ConversasPage() {
     return null;
   }, [messagesQuery.data?.data]);
   const demoWhatsAppEntryPhoneLabel = demoWhatsAppEntryPhone ? formatPhoneBR(demoWhatsAppEntryPhone) : null;
-  const demoUsesWebchatEntry = demoEntryChannel === "webchat";
+  const demoHasPersistentWebchatEntry = isDemoUser && Boolean(demoResolvedPublicEntryPath);
+  const demoUsesWebchatEntry = demoEntryChannel === "webchat" || demoHasPersistentWebchatEntry;
   const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoResolvedPublicEntryPath);
   const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
   const showDemoEntryShortcut =
-    isDemoUser &&
-    ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
-    !demoWorkspaceOpen &&
-    Boolean(demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath));
+    (demoHasPersistentWebchatEntry ||
+      (isDemoUser &&
+        ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
+        Boolean(demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath)))) &&
+    !demoWorkspaceOpen;
   const demoEntryShortcutLabel = demoUsesWebchatEntry
     ? demoWhatsAppExperienceStage === "entry"
       ? "Testar chat do site"
-      : "Reabrir chat do site"
+      : demoWhatsAppExperienceStage === "idle"
+        ? "Abrir chat do site"
+        : "Reabrir chat do site"
     : demoWhatsAppExperienceStage === "entry"
       ? "Abrir WhatsApp da demo"
       : "Reabrir WhatsApp";
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (!showDemoEntryShortcut || !demoUsesWebchatEntry) {
+      setDemoTopbarShortcutHost(null);
+      return;
+    }
+
+    const syncTopbarShortcutHost = () => {
+      const slot = document.querySelector<HTMLElement>('[data-demo-topbar-shortcut-slot="true"]');
+      if (slot) {
+        setDemoTopbarShortcutHost((current) => (current === slot ? current : slot));
+        return;
+      }
+      setDemoTopbarShortcutHost(null);
+    };
+
+    syncTopbarShortcutHost();
+
+    const observer =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(() => {
+            syncTopbarShortcutHost();
+          });
+
+    if (observer && document.body) {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    };
+
+    return () => {
+      observer?.disconnect();
+    };
+  }, [demoUsesWebchatEntry, showDemoEntryShortcut, demoWorkspaceOpen]);
+
+  useEffect(() => {
     if (!showDemoEntryShortcut) {
       setDemoEntryShortcutStyle(null);
+      setDemoEntryShortcutPlacement("header");
+      return;
+    }
+
+    if (demoUsesWebchatEntry) {
+      setDemoEntryShortcutStyle(null);
+      setDemoEntryShortcutPlacement("topbar");
       return;
     }
 
     let frameId = 0;
-    const updateShortcutPosition = () => {
-      const anchor = demoEntryShortcutAnchorRef.current;
-      if (!anchor) return;
+    const resolveShortcutAnchor = (): { element: HTMLElement; placement: DemoEntryShortcutPlacement } | null => {
+      const headerAnchor = demoEntryShortcutAnchorRef.current;
+      if (!headerAnchor) return null;
+      return { element: headerAnchor, placement: "header" };
+    };
 
-      const rect = anchor.getBoundingClientRect();
+    const updateShortcutPosition = () => {
+      const resolvedAnchor = resolveShortcutAnchor();
+      if (!resolvedAnchor) return;
+
+      const rect = resolvedAnchor.element.getBoundingClientRect();
+      setDemoEntryShortcutPlacement(resolvedAnchor.placement);
+
       setDemoEntryShortcutStyle({
         top: Math.max(60, rect.top),
         right: Math.max(12, window.innerWidth - rect.right),
@@ -1944,7 +2005,8 @@ export default function ConversasPage() {
 
     scheduleShortcutPositionUpdate();
 
-    const anchor = demoEntryShortcutAnchorRef.current;
+    const resolvedAnchor = resolveShortcutAnchor();
+    const anchor = resolvedAnchor?.element ?? null;
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? null
@@ -1965,7 +2027,7 @@ export default function ConversasPage() {
       window.removeEventListener("resize", scheduleShortcutPositionUpdate);
       window.removeEventListener("scroll", scheduleShortcutPositionUpdate, true);
     };
-  }, [showDemoEntryShortcut, demoEntryShortcutLabel, selectedConversationId]);
+  }, [showDemoEntryShortcut, demoEntryShortcutLabel, demoUsesWebchatEntry, selectedConversationId]);
 
   const demoTourConversationId =
     demoTrackedConversation?.id ??
@@ -3115,7 +3177,7 @@ export default function ConversasPage() {
                               ? DEMO_TOUR_TARGETS.conversationThread
                               : undefined
                           }
-                          className="whatsapp-chat-surface h-full overflow-y-auto overscroll-contain rounded-[28px] border border-stone-200/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
+                          className="whatsapp-chat-surface whatsapp-chat-thread-surface h-full overflow-y-auto overscroll-contain rounded-[28px] border border-stone-200/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
                         >
                           {messagesQuery.isLoading ? (
                             <p className="text-sm text-stone-500">Carregando mensagens...</p>
@@ -3710,23 +3772,59 @@ export default function ConversasPage() {
         </div>
       </div>
 
-      {showDemoEntryShortcut && demoEntryShortcutStyle ? (
-        <div className="pointer-events-none fixed inset-0 z-[130]">
-          <div className="demo-entry-shortcut-callout absolute" style={demoEntryShortcutStyle}>
-            <Button
-              type="button"
-              data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
-              data-demo-entry-shortcut="true"
-              className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
-              onPointerDown={handleOpenDemoWhatsAppPointerDown}
-              onClick={handleOpenDemoWhatsAppClick}
-            >
-              <Share2 size={16} />
-              {demoEntryShortcutLabel}
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      {showDemoEntryShortcut && demoUsesWebchatEntry && demoTopbarShortcutHost
+        ? createPortal(
+            <div className="hidden items-center pr-2 md:flex">
+              <Button
+                type="button"
+                data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+                data-demo-entry-shortcut="true"
+                className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
+                onPointerDown={handleOpenDemoWhatsAppPointerDown}
+                onClick={handleOpenDemoWhatsAppClick}
+              >
+                <Share2 size={16} />
+                {demoEntryShortcutLabel}
+              </Button>
+            </div>,
+            demoTopbarShortcutHost,
+          )
+        : null}
+
+      {!demoUsesWebchatEntry && showDemoEntryShortcut && demoEntryShortcutStyle && typeof document !== "undefined"
+        ? createPortal(
+            <div className="pointer-events-none fixed inset-0 z-[130]">
+              <div
+                className={cn(
+                  "demo-entry-shortcut-callout absolute",
+                  demoEntryShortcutPlacement === "topbar"
+                    ? "demo-entry-shortcut-callout-topbar"
+                    : "demo-entry-shortcut-callout-header",
+                )}
+                style={{
+                  ...demoEntryShortcutStyle,
+                  transform:
+                    demoEntryShortcutPlacement === "topbar"
+                      ? "translate3d(-50%, 0, 0)"
+                      : "translate3d(0, calc(-100% - 14px), 0)",
+                }}
+              >
+                <Button
+                  type="button"
+                  data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+                  data-demo-entry-shortcut="true"
+                  className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
+                  onPointerDown={handleOpenDemoWhatsAppPointerDown}
+                  onClick={handleOpenDemoWhatsAppClick}
+                >
+                  <Share2 size={16} />
+                  {demoEntryShortcutLabel}
+                </Button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {showDemoSuggestionSpotlight ? (
         <DemoGuideSpotlightOverlay
@@ -4189,16 +4287,16 @@ export default function ConversasPage() {
               </div>
             )}
 
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex justify-end p-3 sm:p-4">
+            <div className="pointer-events-none fixed inset-x-0 top-0 z-[140] flex justify-center p-3 sm:p-4">
               <button
                 type="button"
                 data-demo-workspace-ignore-swipe="true"
-                className="pointer-events-auto inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/80 bg-white/94 px-4 text-sm font-medium text-stone-700 shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur transition hover:border-stone-300 hover:bg-white"
+                className="demo-entry-shortcut-attention pointer-events-auto inline-flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-full border border-white/20 px-4 text-sm font-semibold text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-200/70"
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={closeDemoWebchatWorkspace}
               >
                 <ArrowLeft size={15} />
-                Voltar para WhatsApp
+                Voltar para Clínica
               </button>
             </div>
 

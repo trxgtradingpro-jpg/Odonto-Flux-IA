@@ -140,6 +140,57 @@ test.describe('public link flow landing', () => {
     await expect(page.getByText('WhatsApp oficial do sistema')).toBeVisible();
   });
 
+  test('shows a loading panel while the public webchat session is still bootstrapping', async ({ page }) => {
+    await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000016',
+          expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'webchat',
+          whatsapp_url: null,
+          public_access_token: 'public-token-loading',
+          contact_phone: '5511999991111',
+          contact_phone_required: false,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
+      await route.fulfill({ json: { id: 'evt-webchat-loading', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      await route.fulfill({ json: emptySummary });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    });
+    await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await route.fulfill({
+        json: {
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
+          branding,
+          link_flow: {
+            enabled: true,
+            operational: true,
+            cta_mode: 'webchat',
+            headline: 'Agende com a Clinica A',
+            trust_message: 'Atendimento oficial pela pagina.',
+            button_label: 'Iniciar chat',
+            unavailable_message: null,
+          },
+        },
+      });
+    });
+
+    await page.goto('/agendar/tenant-a?embed=demo-webchat');
+
+    await expect(page.getByText('Carregando atendimento...')).toBeVisible();
+    await expect(page.getByText('Nao foi possivel iniciar o atendimento agora.')).toHaveCount(0);
+    await expect(page.getByText('Atendimento online')).toBeVisible();
+  });
+
   test('renders webchat, asks for phone first, sends a message and polls assistant replies', async ({ page }) => {
     let postMessageCalls = 0;
 
@@ -323,6 +374,120 @@ test.describe('public link flow landing', () => {
     expect(pageScrolled).toBeFalsy();
   });
 
+  test('keeps the demo-embedded webchat shell visible on desktop', async ({ page }) => {
+    await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000014',
+          expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'webchat',
+          whatsapp_url: null,
+          public_access_token: 'public-token-embed-desktop',
+          contact_phone: '5511999991111',
+          contact_phone_required: false,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
+      await route.fulfill({ json: { id: 'evt-webchat-embed-desktop', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      await route.fulfill({ json: emptySummary });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    });
+    await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
+      await route.fulfill({
+        json: {
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
+          branding,
+          link_flow: {
+            enabled: true,
+            operational: true,
+            cta_mode: 'webchat',
+            headline: 'Agende com a Clinica A',
+            trust_message: 'Atendimento oficial pela pagina.',
+            button_label: 'Iniciar chat',
+            unavailable_message: null,
+          },
+        },
+      });
+    });
+
+    await page.goto('/agendar/tenant-a?embed=demo-webchat');
+
+    const desktopSidePanel = page.getByRole('complementary');
+    await expect(page.getByText('Agendamento oficial', { exact: true })).toBeVisible();
+    await expect(page.getByText('Link verificado da clinica', { exact: true })).toBeVisible();
+    await expect(desktopSidePanel.getByText('Canal protegido', { exact: true })).toBeVisible();
+    await expect(desktopSidePanel.getByText('Agendamento oficial da clinica')).toBeVisible();
+    await expect(page.getByText('Atendimento online')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Abrir painel do agendamento oficial/i })).toHaveCount(0);
+  });
+
+  test('keeps the demo-embedded webchat side panel toggleable on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
+      await route.fulfill({
+        json: {
+          session_id: '00000000-0000-0000-0000-000000000015',
+          expires_at: '2026-06-01T13:00:00Z',
+          cta_mode: 'webchat',
+          whatsapp_url: null,
+          public_access_token: 'public-token-embed-mobile',
+          contact_phone: '5511999991111',
+          contact_phone_required: false,
+          clinic: { slug: 'tenant-a', name: 'Clinica A' },
+        },
+      });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/events', async (route) => {
+      await route.fulfill({ json: { id: 'evt-webchat-embed-mobile', event_name: 'webchat_opened' } });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/summary', async (route) => {
+      await route.fulfill({ json: emptySummary });
+    });
+    await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    });
+    await page.route('**/api/v1/public/booking/tenant-a', async (route) => {
+      await route.fulfill({
+        json: {
+          clinic: { slug: 'tenant-a', name: 'Clinica A', logo_data_url: null },
+          branding,
+          link_flow: {
+            enabled: true,
+            operational: true,
+            cta_mode: 'webchat',
+            headline: 'Agende com a Clinica A',
+            trust_message: 'Atendimento oficial pela pagina.',
+            button_label: 'Iniciar chat',
+            unavailable_message: null,
+          },
+        },
+      });
+    });
+
+    await page.goto('/agendar/tenant-a?embed=demo-webchat');
+
+    const mobileDrawer = page.getByTestId('booking-summary-mobile-drawer');
+    await expect(page.getByText('Agendamento oficial', { exact: true })).toBeVisible();
+    await expect(page.getByText('Link verificado da clinica', { exact: true })).toBeVisible();
+    await expect(mobileDrawer).toHaveAttribute('data-state', 'closed');
+    await expect(page.getByRole('button', { name: /Abrir painel do agendamento oficial/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /Abrir painel do agendamento oficial/i }).click();
+    await expect(mobileDrawer).toHaveAttribute('data-state', 'open');
+    await expect(mobileDrawer.getByText('Canal protegido', { exact: true })).toBeVisible();
+    await expect(mobileDrawer.getByText('Agendamento oficial da clinica')).toBeVisible();
+
+    await page.getByRole('button', { name: /Fechar painel do agendamento oficial/i }).click();
+    await expect(mobileDrawer).toHaveAttribute('data-state', 'closed');
+  });
+
   test('shows booking checklist progress and manual save states in the left panel', async ({ page }) => {
     await page.addInitScript(() => {
       window.localStorage.clear();
@@ -395,19 +560,21 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
-    await expect(page.getByText('Maria Souza')).toBeVisible();
-    await page.getByTestId('summary-action-procedure').click();
-    await page.getByTestId('summary-select-procedure').selectOption({ label: 'Avaliacao inicial' });
-    await page.getByTestId('summary-action-unit').click();
-    await page.getByTestId('summary-select-unit').selectOption('unit-1');
-    await page.getByTestId('summary-action-preferred_date').click();
-    await page.getByTestId('summary-select-preferred_date').selectOption('2026-06-10');
-    await page.getByTestId('summary-action-confirmed_slot').click();
-    await page.getByTestId('summary-select-confirmed_slot').selectOption({ label: '10/06 09:30' });
+    const desktopSummary = page.getByRole('complementary');
 
-    await expect(page.getByText('Unidade principal')).toBeVisible();
-    await expect(page.getByText('Avaliacao inicial')).toBeVisible();
-    await expect(page.getByText('10/06/2026')).toBeVisible();
-    await expect(page.getByText('10/06 09:30')).toBeVisible();
+    await expect(desktopSummary.getByText('Maria Souza')).toBeVisible();
+    await desktopSummary.getByTestId('summary-action-procedure').click();
+    await desktopSummary.getByTestId('summary-select-procedure').selectOption({ label: 'Avaliacao inicial' });
+    await desktopSummary.getByTestId('summary-action-unit').click();
+    await desktopSummary.getByTestId('summary-select-unit').selectOption('unit-1');
+    await desktopSummary.getByTestId('summary-action-preferred_date').click();
+    await desktopSummary.getByTestId('summary-select-preferred_date').selectOption('2026-06-10');
+    await desktopSummary.getByTestId('summary-action-confirmed_slot').click();
+    await desktopSummary.getByTestId('summary-select-confirmed_slot').selectOption({ label: '10/06 09:30' });
+
+    await expect(desktopSummary.getByText('Unidade principal')).toBeVisible();
+    await expect(desktopSummary.getByText('Avaliacao inicial')).toBeVisible();
+    await expect(desktopSummary.getByText('10/06/2026')).toBeVisible();
+    await expect(desktopSummary.getByText('10/06 09:30')).toBeVisible();
   });
 });

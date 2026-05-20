@@ -111,10 +111,10 @@ services:
       sh -c "if [ ! -d /workspace/node_modules/.pnpm ] || [ ! -e /workspace/apps/web/node_modules/next/dist/bin/next ] || [ ! -e /workspace/packages/ui/node_modules/react/package.json ]; then pnpm install --store-dir /pnpm/store --prefer-offline --frozen-lockfile=false; fi &&
       cd /workspace/apps/web &&
       if [ \"$$WEB_RUNTIME_MODE\" = \"dev\" ]; then
-        NODE_ENV=development pnpm dev --hostname 0.0.0.0 --port 3000;
+        NODE_ENV=development ./node_modules/.bin/next dev --hostname 0.0.0.0 --port 3000;
       else
-        NODE_ENV=production pnpm build &&
-        NODE_ENV=production pnpm start --hostname 0.0.0.0 --port 3000;
+        NODE_ENV=production ./node_modules/.bin/next build &&
+        NODE_ENV=production ./node_modules/.bin/next start --hostname 0.0.0.0 --port 3000;
       fi"
 
   nginx:

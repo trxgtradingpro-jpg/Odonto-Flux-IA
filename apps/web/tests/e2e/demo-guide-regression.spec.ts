@@ -110,6 +110,9 @@ test.describe("demo guide regression", () => {
         if (typeof refreshToken === "string" && refreshToken.length > 0) {
           window.localStorage.setItem("odontoflux_refresh_token", refreshToken);
         }
+        Object.keys(window.localStorage)
+          .filter((key) => key.startsWith("clinicflux.link_flow.webchat."))
+          .forEach((key) => window.localStorage.removeItem(key));
 
         window.sessionStorage.setItem("odontoflux_demo_session_id", `demo-webchat-${Date.now()}`);
         window.sessionStorage.setItem("odontoflux_demo_guided_override_enabled", "1");
@@ -132,13 +135,13 @@ test.describe("demo guide regression", () => {
     );
 
     const demoEntryShortcut = page.locator('[data-demo-entry-shortcut="true"]').first();
-    const detailsButton = page.getByRole("button", { name: /Detalhes/i }).first();
+    const whatsappQuickFocusButton = page.locator('[data-quick-focus-key="conversas"]').first();
 
     await page.goto("/conversas", { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle");
 
     await expect(demoEntryShortcut).toBeVisible({ timeout: 30000 });
-    await expect(detailsButton).toBeVisible({ timeout: 30000 });
+    await expect(whatsappQuickFocusButton).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Esta demo ainda nao tem um numero real conectado")).toHaveCount(0);
     await expect(page.locator('[data-demo-webchat-workspace="true"]')).toHaveCount(1, { timeout: 30000 });
     await expect(page.getByText("Teste o webchat publico da demo")).toHaveCount(0);
@@ -148,10 +151,10 @@ test.describe("demo guide regression", () => {
     await expect(page.getByText("Finalize um agendamento para atualizar a agenda ao vivo.")).toHaveCount(0);
 
     const shortcutBox = await demoEntryShortcut.boundingBox();
-    const detailsBox = await detailsButton.boundingBox();
+    const quickFocusBox = await whatsappQuickFocusButton.boundingBox();
     expect(shortcutBox).not.toBeNull();
-    expect(detailsBox).not.toBeNull();
-    expect((shortcutBox?.y ?? 0) + (shortcutBox?.height ?? 0)).toBeLessThan((detailsBox?.y ?? 0) + 2);
+    expect(quickFocusBox).not.toBeNull();
+    expect((shortcutBox?.x ?? 0) + (shortcutBox?.width ?? 0)).toBeLessThanOrEqual((quickFocusBox?.x ?? 0) + 2);
 
     const workspace = page.locator('[data-demo-webchat-workspace="true"]').first();
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
@@ -181,24 +184,25 @@ test.describe("demo guide regression", () => {
     await expect(page.getByText("A IA entendeu o motivo do contato.")).toHaveCount(0);
     await expect(page.getByText("A IA respondeu com base nos dados reais da clinica.")).toHaveCount(0);
     await expect(page.getByText("Finalize um agendamento para atualizar a agenda ao vivo.")).toHaveCount(0);
-    await expect(page.getByText("Voltar para WhatsApp", { exact: true })).toBeVisible();
+    await expect(page.getByText("Voltar para Clínica", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Dashboard" })).not.toBeVisible();
 
     const webchatFrame = page.frameLocator("iframe").first();
+    await expect(webchatFrame.getByText("Agendamento oficial", { exact: true })).toBeVisible();
+    await expect(webchatFrame.getByText("Link verificado da clinica", { exact: true })).toBeVisible();
+    await expect(webchatFrame.getByRole("complementary").getByText("Canal protegido", { exact: true })).toBeVisible();
     await expect(webchatFrame.getByText("Oi, eu sou a assistente de agendamento.")).toBeVisible();
     await expect(webchatFrame.getByText("Aqui a clinica vai simular um paciente")).toBeVisible();
-    await expect(
-      webchatFrame.getByText("Informe um celular para testar o fluxo de agendamento e ver como a conversa vai fluir no webchat da clinica gui."),
-    ).toBeVisible();
     await expect(webchatFrame.getByText("Agendamento publico nao encontrado.")).toHaveCount(0);
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1))
       .toBeTruthy();
 
-    await page.getByText("Voltar para WhatsApp", { exact: true }).click();
+    await page.getByText("Voltar para Clínica", { exact: true }).click();
 
     await expect(workspace).toHaveAttribute("data-demo-webchat-workspace-panel", "whatsapp");
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /webchat/i }).first()).toBeVisible();
+    await expect(page.locator('[data-demo-entry-shortcut="true"]').first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /chat do site/i }).first()).toBeVisible();
   });
 });

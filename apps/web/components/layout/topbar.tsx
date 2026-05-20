@@ -86,6 +86,10 @@ export function Topbar({
       </div>
 
       <div className="flex min-w-0 items-center gap-1 sm:gap-2">
+        <div
+          data-demo-topbar-shortcut-slot="true"
+          className="hidden shrink-0 items-center justify-center md:flex"
+        />
         {quickAccessPages.length && onOpenQuickAccess ? (
           <QuickAccessPill pages={quickAccessPages} onOpen={onOpenQuickAccess} className="hidden md:flex" />
         ) : null}

@@ -53,6 +53,7 @@ export function QuickAccessPill({
           <button
             key={pageKey}
             type="button"
+            data-quick-focus-key={pageKey}
             className={cn(
               "inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-semibold transition duration-150",
               isFloating
