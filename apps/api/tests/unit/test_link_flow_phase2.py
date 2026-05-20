@@ -13,7 +13,9 @@ from app.models import (
     Patient,
     PatientContact,
     Professional,
+    ProspectAccount,
     Setting,
+    Tenant,
     Unit,
     WhatsAppAccount,
 )
@@ -34,7 +36,7 @@ from app.services.webchat_service import (
     post_public_webchat_message,
     validate_public_webchat_session,
 )
-from app.services.sales_demo_service import ensure_sales_outreach_sender_tenant
+from app.services.sales_demo_service import cleanup_demo_resources, ensure_sales_outreach_sender_tenant
 from app.services.whatsapp_service import (
     assert_whatsapp_route_ready_for_dispatch,
     resolve_whatsapp_reply_route,
@@ -609,3 +611,194 @@ def test_capture_public_contact_phone_reuses_existing_patient(seeded_db, db_sess
     assert session.linked_patient_id == existing.id
     assert payload["contact_phone"] == "11 97777-6666"
     assert db_session.scalar(select(func.count()).select_from(Patient).where(Patient.tenant_id == tenant.id)) >= 1
+
+
+def test_demo_webchat_phone_gate_persists_five_open_conversations(monkeypatch, seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    config = _enable_webchat_intake(db_session, tenant)
+    monkeypatch.setattr(
+        "app.services.ai_autoresponder_service.process_inbound_message",
+        lambda *args, **kwargs: {"status": "ignored"},
+    )
+
+    tracked_conversation_ids = []
+    tracked_patient_ids = []
+
+    for index in range(5):
+        bundle = create_webchat_link_flow_session(
+            db_session,
+            tenant=tenant,
+            config=config,
+            landing_path="/agendar/tenant-b",
+        )
+        capture_public_contact_phone(
+            db_session,
+            session=bundle.session,
+            raw_phone=f"(11) 99000-{1000 + index}",
+        )
+        db_session.flush()
+
+        conversation = db_session.get(Conversation, bundle.session.linked_conversation_id)
+        patient = db_session.get(Patient, bundle.session.linked_patient_id)
+
+        assert conversation is not None
+        assert patient is not None
+        assert conversation.patient_id == patient.id
+        assert conversation.channel == "webchat"
+        assert conversation.status == "aberta"
+        assert conversation.external_thread_id == f"link_flow:{bundle.session.id}"
+
+        result = post_public_webchat_message(
+            db_session,
+            session=bundle.session,
+            tenant=tenant,
+            text=f"Quero simular um atendimento sem finalizar {index}",
+            client_message_id=f"open-demo-{index}",
+        )
+        db_session.refresh(conversation)
+
+        assert result["status"] == "accepted"
+        assert conversation.last_message_at is not None
+        tracked_conversation_ids.append(conversation.id)
+        tracked_patient_ids.append(patient.id)
+
+    assert len(set(tracked_conversation_ids)) == 5
+    assert len(set(tracked_patient_ids)) == 5
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.tenant_id == tenant.id,
+                Message.conversation_id.in_(tracked_conversation_ids),
+                Message.direction == MessageDirection.INBOUND.value,
+                Message.channel == "webchat",
+            )
+        )
+        == 5
+    )
+
+
+def test_demo_webchat_persists_five_completed_appointments_and_cleans_up_demo(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    control_tenant_id = seeded_db["tenant_a"].id
+    config = _enable_webchat_intake(db_session, tenant)
+    unit = Unit(
+        tenant_id=tenant.id,
+        name="Unidade Demo Webchat",
+        code="DEMO-WEBCHAT",
+        is_active=True,
+        address={},
+        working_hours={},
+    )
+    db_session.add(unit)
+    db_session.flush()
+    professional = Professional(
+        tenant_id=tenant.id,
+        unit_id=unit.id,
+        full_name="Dra. Demo Webchat",
+        specialty="avaliacao",
+        procedures=["avaliacao"],
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.flush()
+
+    tracked_conversation_ids = []
+    tracked_patient_ids = []
+    tracked_appointment_ids = []
+
+    for index in range(5):
+        bundle = create_webchat_link_flow_session(
+            db_session,
+            tenant=tenant,
+            config=config,
+            landing_path="/agendar/tenant-b",
+            unit_id=unit.id,
+        )
+        capture_public_contact_phone(
+            db_session,
+            session=bundle.session,
+            raw_phone=f"(11) 99100-{1000 + index}",
+        )
+        db_session.flush()
+        conversation = db_session.get(Conversation, bundle.session.linked_conversation_id)
+        patient = db_session.get(Patient, bundle.session.linked_patient_id)
+        assert conversation is not None
+        assert patient is not None
+
+        patient.full_name = f"Paciente Demo Agendado {index + 1}"
+        patient.email = f"paciente.demo.{index + 1}@example.com"
+        db_session.add(patient)
+
+        starts_at = datetime(2026, 6, 1 + index, 10, 0, tzinfo=UTC)
+        ends_at = starts_at + timedelta(minutes=60)
+        result = _appointment_response_from_selected_slot(
+            db_session,
+            conversation=conversation,
+            unit=unit,
+            selected_slot={
+                "label": starts_at.strftime("%d/%m/%Y %H:%M"),
+                "starts_at_utc": starts_at,
+                "ends_at_utc": ends_at,
+                "professional_id": str(professional.id),
+                "professional_name": professional.full_name,
+            },
+            procedure_type="avaliacao",
+            period="manha",
+            requested_date=starts_at.date(),
+        )
+        db_session.flush()
+        db_session.refresh(bundle.session)
+
+        assert result["mode"] == "appointment_created"
+        assert bundle.session.linked_appointment_id is not None
+        assert bundle.session.completed_at is not None
+        tracked_conversation_ids.append(conversation.id)
+        tracked_patient_ids.append(patient.id)
+        tracked_appointment_ids.append(bundle.session.linked_appointment_id)
+
+    assert len(set(tracked_conversation_ids)) == 5
+    assert len(set(tracked_patient_ids)) == 5
+    assert len(set(tracked_appointment_ids)) == 5
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(Appointment)
+            .where(
+                Appointment.tenant_id == tenant.id,
+                Appointment.id.in_(tracked_appointment_ids),
+                Appointment.origin == "ai_autoresponder",
+            )
+        )
+        == 5
+    )
+
+    prospect = ProspectAccount(
+        clinic_name="Clinica Demo Cleanup",
+        tenant_seed_key="clinica-demo-cleanup",
+        demo_tenant_id=tenant.id,
+        demo_status="ativa",
+    )
+    db_session.add(prospect)
+    db_session.flush()
+    demo_tenant_id = tenant.id
+
+    cleanup_demo_resources(
+        db_session,
+        prospect=prospect,
+        reason="deleted",
+        actor_id=None,
+    )
+    db_session.flush()
+
+    assert prospect.demo_tenant_id is None
+    assert db_session.scalar(select(func.count()).select_from(Tenant).where(Tenant.id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(Tenant).where(Tenant.id == control_tenant_id)) == 1
+    assert db_session.scalar(select(func.count()).select_from(Conversation).where(Conversation.tenant_id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(Patient).where(Patient.tenant_id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(Appointment).where(Appointment.tenant_id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(Message).where(Message.tenant_id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(LinkFlowSession).where(LinkFlowSession.tenant_id == demo_tenant_id)) == 0
+    assert db_session.scalar(select(func.count()).select_from(LinkFlowEvent).where(LinkFlowEvent.tenant_id == demo_tenant_id)) == 0

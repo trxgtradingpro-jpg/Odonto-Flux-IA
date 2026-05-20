@@ -238,6 +238,27 @@ function storeWebchatSession(clinicSlug: string, session: PublicBookingSession |
   window.localStorage.setItem(key, JSON.stringify(session));
 }
 
+function notifyDemoWebchatParent({
+  clinicSlug,
+  sessionId,
+  reason,
+}: {
+  clinicSlug: string;
+  sessionId: string;
+  reason: "contact_captured" | "message_sent";
+}) {
+  if (typeof window === "undefined" || window.parent === window) return;
+  window.parent.postMessage(
+    {
+      type: "clinicflux:webchat-updated",
+      clinicSlug,
+      sessionId,
+      reason,
+    },
+    window.location.origin,
+  );
+}
+
 function normalizePhoneDraft(value: string): string {
   return value.replace(/[^\d+()\-\s]/g, "").slice(0, 30);
 }
@@ -350,6 +371,11 @@ function PublicWebchat({
           : [...current, response.message],
       );
       await loadMessages(response.message.id);
+      notifyDemoWebchatParent({
+        clinicSlug,
+        sessionId: session.session_id,
+        reason: "message_sent",
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel enviar sua mensagem.";
       setChatError(message);
@@ -1298,6 +1324,11 @@ export default function PublicBookingPage() {
       );
       setContactPhoneDraft(response.contact_phone || contactPhoneDraft);
       if (session.cta_mode === "webchat") {
+        notifyDemoWebchatParent({
+          clinicSlug,
+          sessionId: session.session_id,
+          reason: "contact_captured",
+        });
         void loadSummary();
       }
     } catch (err) {

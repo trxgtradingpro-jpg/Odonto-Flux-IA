@@ -400,6 +400,11 @@ def capture_public_contact_phone(
                 conversation.unit_id = session.unit_id
             db.add(conversation)
 
+    if session.cta_mode == "webchat":
+        from app.services.webchat_service import ensure_webchat_conversation
+
+        ensure_webchat_conversation(db, session=session, tenant=tenant)
+
     register_link_flow_event_once(
         db,
         session=session,
@@ -606,7 +611,7 @@ def record_link_flow_appointment_result(
         "appointment_id": str(appointment_id),
         **(payload if isinstance(payload, dict) else {}),
     }
-    return register_link_flow_event_once(
+    event = register_link_flow_event_once(
         db,
         session=session,
         event_name=event_name,
@@ -614,6 +619,9 @@ def record_link_flow_appointment_result(
         unique_payload_key="appointment_id",
         unique_payload_value=str(appointment_id),
     )
+    if event:
+        db.flush()
+    return event
 
 
 def close_link_flow_session(

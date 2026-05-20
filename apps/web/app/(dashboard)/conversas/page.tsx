@@ -309,6 +309,13 @@ type DemoWhatsAppExperienceStage =
   | "awaiting_appointment"
   | "appointment_ready";
 
+type DemoWebchatParentMessage = {
+  type?: string;
+  clinicSlug?: string;
+  sessionId?: string;
+  reason?: string;
+};
+
 type DemoSimulationMessage = {
   id: string;
   direction: "inbound" | "outbound";
@@ -1180,6 +1187,7 @@ export default function ConversasPage() {
     refetchInterval: 7000,
     refetchOnWindowFocus: true,
   });
+  const refetchInboxDataset = inboxQuery.refetch;
 
   const messagesQuery = useQuery<MessageResponse>({
     queryKey: ["conversation-messages", selectedConversationId],
@@ -2098,6 +2106,40 @@ export default function ConversasPage() {
       window.dispatchEvent(new CustomEvent(DEMO_WEBCHAT_WORKSPACE_EVENT_NAME, { detail: { open: false } }));
     };
   }, [demoWorkspaceOpen]);
+
+  useEffect(() => {
+    if (!isDemoUser || demoEntryChannel !== "webchat") return;
+
+    let active = true;
+    const handleWebchatParentMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as DemoWebchatParentMessage | null;
+      if (!data || data.type !== "clinicflux:webchat-updated") return;
+
+      const sessionId = String(data.sessionId || "").trim();
+      const expectedSessionId = readStoredWebchatSessionIdFromPublicEntryPath(demoResolvedPublicEntryPath);
+      if (expectedSessionId && sessionId && sessionId !== expectedSessionId) return;
+
+      void refetchInboxDataset().then((result) => {
+        if (!active) return;
+        const linkedThreadId = sessionId ? `link_flow:${sessionId}` : null;
+        const matchedConversation = linkedThreadId
+          ? result.data?.conversations.find((item) => item.external_thread_id === linkedThreadId) ?? null
+          : null;
+        if (!matchedConversation) return;
+
+        setDemoWhatsAppTrackedConversationId(matchedConversation.id);
+        setDemoWhatsAppTrackedPatientId(matchedConversation.patient_id ?? null);
+        setSelectedConversationId(matchedConversation.id);
+      });
+    };
+
+    window.addEventListener("message", handleWebchatParentMessage);
+    return () => {
+      active = false;
+      window.removeEventListener("message", handleWebchatParentMessage);
+    };
+  }, [demoEntryChannel, demoResolvedPublicEntryPath, isDemoUser, refetchInboxDataset]);
 
   useEffect(() => {
     if (!isDemoUser) return;
