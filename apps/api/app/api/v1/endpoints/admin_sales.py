@@ -765,7 +765,7 @@ def send_demo_access(
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     return {
         "access_token": raw_token,
-        "demo_login_url": f"{_base_url(request)}/login?demo_token={raw_token}",
+        "demo_login_url": sales.build_demo_login_url(_base_url(request), raw_token),
         "expires_at": prospect.demo_access_token_expires_at,
     }
 
@@ -1030,7 +1030,7 @@ def demo_magic_link(
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     return {
         "access_token": raw_token,
-        "demo_login_url": f"{_base_url(request)}/login?demo_token={raw_token}",
+        "demo_login_url": sales.build_demo_login_url(_base_url(request), raw_token),
         "expires_at": prospect.demo_access_token_expires_at,
     }
 

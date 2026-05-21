@@ -350,9 +350,96 @@ def _combine_day_and_time(base: datetime, time_text: str) -> datetime:
 
 
 def _slugify(value: str) -> str:
-    text = value.lower().strip()
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    text = normalized.encode("ascii", "ignore").decode("ascii").lower().strip()
     text = re.sub(r"[^a-z0-9]+", "-", text)
     return text.strip("-") or "clinica-demo"
+
+
+def _last_four_phone_digits(*phones: str | None) -> str | None:
+    for phone in phones:
+        normalized = normalize_phone(phone)
+        if len(normalized) >= 4:
+            return normalized[-4:]
+    return None
+
+
+def _limited_slug(base: str, suffix: str | None = None, *, max_length: int = 120) -> str:
+    clean_base = (base or "clinica-demo").strip("-") or "clinica-demo"
+    clean_suffix = (suffix or "").strip("-")
+    suffix_text = f"-{clean_suffix}" if clean_suffix else ""
+    available = max(1, max_length - len(suffix_text))
+    trimmed_base = clean_base[:available].strip("-") or "clinica-demo"
+    return f"{trimmed_base}{suffix_text}"[:max_length].strip("-") or "clinica-demo"
+
+
+def _prospect_name_exists(db: Session, *, clinic_name: str, current_prospect_id: UUID | None = None) -> bool:
+    normalized_name = str(clinic_name or "").strip().lower()
+    if not normalized_name:
+        return False
+    stmt = select(ProspectAccount.id).where(func.lower(ProspectAccount.clinic_name) == normalized_name)
+    if current_prospect_id:
+        stmt = stmt.where(ProspectAccount.id != current_prospect_id)
+    return db.scalar(stmt.limit(1)) is not None
+
+
+def _unique_seed_key(db: Session, candidate: str, *, current_prospect_id: UUID | None = None) -> str:
+    base = (candidate or "clinica-demo").strip("-")[:120] or "clinica-demo"
+    index = 2
+    current = base
+    while True:
+        stmt = select(ProspectAccount.id).where(ProspectAccount.tenant_seed_key == current)
+        if current_prospect_id:
+            stmt = stmt.where(ProspectAccount.id != current_prospect_id)
+        if db.scalar(stmt.limit(1)) is None:
+            return current
+        suffix = f"-{index}"
+        current = f"{base[: 120 - len(suffix)]}{suffix}"
+        index += 1
+
+
+def _friendly_prospect_key(
+    db: Session,
+    *,
+    clinic_name: str,
+    phone: str | None,
+    whatsapp_phone: str | None,
+    current_prospect_id: UUID | None = None,
+) -> str:
+    base = _slugify(clinic_name)
+    has_same_name = _prospect_name_exists(db, clinic_name=clinic_name, current_prospect_id=current_prospect_id)
+    suffix = _last_four_phone_digits(whatsapp_phone, phone) if has_same_name else None
+    candidate = _limited_slug(base, suffix)
+    if has_same_name and not suffix:
+        candidate = _limited_slug(base, "2")
+    return _unique_seed_key(db, candidate, current_prospect_id=current_prospect_id)
+
+
+def _demo_token_taken(db: Session, token: str, *, current_prospect_id: UUID | None = None) -> bool:
+    stmt = select(ProspectAccount.id).where(ProspectAccount.demo_access_token_hash == sha256_text(token))
+    if current_prospect_id:
+        stmt = stmt.where(ProspectAccount.id != current_prospect_id)
+    return db.scalar(stmt.limit(1)) is not None
+
+
+def _friendly_demo_access_token(db: Session, prospect: ProspectAccount) -> str:
+    base = _slugify(prospect.clinic_name)
+    has_same_name = _prospect_name_exists(db, clinic_name=prospect.clinic_name, current_prospect_id=prospect.id)
+    suffix = _last_four_phone_digits(prospect.whatsapp_phone, prospect.phone, prospect.test_phone_number) if has_same_name else None
+    candidate = _limited_slug(base, suffix)
+    if has_same_name and not suffix:
+        candidate = _limited_slug(base, "2")
+
+    index = 2
+    token = candidate
+    while _demo_token_taken(db, token, current_prospect_id=prospect.id):
+        token = _limited_slug(candidate, str(index))
+        index += 1
+    return token
+
+
+def build_demo_login_url(base_url: str, token: str) -> str:
+    return f"{base_url}/login?demo_token={token}"
 
 
 def _demo_email(prospect: ProspectAccount) -> str:
@@ -853,13 +940,14 @@ def _demo_whatsapp_settings(prospect: ProspectAccount) -> dict[str, str | None]:
     return _normalize_demo_whatsapp_settings(raw if isinstance(raw, dict) else None)
 
 
-def _normalize_demo_intake_settings(value: dict | None) -> dict:
+def _normalize_demo_intake_settings(value: dict | None, *, prefer_webchat: bool = False) -> dict:
     raw = value if isinstance(value, dict) else {}
     raw_link_flow = raw.get("link_flow") if isinstance(raw.get("link_flow"), dict) else {}
     mode = str(raw.get("mode") or DEMO_INTAKE_DEFAULT_SETTINGS["mode"]).strip()
+    default_cta_mode = "webchat" if prefer_webchat else DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["cta_mode"]
     cta_mode = str(
         raw_link_flow.get("cta_mode")
-        or DEMO_INTAKE_DEFAULT_SETTINGS["link_flow"]["cta_mode"]
+        or default_cta_mode
     ).strip()
 
     payload = {
@@ -892,10 +980,23 @@ def _normalize_demo_intake_settings(value: dict | None) -> dict:
     return validate_intake_config_payload(payload)
 
 
-def _demo_intake_settings(prospect: ProspectAccount) -> dict:
+def _demo_should_default_to_webchat(db: Session, *, prospect: ProspectAccount) -> bool:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    raw_demo_intake = snapshot.get("demo_intake")
+    if isinstance(raw_demo_intake, dict) and raw_demo_intake:
+        return False
+    if not prospect.demo_tenant_id:
+        return False
+    return _resolve_demo_whatsapp_link(db, tenant_id=prospect.demo_tenant_id) is None
+
+
+def _demo_intake_settings(db: Session, prospect: ProspectAccount) -> dict:
     snapshot = dict(prospect.proposal_snapshot or {})
     raw = snapshot.get("demo_intake")
-    return _normalize_demo_intake_settings(raw if isinstance(raw, dict) else None)
+    return _normalize_demo_intake_settings(
+        raw if isinstance(raw, dict) else None,
+        prefer_webchat=_demo_should_default_to_webchat(db, prospect=prospect),
+    )
 
 
 def _normalize_demo_background_settings(value: dict | None) -> dict[str, str | float]:
@@ -953,7 +1054,7 @@ def ensure_demo_intake_config_ready(
     linked_prospect = prospect or db.scalar(
         select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1)
     )
-    desired_config = _demo_intake_settings(linked_prospect) if linked_prospect else dict(DEMO_INTAKE_DEFAULT_SETTINGS)
+    desired_config = _demo_intake_settings(db, linked_prospect) if linked_prospect else dict(DEMO_INTAKE_DEFAULT_SETTINGS)
     _upsert_setting(db, tenant_id=tenant_id, key="intake.config", value=desired_config)
     return desired_config
 
@@ -1101,7 +1202,7 @@ def _ensure_outreach_demo_link(
     if prospect.demo_tenant_id:
         raw_token = issue_demo_access(db, prospect, actor_id=actor_id)
         return _tracked_url(
-            f"{base_url}/login?demo_token={raw_token}",
+            build_demo_login_url(base_url, raw_token),
             prospect=prospect,
             content="decision_maker_pitch",
         )
@@ -1933,7 +2034,12 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         proposal_snapshot=sanitized_snapshot,
         created_by=actor_id,
         updated_by=actor_id,
-        tenant_seed_key=f"{_slugify(payload.clinic_name)}-{secrets.token_hex(3)}",
+        tenant_seed_key=_friendly_prospect_key(
+            db,
+            clinic_name=payload.clinic_name,
+            phone=payload.phone,
+            whatsapp_phone=payload.whatsapp_phone,
+        ),
     )
     db.add(prospect)
     db.flush()
@@ -2278,7 +2384,7 @@ def _create_settings(db: Session, *, tenant_id: UUID, prospect: ProspectAccount,
             "demo_background_opacity": demo_background["background_image_opacity"],
         },
         "branding.logo_data_url": None,
-        "intake.config": _demo_intake_settings(prospect),
+        "intake.config": _demo_intake_settings(db, prospect),
     }
     for key, value in settings_payloads.items():
         _upsert_setting(db, tenant_id=tenant_id, key=key, value=value)
@@ -2757,7 +2863,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         return {
             "prospect": prospect,
             "access_token": raw_token,
-            "demo_login_url": f"{base_url}/login?demo_token={raw_token}",
+            "demo_login_url": build_demo_login_url(base_url, raw_token),
             "checklist": prospect.demo_checklist,
             "ai_draft": _latest_ai_output(db, prospect.id),
         }
@@ -2882,7 +2988,7 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     return {
         "prospect": prospect,
         "access_token": raw_token,
-        "demo_login_url": f"{base_url}/login?demo_token={raw_token}",
+        "demo_login_url": build_demo_login_url(base_url, raw_token),
         "checklist": prospect.demo_checklist,
         "ai_draft": ai_draft,
     }
@@ -3170,7 +3276,7 @@ def issue_demo_access(db: Session, prospect: ProspectAccount, *, actor_id: UUID 
         )
     if not prospect.demo_tenant_id or not prospect.demo_user_id:
         raise ApiError(status_code=400, code="DEMO_NOT_CREATED", message="Gere a demo antes de emitir acesso")
-    raw_token = secrets.token_urlsafe(36)
+    raw_token = _friendly_demo_access_token(db, prospect)
     prospect.demo_access_token_hash = sha256_text(raw_token)
     prospect.demo_access_token_expires_at = _now() + timedelta(hours=settings.demo_access_token_expire_hours)
     prospect.demo_access_revoked_at = None
@@ -3215,7 +3321,7 @@ def _resolve_demo_whatsapp_link(db: Session, *, tenant_id: UUID) -> str | None:
 
 
 def _resolve_demo_entry_metadata(db: Session, *, prospect: ProspectAccount) -> dict[str, str | None]:
-    intake_settings = _demo_intake_settings(prospect)
+    intake_settings = _demo_intake_settings(db, prospect)
     link_flow = intake_settings.get("link_flow") if isinstance(intake_settings.get("link_flow"), dict) else {}
     cta_mode = str(link_flow.get("cta_mode") or "whatsapp_redirect").strip()
     mode = str(intake_settings.get("mode") or "official_api").strip()
@@ -3230,6 +3336,45 @@ def _resolve_demo_entry_metadata(db: Session, *, prospect: ProspectAccount) -> d
     return {
         "entry_channel": "whatsapp",
         "public_entry_path": None,
+    }
+
+
+def resolve_demo_runtime_entry_context(
+    db: Session,
+    *,
+    tenant_id: UUID | None,
+) -> dict[str, str | None]:
+    empty_context = {
+        "demo_test_phone_number": None,
+        "demo_whatsapp_link": None,
+        "demo_entry_channel": None,
+        "demo_public_entry_path": None,
+    }
+    if not tenant_id:
+        return empty_context
+
+    prospect = db.scalar(select(ProspectAccount).where(ProspectAccount.demo_tenant_id == tenant_id).limit(1))
+    if not prospect:
+        return empty_context
+
+    desired_config = _demo_intake_settings(db, prospect)
+    existing_setting = db.scalar(
+        select(Setting).where(
+            Setting.tenant_id == tenant_id,
+            Setting.key == "intake.config",
+        )
+    )
+    existing_value = existing_setting.value if existing_setting and isinstance(existing_setting.value, dict) else None
+    if existing_value != desired_config:
+        _upsert_setting(db, tenant_id=tenant_id, key="intake.config", value=desired_config)
+        db.commit()
+
+    entry_metadata = _resolve_demo_entry_metadata(db, prospect=prospect)
+    return {
+        "demo_test_phone_number": prospect.test_phone_number,
+        "demo_whatsapp_link": _resolve_demo_whatsapp_link(db, tenant_id=tenant_id),
+        "demo_entry_channel": entry_metadata["entry_channel"],
+        "demo_public_entry_path": entry_metadata["public_entry_path"],
     }
 
 

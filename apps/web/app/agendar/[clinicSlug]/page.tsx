@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CheckCircle2,
   ClipboardList,
+  Info,
   Mail,
   MapPinHouse,
   MessageCircle,
@@ -1002,6 +1003,7 @@ export default function PublicBookingPage() {
   const isDemoEmbeddedRequest = searchParams.get("embed") === "demo-webchat";
   const demoSessionResetKey = searchParams.get("demo_session_reset");
   const bootstrappedRef = useRef(false);
+  const bootstrapRetryTimeoutRef = useRef<number | null>(null);
 
   const [profile, setProfile] = useState<PublicBookingProfile | null>(null);
   const [session, setSession] = useState<PublicBookingSession | null>(null);
@@ -1015,11 +1017,27 @@ export default function PublicBookingPage() {
   const [contactPhoneDraft, setContactPhoneDraft] = useState("");
   const [savingContactPhone, setSavingContactPhone] = useState(false);
   const [contactPhoneError, setContactPhoneError] = useState<string | null>(null);
+  const [bootstrapRetryTick, setBootstrapRetryTick] = useState(0);
   const mobileSummaryGestureRef = useRef<{ startX: number; action: "open" | "close" } | null>(null);
+
+  const scheduleBootstrapRetry = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (bootstrapRetryTimeoutRef.current) {
+      window.clearTimeout(bootstrapRetryTimeoutRef.current);
+    }
+    bootstrapRetryTimeoutRef.current = window.setTimeout(() => {
+      setBootstrapRetryTick((current) => current + 1);
+    }, 3000);
+  }, []);
 
   useEffect(() => {
     if (!clinicSlug || bootstrappedRef.current) return;
     bootstrappedRef.current = true;
+    setBootstrapRetryTick((current) => current + 1);
+  }, [clinicSlug]);
+
+  useEffect(() => {
+    if (!clinicSlug || bootstrapRetryTick <= 0) return;
 
     async function bootstrap() {
       setLoading(true);
@@ -1030,6 +1048,11 @@ export default function PublicBookingPage() {
         if (!bookingProfile.link_flow.enabled || !bookingProfile.link_flow.operational) {
           setSession(null);
           storeWebchatSession(clinicSlug, null);
+          setError(
+            bookingProfile.link_flow.unavailable_message ||
+              "Agendamento por link indisponivel no momento. Entre em contato com a clinica pelo canal oficial.",
+          );
+          setLoading(false);
           return;
         }
 
@@ -1051,7 +1074,7 @@ export default function PublicBookingPage() {
                 contact_phone: storedSessionState.contact_phone,
                 contact_phone_required: storedSessionState.contact_phone_required,
               };
-              await publicApiFetch(
+              void publicApiFetch(
                 `/public/booking/sessions/${storedSession.session_id}/events`,
                 {
                   method: "POST",
@@ -1083,8 +1106,9 @@ export default function PublicBookingPage() {
         if (bookingSession.cta_mode === "webchat") {
           storeWebchatSession(clinicSlug, bookingSession);
         }
+        setLoading(false);
 
-        await publicApiFetch(
+        void publicApiFetch(
           `/public/booking/sessions/${bookingSession.session_id}/events`,
           {
             method: "POST",
@@ -1097,16 +1121,24 @@ export default function PublicBookingPage() {
           bookingSession.cta_mode === "webchat"
             ? { publicAccessToken: bookingSession.public_access_token }
             : undefined,
-        );
+        ).catch(() => undefined);
       } catch (err) {
+        setSession(null);
         setError(err instanceof Error ? err.message : "Nao foi possivel carregar o agendamento.");
-      } finally {
-        setLoading(false);
+        scheduleBootstrapRetry();
       }
     }
 
     void bootstrap();
-  }, [clinicSlug, demoSessionResetKey, isDemoEmbeddedRequest]);
+  }, [bootstrapRetryTick, clinicSlug, demoSessionResetKey, isDemoEmbeddedRequest, scheduleBootstrapRetry]);
+
+  useEffect(() => {
+    return () => {
+      if (bootstrapRetryTimeoutRef.current) {
+        window.clearTimeout(bootstrapRetryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const previousHtmlOverflow = document.documentElement.style.overflow;
@@ -1224,8 +1256,8 @@ export default function PublicBookingPage() {
       ? profile.link_flow.unavailable_message ||
         "Agendamento por link indisponivel no momento. Entre em contato com a clinica pelo canal oficial."
       : null;
-  const showPublicBookingLoadingPanel = loading && !linkFlowUnavailable && !error && !session;
-  const showPublicBookingErrorPanel = !showPublicBookingLoadingPanel && (!profile?.link_flow.operational || !session);
+  const publicBookingBlockingMessage = linkFlowUnavailable;
+  const showPublicBookingLoadingPanel = (loading || !session) && !publicBookingBlockingMessage;
 
   const handleMobileSummaryGestureStart = useCallback(
     (event: ReactPointerEvent<HTMLElement>, action: "open" | "close") => {
@@ -1513,20 +1545,25 @@ export default function PublicBookingPage() {
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--booking-border)] bg-white shadow-sm">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--booking-primary)] border-r-transparent" />
                   </div>
-                  <p className="mt-4 text-lg font-semibold text-stone-900">Carregando atendimento...</p>
+                  <p className="mt-4 text-lg font-semibold text-stone-900">
+                    {error ? "Reconectando atendimento..." : "Carregando atendimento..."}
+                  </p>
                   <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
-                    Preparando a conversa oficial da clinica para voce.
+                    {error
+                      ? "A conexao oscilou, mas a demo continua tentando abrir o chat automaticamente."
+                      : "Preparando a conversa oficial da clinica para voce e tentando novamente automaticamente ate conectar."}
                   </p>
                 </div>
               </div>
             ) : null}
-            {showPublicBookingErrorPanel ? (
-              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+            {publicBookingBlockingMessage ? (
+              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-amber-200 bg-white/88 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
                 <div className="max-w-md">
-                  <p className="text-lg font-semibold text-stone-900">Nao foi possivel iniciar o atendimento agora.</p>
-                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
-                    {linkFlowUnavailable || error || "Tente novamente em instantes."}
-                  </p>
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm">
+                    <Info size={20} />
+                  </div>
+                  <p className="mt-4 text-lg font-semibold text-stone-900">Chat do site indisponível agora</p>
+                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{publicBookingBlockingMessage}</p>
                 </div>
               </div>
             ) : null}
@@ -1545,18 +1582,6 @@ export default function PublicBookingPage() {
           ) : null}
         </section>
 
-        {(linkFlowUnavailable || error) && profile?.link_flow.operational && session ? (
-          <div className="px-4 pb-4 sm:px-5 lg:px-6">
-            {linkFlowUnavailable ? (
-              <p className="rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                {linkFlowUnavailable}
-              </p>
-            ) : null}
-            {error ? (
-              <p className="mt-3 rounded-[22px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </main>
   );

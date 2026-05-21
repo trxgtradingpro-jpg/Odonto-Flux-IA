@@ -41,12 +41,16 @@ def test_sales_admin_generates_isolated_demo(client, auth_headers):
     assert redeemed.status_code == 200
     assert redeemed.json()["demo_target_path"] == "/conversas"
     assert redeemed.json()["demo_whatsapp_link"] is None
+    assert redeemed.json()["demo_entry_channel"] == "webchat"
+    assert redeemed.json()["demo_public_entry_path"] == f"/agendar/{demo['prospect']['slug']}"
     demo_auth = {"Authorization": f"Bearer {redeemed.json()['access_token']}"}
 
     me = client.get("/api/v1/auth/me", headers=demo_auth)
     assert me.status_code == 200
     assert me.json()["tenant_id"] == demo["prospect"]["demo_tenant_id"]
     assert "demo_client" in me.json()["roles"]
+    assert me.json()["demo_entry_channel"] == "webchat"
+    assert me.json()["demo_public_entry_path"] == f"/agendar/{demo['prospect']['slug']}"
 
     guide = client.get("/api/v1/demo/guide", headers=demo_auth)
     assert guide.status_code == 200

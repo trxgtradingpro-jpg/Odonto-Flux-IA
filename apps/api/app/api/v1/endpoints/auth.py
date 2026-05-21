@@ -22,6 +22,7 @@ from app.services.auth_service import (
     refresh_session,
     request_password_reset,
 )
+from app.services.sales_demo_service import resolve_demo_runtime_entry_context
 
 router = APIRouter(prefix='/auth', tags=['auth'])
 
@@ -93,10 +94,21 @@ def reset_password_confirm(payload: PasswordResetConfirmInput, db: Session = Dep
 def me(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     tenant = None
     unit = None
+    demo_runtime_context = {
+        "demo_test_phone_number": None,
+        "demo_whatsapp_link": None,
+        "demo_entry_channel": None,
+        "demo_public_entry_path": None,
+    }
     if principal.user.tenant_id:
         tenant = db.scalar(select(Tenant).where(Tenant.id == principal.user.tenant_id))
     if principal.user.unit_id:
         unit = db.scalar(select(Unit).where(Unit.id == principal.user.unit_id))
+    if principal.user.tenant_id and "demo_client" in set(principal.roles):
+        demo_runtime_context = resolve_demo_runtime_entry_context(
+            db,
+            tenant_id=principal.user.tenant_id,
+        )
 
     return {
         'id': principal.user.id,
@@ -113,4 +125,5 @@ def me(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
         'page_permissions': principal.user.page_permissions or {},
         'force_fullscreen_mode': bool(principal.user.force_fullscreen_mode),
         'server_time': datetime.now(UTC).isoformat(),
+        **demo_runtime_context,
     }

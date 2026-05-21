@@ -5,12 +5,13 @@ import Image from "next/image";
 import { useState } from "react";
 import { Bell, LogOut, Menu } from "lucide-react";
 
-import { Badge, Button } from "@odontoflux/ui";
+import { Button } from "@odontoflux/ui";
 
 import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { SessionContext } from "@/hooks/use-session";
+import { SingleLineAbbreviatedText } from "@/components/ui/single-line-abbreviated-text";
 import { clinicInitials } from "@/lib/formatters";
 import { QuickFocusPageKey } from "./quick-focus-pages";
 import { QuickAccessPill } from "./quick-access-pill";
@@ -39,9 +40,8 @@ export function Topbar({
   const badges = notificationsQuery.data?.badges;
   const totalAlerts = (badges?.pendingConfirmations ?? 0) + (badges?.conversations ?? 0);
   const clinicDisplayName = session?.tenant_name ?? branding?.clinicName ?? "Clinica atual";
-  const activeWorkspaceLabel = ownerUnitScope.canSwitchUnits
-    ? ownerUnitScope.selectedUnitName || "Todas as unidades"
-    : session?.unit_name ?? "Unidade principal";
+  const hasMultipleUnits = ownerUnitScope.canSwitchUnits && ownerUnitScope.units.length > 1;
+  const activeWorkspaceLabel = hasMultipleUnits ? ownerUnitScope.selectedUnitName || "Todas as unidades" : null;
 
   return (
     <header
@@ -73,14 +73,17 @@ export function Topbar({
               {clinicInitials(clinicDisplayName)}
             </div>
           )}
-          <div>
+          <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Clinica ativa {collapsed ? "- compacto" : ""}
             </p>
-            <h2 className="text-sm font-bold text-foreground md:text-base">
-              {clinicDisplayName}
-            </h2>
-            <p className="text-[11px] text-muted-foreground">{activeWorkspaceLabel}</p>
+            <SingleLineAbbreviatedText
+              text={clinicDisplayName}
+              className="text-sm font-bold text-foreground md:text-base"
+            />
+            {activeWorkspaceLabel ? (
+              <p className="truncate text-[11px] text-muted-foreground">{activeWorkspaceLabel}</p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -88,13 +91,13 @@ export function Topbar({
       <div className="flex min-w-0 items-center gap-1 sm:gap-2">
         <div
           data-demo-topbar-shortcut-slot="true"
-          className="hidden shrink-0 items-center justify-center md:flex"
+          className="flex min-w-0 flex-1 items-center justify-center md:shrink-0 md:flex-none"
         />
         {quickAccessPages.length && onOpenQuickAccess ? (
           <QuickAccessPill pages={quickAccessPages} onOpen={onOpenQuickAccess} className="hidden md:flex" />
         ) : null}
 
-        {ownerUnitScope.canSwitchUnits ? (
+        {hasMultipleUnits ? (
           <select
             className="hidden h-9 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground md:inline-flex"
             value={ownerUnitScope.selectedUnitId}
@@ -108,11 +111,7 @@ export function Topbar({
               </option>
             ))}
           </select>
-        ) : (
-          <Badge className="hidden border-primary/20 bg-primary/10 text-primary md:inline-flex">
-            {session?.unit_name ?? "Unidade"}
-          </Badge>
-        )}
+        ) : null}
 
         <div className="relative">
           <button

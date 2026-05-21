@@ -478,7 +478,7 @@ def issue_demo_link_if_possible(
         return None, ["Clique em gerar mensagem pronta para emitir um link temporario da demo."]
 
     raw_token = sales.issue_demo_access(db, prospect, actor_id=actor_id)
-    return f"{_base_url(base_url)}/login?demo_token={raw_token}", warnings
+    return sales.build_demo_login_url(_base_url(base_url), raw_token), warnings
 
 
 def latest_sales_message_event(db: Session, prospect: ProspectAccount) -> ProspectTimelineEvent | None:

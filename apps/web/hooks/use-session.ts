@@ -16,6 +16,10 @@ type SessionResponse = {
   unit_name?: string | null;
   tenant_trade_name?: string | null;
   tenant_timezone?: string | null;
+  demo_test_phone_number?: string | null;
+  demo_whatsapp_link?: string | null;
+  demo_entry_channel?: "whatsapp" | "webchat" | null;
+  demo_public_entry_path?: string | null;
   roles: string[];
   permissions: string[];
   page_permissions?: Record<string, unknown> | null;

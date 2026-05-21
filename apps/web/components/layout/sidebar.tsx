@@ -33,6 +33,7 @@ import {
 
 import { Badge, cn } from "@odontoflux/ui";
 
+import { SingleLineAbbreviatedText } from "@/components/ui/single-line-abbreviated-text";
 import { BrandingTheme } from "@/hooks/use-branding";
 import { useLiveNotifications } from "@/hooks/use-live-notifications";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
@@ -202,9 +203,9 @@ export function Sidebar({
   };
   const roles = session?.roles ?? [];
   const clinicDisplayName = session?.tenant_name ?? branding?.clinicName ?? "Clinica";
-  const activeUnitLabel = ownerUnitScope.canSwitchUnits
-    ? ownerUnitScope.selectedUnitName || "Todas as unidades"
-    : session?.unit_name ?? "Unidade principal";
+  const hasMultipleUnits = ownerUnitScope.canSwitchUnits && ownerUnitScope.units.length > 1;
+  const activeUnitLabel = hasMultipleUnits ? ownerUnitScope.selectedUnitName || "Todas as unidades" : null;
+  const clinicContextLabel = hasMultipleUnits ? BRAND_PLATFORM_LABEL : "Operacao da sua clinica";
 
   return (
     <>
@@ -258,9 +259,9 @@ export function Sidebar({
               </div>
             )}
             {!useCollapsed ? (
-              <div>
-                <h1 className="text-lg font-bold text-foreground">{clinicDisplayName}</h1>
-                <p className="text-xs text-muted-foreground">{BRAND_PLATFORM_LABEL}</p>
+              <div className="min-w-0">
+                <SingleLineAbbreviatedText text={clinicDisplayName} className="text-lg font-bold text-foreground" />
+                <p className="text-xs text-muted-foreground">{clinicContextLabel}</p>
               </div>
             ) : null}
           </div>
@@ -274,7 +275,7 @@ export function Sidebar({
           </button>
         </div>
 
-        {!useCollapsed ? (
+        {!useCollapsed && activeUnitLabel ? (
           <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted p-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Building2 size={14} />
@@ -282,7 +283,7 @@ export function Sidebar({
             </div>
             <p className="text-sm font-semibold text-foreground">{activeUnitLabel}</p>
             <p className="text-xs text-muted-foreground">
-              {ownerUnitScope.canSwitchUnits
+              {hasMultipleUnits
                 ? "Troque a unidade no seletor do topo quando precisar."
                 : "Escopo fixado conforme o perfil deste usuario."}
             </p>

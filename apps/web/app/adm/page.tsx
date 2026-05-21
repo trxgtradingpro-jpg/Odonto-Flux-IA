@@ -109,6 +109,34 @@ type ActivityEvent = {
   occurred_at: string;
 };
 
+type SalesTemplateMessage = {
+  key: string;
+  label: string;
+  body: string;
+  is_default: boolean;
+};
+
+type SalesTemplate = {
+  key: string;
+  label: string;
+  description: string;
+  recommended_for: string[];
+  body: string;
+  messages: SalesTemplateMessage[];
+};
+
+type MessagePreview = {
+  prospect: Prospect;
+  template_key: string;
+  template_label: string;
+  message_key: string;
+  message_label: string;
+  message_text: string;
+  demo_login_url?: string | null;
+  can_copy: boolean;
+  warnings: string[];
+};
+
 type OutreachResult = {
   prospect: Prospect;
   step: "reception_intro" | "decision_maker_pitch" | "video_followup" | string;
@@ -289,6 +317,8 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
 
+const CRM_PROSPECT_GRID_CLASS = "grid-cols-[minmax(220px,1.2fr)_110px_110px_70px_110px_228px]";
+
 type AdmSection = "crm" | "adm_whatsapp" | "whatsapp_settings";
 
 type AdmWhatsappConversation = {
@@ -362,6 +392,18 @@ function humanize(value: string) {
 function nullableText(value: string) {
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+function resolveOfficialWhatsAppNumber(prospect: Prospect) {
+  const rawPhone = `${prospect.whatsapp_phone || prospect.phone || ""}`.trim();
+  const digits = rawPhone.replace(/\D/g, "");
+  if (!digits) return null;
+  return digits.length <= 11 ? `55${digits}` : digits;
+}
+
+function resolveOfficialWhatsAppLink(prospect: Prospect) {
+  const number = resolveOfficialWhatsAppNumber(prospect);
+  return number ? `https://wa.me/${number}` : null;
 }
 
 function getDemoAiSettingsSnapshot(prospect: Prospect): ProspectDemoAiSettings {
@@ -1799,6 +1841,10 @@ export default function AdmPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [editDrawerOpen, setEditDrawerOpen] = useState(false);
+  const [officialWhatsAppProspect, setOfficialWhatsAppProspect] = useState<Prospect | null>(null);
+  const [officialTemplateKey, setOfficialTemplateKey] = useState("");
+  const [officialMessageKey, setOfficialMessageKey] = useState("");
+  const [officialMessagePreview, setOfficialMessagePreview] = useState<MessagePreview | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [lastDemoLink, setLastDemoLink] = useState("");
@@ -1833,6 +1879,13 @@ export default function AdmPage() {
     retry: false,
   });
 
+  const officialTemplatesQuery = useQuery<SalesTemplate[]>({
+    queryKey: ["adm-clinic-message-templates"],
+    queryFn: async () => (await api.get("/admin/clinic-messages/templates")).data,
+    enabled: hasToken && !forcePasswordChange,
+    retry: false,
+  });
+
   const selectedProspect = useMemo(() => {
     const rows = prospectsQuery.data?.data ?? [];
     return rows.find((item) => item.id === selectedId) ?? rows[0] ?? null;
@@ -1846,6 +1899,21 @@ export default function AdmPage() {
       }),
     [platformAccountsQuery.data?.data],
   );
+
+  const officialTemplates = useMemo(() => officialTemplatesQuery.data ?? [], [officialTemplatesQuery.data]);
+  const selectedOfficialTemplate = useMemo(
+    () => officialTemplates.find((template) => template.key === officialTemplateKey) ?? officialTemplates[0] ?? null,
+    [officialTemplateKey, officialTemplates],
+  );
+  const selectedOfficialTemplateMessage = useMemo(() => {
+    const messages = selectedOfficialTemplate?.messages ?? [];
+    return (
+      messages.find((message) => message.key === officialMessageKey) ??
+      messages.find((message) => message.is_default) ??
+      messages[0] ??
+      null
+    );
+  }, [officialMessageKey, selectedOfficialTemplate]);
 
   const platformAccountUsage = useMemo(() => {
     const usage: Record<string, { prospectId: string; clinicName: string }> = {};
@@ -1863,6 +1931,28 @@ export default function AdmPage() {
   useEffect(() => {
     if (!selectedId && selectedProspect) setSelectedId(selectedProspect.id);
   }, [selectedId, selectedProspect]);
+
+  useEffect(() => {
+    if (!officialWhatsAppProspect || !officialTemplates.length) return;
+    if (!selectedOfficialTemplate) {
+      const fallbackTemplate = officialTemplates[0];
+      const fallbackMessage =
+        fallbackTemplate.messages.find((message) => message.is_default) ?? fallbackTemplate.messages[0] ?? null;
+      setOfficialTemplateKey(fallbackTemplate.key);
+      setOfficialMessageKey(fallbackMessage?.key ?? "");
+      return;
+    }
+    if (!selectedOfficialTemplateMessage) {
+      const fallbackMessage =
+        selectedOfficialTemplate.messages.find((message) => message.is_default) ?? selectedOfficialTemplate.messages[0] ?? null;
+      setOfficialMessageKey(fallbackMessage?.key ?? "");
+    }
+  }, [
+    officialTemplates,
+    officialWhatsAppProspect,
+    selectedOfficialTemplate,
+    selectedOfficialTemplateMessage,
+  ]);
 
   const timelineQuery = useQuery<TimelineEvent[]>({
     queryKey: ["adm-prospect-timeline", selectedProspect?.id],
@@ -2019,6 +2109,37 @@ export default function AdmPage() {
     },
   });
 
+  const officialMessagePreviewMutation = useMutation({
+    mutationFn: async ({
+      prospectId,
+      templateKey,
+      messageKey,
+    }: {
+      prospectId: string;
+      templateKey: string;
+      messageKey: string;
+    }) =>
+      (
+        await api.post<MessagePreview>("/admin/clinic-messages/preview", {
+          prospect_id: prospectId,
+          template_key: templateKey || null,
+          message_key: messageKey || null,
+          issue_demo_access: true,
+        })
+      ).data,
+    onSuccess: (data) => {
+      setOfficialMessagePreview(data);
+      setOfficialTemplateKey(data.template_key);
+      setOfficialMessageKey(data.message_key);
+      queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel montar a mensagem para o WhatsApp oficial."));
+    },
+  });
+
   if (!hasToken) {
     return <LoginPanel onLogged={(forceChange) => {
       setHasToken(true);
@@ -2037,11 +2158,48 @@ export default function AdmPage() {
     setAdmWhatsappProspectId(prospect.id);
     setActiveSection("adm_whatsapp");
   };
+  const openOfficialWhatsAppTemplateDrawer = (prospect: Prospect) => {
+    setSelectedId(prospect.id);
+    setOfficialWhatsAppProspect(prospect);
+    setOfficialTemplateKey("");
+    setOfficialMessageKey("");
+    setOfficialMessagePreview(null);
+  };
   const openProspectEditor = (prospect: Prospect) => {
     setSelectedId(prospect.id);
     setEditingProspect(prospect);
     setEditDrawerOpen(true);
   };
+
+  async function generateOfficialWhatsAppPreview() {
+    if (!officialWhatsAppProspect || !selectedOfficialTemplate || !selectedOfficialTemplateMessage) return null;
+    try {
+      return await officialMessagePreviewMutation.mutateAsync({
+        prospectId: officialWhatsAppProspect.id,
+        templateKey: selectedOfficialTemplate.key,
+        messageKey: selectedOfficialTemplateMessage.key,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function openOfficialWhatsAppWithTemplate() {
+    if (!officialWhatsAppProspect) return;
+    const number = resolveOfficialWhatsAppNumber(officialWhatsAppProspect);
+    if (!number) {
+      toast.error("Essa clinica nao tem numero de WhatsApp cadastrado.");
+      return;
+    }
+    const preview = officialMessagePreview ?? (await generateOfficialWhatsAppPreview());
+    if (!preview) return;
+    if (!preview.can_copy) {
+      toast.error(preview.warnings[0] || "Essa mensagem ainda nao pode ser enviada.");
+      return;
+    }
+    const message = encodeURIComponent(preview.message_text);
+    window.open(`https://wa.me/${number}?text=${message}`, "_blank", "noopener,noreferrer");
+  }
 
   return (
     <main className="min-h-screen bg-stone-100 text-stone-950">
@@ -2176,7 +2334,7 @@ export default function AdmPage() {
             </div>
 
             <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
-              <div className="grid grid-cols-[1.2fr_0.8fr_0.75fr_0.6fr_0.75fr_1fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500">
+              <div className={cn("grid gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500", CRM_PROSPECT_GRID_CLASS)}>
                 <span>Clinica</span>
                 <span>Status</span>
                 <span>Temperatura</span>
@@ -2188,13 +2346,16 @@ export default function AdmPage() {
                 {prospectsQuery.isLoading ? (
                   <div className="p-6 text-sm text-stone-500">Carregando prospects...</div>
                 ) : prospects.length ? (
-                  prospects.map((prospect) => (
+                  prospects.map((prospect) => {
+                    const officialWhatsAppLink = resolveOfficialWhatsAppLink(prospect);
+                    return (
                     <div
                       key={prospect.id}
                       role="button"
                       tabIndex={0}
                       className={cn(
-                        "grid w-full grid-cols-[1.2fr_0.8fr_0.75fr_0.6fr_0.75fr_1fr] gap-3 border-b border-stone-100 px-4 py-3 text-left text-sm transition hover:bg-stone-50",
+                        "grid w-full gap-3 border-b border-stone-100 px-4 py-3 text-left text-sm transition hover:bg-stone-50",
+                        CRM_PROSPECT_GRID_CLASS,
                         selectedProspect?.id === prospect.id && "bg-emerald-50/70",
                       )}
                       onClick={() => setSelectedId(prospect.id)}
@@ -2207,6 +2368,7 @@ export default function AdmPage() {
                         <span className="block truncate text-xs text-stone-500">
                           {[prospect.city, prospect.whatsapp_phone || prospect.phone].filter(Boolean).join(" - ") || "Sem contato"}
                         </span>
+                        <span className="block truncate text-xs text-stone-400">Criada em {formatDateTimeBR(prospect.created_at)}</span>
                       </span>
                       <span>
                         <Badge className={statusClass(prospect.status)}>{humanize(prospect.status)}</Badge>
@@ -2216,7 +2378,7 @@ export default function AdmPage() {
                       </span>
                       <span className="font-bold">{prospect.score}</span>
                       <span className="text-xs text-stone-600">{prospect.demo_tenant_id ? humanize(prospect.demo_status) : "Nao criada"}</span>
-                      <span className="flex gap-1">
+                      <span className="flex min-w-[228px] gap-1">
                         <Button
                           type="button"
                           className="h-8 w-8 px-0"
@@ -2260,6 +2422,24 @@ export default function AdmPage() {
                           type="button"
                           className="h-8 w-8 px-0"
                           variant="outline"
+                          title={officialWhatsAppLink ? "Escolher template para WhatsApp oficial" : "WhatsApp oficial indisponivel"}
+                          aria-label={`Escolher template para WhatsApp oficial de ${prospect.clinic_name}`}
+                          disabled={!officialWhatsAppLink}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (!officialWhatsAppLink) {
+                              toast.error("Essa clinica nao tem numero de WhatsApp cadastrado.");
+                              return;
+                            }
+                            openOfficialWhatsAppTemplateDrawer(prospect);
+                          }}
+                        >
+                          <PhoneCall size={14} />
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-8 w-8 px-0"
+                          variant="outline"
                           title="Copiar acesso"
                           aria-label={`Copiar acesso de ${prospect.clinic_name}`}
                           onClick={(event) => {
@@ -2284,7 +2464,8 @@ export default function AdmPage() {
                         </Button>
                       </span>
                     </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="p-8">
                     <EmptyState title="Nenhuma clinica cadastrada" description="Cadastre o primeiro prospect para gerar uma demo personalizada." />
@@ -2361,6 +2542,39 @@ export default function AdmPage() {
           queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline", prospect.id] });
         }}
       />
+      <OfficialWhatsAppTemplateDrawer
+        open={Boolean(officialWhatsAppProspect)}
+        prospect={officialWhatsAppProspect}
+        templates={officialTemplates}
+        selectedTemplate={selectedOfficialTemplate}
+        selectedTemplateMessage={selectedOfficialTemplateMessage}
+        preview={officialMessagePreview}
+        templatesLoading={officialTemplatesQuery.isLoading}
+        previewLoading={officialMessagePreviewMutation.isPending}
+        onOpenChange={(open) => {
+          if (open) return;
+          setOfficialWhatsAppProspect(null);
+          setOfficialMessagePreview(null);
+        }}
+        onTemplateChange={(templateKey) => {
+          const nextTemplate = officialTemplates.find((template) => template.key === templateKey) ?? null;
+          const nextMessage =
+            nextTemplate?.messages.find((message) => message.is_default) ?? nextTemplate?.messages[0] ?? null;
+          setOfficialTemplateKey(templateKey);
+          setOfficialMessageKey(nextMessage?.key ?? "");
+          setOfficialMessagePreview(null);
+        }}
+        onMessageChange={(messageKey) => {
+          setOfficialMessageKey(messageKey);
+          setOfficialMessagePreview(null);
+        }}
+        onGeneratePreview={() => {
+          void generateOfficialWhatsAppPreview();
+        }}
+        onOpenWhatsApp={() => {
+          void openOfficialWhatsAppWithTemplate();
+        }}
+      />
     </main>
   );
 }
@@ -2376,6 +2590,188 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
         <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-100 text-stone-600">{icon}</div>
       </CardContent>
     </Card>
+  );
+}
+
+function OfficialWhatsAppTemplateDrawer({
+  open,
+  prospect,
+  templates,
+  selectedTemplate,
+  selectedTemplateMessage,
+  preview,
+  templatesLoading,
+  previewLoading,
+  onOpenChange,
+  onTemplateChange,
+  onMessageChange,
+  onGeneratePreview,
+  onOpenWhatsApp,
+}: {
+  open: boolean;
+  prospect: Prospect | null;
+  templates: SalesTemplate[];
+  selectedTemplate: SalesTemplate | null;
+  selectedTemplateMessage: SalesTemplateMessage | null;
+  preview: MessagePreview | null;
+  templatesLoading: boolean;
+  previewLoading: boolean;
+  onOpenChange: (open: boolean) => void;
+  onTemplateChange: (templateKey: string) => void;
+  onMessageChange: (messageKey: string) => void;
+  onGeneratePreview: () => void;
+  onOpenWhatsApp: () => void;
+}) {
+  const officialPhone = prospect ? prospect.whatsapp_phone || prospect.phone || "Telefone nao informado" : "Telefone nao informado";
+
+  return (
+    <RightDrawer
+      open={open}
+      onOpenChange={onOpenChange}
+      title={prospect ? `WhatsApp oficial - ${prospect.clinic_name}` : "WhatsApp oficial"}
+      description="Escolha um template da biblioteca e abra o WhatsApp com a mensagem pronta para envio."
+      widthClassName="w-full sm:max-w-2xl"
+    >
+      {prospect ? (
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Contato oficial</p>
+            <div className="mt-3 flex items-center gap-2 text-sm font-semibold text-stone-900">
+              <PhoneCall size={16} />
+              {officialPhone}
+            </div>
+            <p className="mt-1 text-xs leading-5 text-stone-500">
+              O link vai abrir no WhatsApp oficial da clínica com a mensagem selecionada já preenchida.
+            </p>
+          </section>
+
+          <section className="space-y-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Biblioteca</p>
+              <h3 className="text-xl font-black text-stone-950">Templates</h3>
+            </div>
+
+            {templatesLoading ? (
+              <div className="rounded-2xl border border-stone-200 bg-white p-5 text-sm text-stone-500">Carregando templates...</div>
+            ) : templates.length ? (
+              <div className="space-y-3">
+                {templates.map((template) => {
+                  const selected = template.key === selectedTemplate?.key;
+                  return (
+                    <button
+                      key={template.key}
+                      type="button"
+                      className={cn(
+                        "w-full rounded-[24px] border px-4 py-4 text-left transition",
+                        selected
+                          ? "border-emerald-300 bg-emerald-50 shadow-[0_10px_26px_rgba(16,185,129,0.12)]"
+                          : "border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50",
+                      )}
+                      onClick={() => onTemplateChange(template.key)}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-lg font-black text-stone-950">{template.label}</p>
+                          <p className="mt-2 text-sm leading-6 text-stone-600">{template.description}</p>
+                        </div>
+                        <span className="shrink-0 rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-semibold text-stone-600">
+                          {template.messages.length} msg
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-stone-200 bg-white p-5 text-sm text-stone-500">
+                Nenhum template cadastrado na biblioteca.
+              </div>
+            )}
+          </section>
+
+          {selectedTemplate ? (
+            <>
+              {selectedTemplate.messages.length > 1 ? (
+                <section className="space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Mensagem do template</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedTemplate.messages.map((message) => {
+                      const selected = message.key === selectedTemplateMessage?.key;
+                      return (
+                        <button
+                          key={message.key}
+                          type="button"
+                          className={cn(
+                            "rounded-full border px-3 py-2 text-sm font-semibold transition",
+                            selected
+                              ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                              : "border-stone-200 bg-white text-stone-600 hover:border-stone-300 hover:bg-stone-50",
+                          )}
+                          onClick={() => onMessageChange(message.key)}
+                        >
+                          {message.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
+              {preview?.warnings?.length ? (
+                <div className="space-y-2">
+                  {preview.warnings.map((warning) => (
+                    <div key={warning} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      {warning}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <section className="space-y-3">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Preview</p>
+                <textarea
+                  className="min-h-[260px] w-full resize-none rounded-[24px] border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-800 outline-none"
+                  value={
+                    preview?.message_text ||
+                    selectedTemplateMessage?.body ||
+                    "Selecione um template para preparar a mensagem."
+                  }
+                  readOnly
+                />
+                {preview?.demo_login_url ? (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
+                    <p className="font-bold">Link da demo emitido para esta mensagem</p>
+                    <p className="mt-1 break-all">{preview.demo_login_url}</p>
+                  </div>
+                ) : null}
+              </section>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={onGeneratePreview}
+                  disabled={templatesLoading || previewLoading || !selectedTemplateMessage}
+                >
+                  <Send size={16} />
+                  {previewLoading ? "Gerando..." : "Gerar preview"}
+                </Button>
+                <Button
+                  type="button"
+                  className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500"
+                  onClick={onOpenWhatsApp}
+                  disabled={templatesLoading || previewLoading || !selectedTemplateMessage}
+                >
+                  <PhoneCall size={16} />
+                  {previewLoading ? "Preparando..." : "Abrir WhatsApp oficial"}
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </RightDrawer>
   );
 }
 
@@ -2454,6 +2850,10 @@ function ProspectDetail({
             <p className="flex items-center gap-2 text-stone-700">
               <UserRound size={16} />
               {prospect.owner_name || prospect.manager_name || "Decisor ainda nao identificado"}
+            </p>
+            <p className="flex items-center gap-2 text-stone-700">
+              <CalendarClock size={16} />
+              Criada em {formatDateTimeBR(prospect.created_at)}
             </p>
             <p className="flex items-center gap-2 text-stone-700">
               <MessageSquareText size={16} />

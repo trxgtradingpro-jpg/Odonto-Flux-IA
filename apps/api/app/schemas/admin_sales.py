@@ -187,7 +187,7 @@ class DemoGuideBackStepInput(BaseModel):
 
 
 class DemoRedeemTokenInput(BaseModel):
-    token: str = Field(min_length=20)
+    token: str = Field(min_length=3, max_length=120)
 
 
 class MagicLinkInput(BaseModel):

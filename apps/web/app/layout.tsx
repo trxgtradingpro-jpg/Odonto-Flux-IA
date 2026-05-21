@@ -9,6 +9,16 @@ export const metadata: Metadata = {
   metadataBase: new URL(BRAND_SITE_URL),
   title: BRAND_NAME,
   description: BRAND_DESCRIPTION,
+  manifest: '/site.webmanifest',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon-16x16.png', type: 'image/png', sizes: '16x16' },
+      { url: '/favicon-32x32.png', type: 'image/png', sizes: '32x32' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
+    shortcut: ['/favicon.ico'],
+  },
   openGraph: {
     title: BRAND_NAME,
     description: BRAND_TAGLINE,
@@ -17,6 +27,7 @@ export const metadata: Metadata = {
     locale: 'pt_BR',
     type: 'website',
   },
+  themeColor: '#06251F',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

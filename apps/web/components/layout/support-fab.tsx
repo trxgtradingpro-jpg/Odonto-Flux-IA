@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageCircle, Send, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 
@@ -34,7 +34,9 @@ export function SupportFab() {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fabOffset, setFabOffset] = useState(0);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const fabRef = useRef<HTMLButtonElement | null>(null);
   const [messages, setMessages] = useState<SupportMessage[]>([
     {
       id: "welcome",
@@ -50,12 +52,38 @@ export function SupportFab() {
   }, [messages, loading, open]);
 
   const isConversationPage = pathname === "/conversas";
-  const cardPositionClass = isConversationPage
-    ? "bottom-44 right-3 sm:bottom-40 sm:right-4 md:bottom-36 md:right-6"
-    : "bottom-32 right-3 sm:bottom-28 sm:right-4 md:bottom-24 md:right-6";
-  const fabPositionClass = isConversationPage
-    ? "bottom-28 right-3 sm:bottom-24 sm:right-4 md:bottom-20 md:right-6"
-    : "bottom-12 right-3 sm:bottom-10 sm:right-4 md:bottom-8 md:right-6";
+  const cardPositionClass = isConversationPage ? "right-3 sm:right-4 md:right-6" : "right-3 sm:right-4 md:right-6";
+  const fabPositionClass = isConversationPage ? "right-3 sm:right-4 md:right-6" : "right-3 sm:right-4 md:right-6";
+  const baseFabBottom = isConversationPage ? 28 : 12;
+  const baseCardBottom = isConversationPage ? 44 : 32;
+
+  useLayoutEffect(() => {
+    const button = fabRef.current;
+    if (!button) return;
+
+    const syncOffset = () => {
+      const height = button.getBoundingClientRect().height;
+      setFabOffset(height * 2);
+    };
+
+    syncOffset();
+
+    const observer = new ResizeObserver(syncOffset);
+    observer.observe(button);
+    window.addEventListener("resize", syncOffset);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", syncOffset);
+    };
+  }, [pathname]);
+
+  const fabStyle: CSSProperties = {
+    bottom: `${baseFabBottom + fabOffset}px`,
+  };
+
+  const cardStyle: CSSProperties = {
+    bottom: `${baseCardBottom + fabOffset}px`,
+  };
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -113,7 +141,10 @@ export function SupportFab() {
   return (
     <>
       {open ? (
-        <Card className={`fixed z-[80] w-[min(94vw,390px)] overflow-hidden border-emerald-300 shadow-2xl ${cardPositionClass}`}>
+        <Card
+          className={`fixed z-[80] w-[min(94vw,390px)] overflow-hidden border-emerald-300 shadow-2xl ${cardPositionClass}`}
+          style={cardStyle}
+        >
           <CardHeader className="space-y-2 bg-emerald-500 pb-3 text-white">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base text-white">{BRAND_SUPPORT_LABEL}</CardTitle>
@@ -185,10 +216,12 @@ export function SupportFab() {
       ) : null}
 
       <button
+        ref={fabRef}
         data-app-shell-support-fab="true"
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={`fixed z-[70] inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-2xl transition hover:scale-105 hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-emerald-300 sm:h-14 sm:w-14 ${fabPositionClass}`}
+        style={fabStyle}
         aria-label="Abrir suporte IA"
       >
         <MessageCircle size={22} />

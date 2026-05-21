@@ -112,6 +112,25 @@ type AISummaryResponse = {
   metadata?: Record<string, unknown>;
 };
 
+function isDemoWorkspaceInteractiveTarget(target: HTMLElement | null) {
+  return Boolean(
+    target?.closest(
+      [
+        '[data-demo-workspace-ignore-swipe="true"]',
+        "button",
+        "a",
+        "input",
+        "textarea",
+        "select",
+        "label",
+        '[role="button"]',
+        '[role="menuitem"]',
+        '[contenteditable="true"]',
+      ].join(","),
+    ),
+  );
+}
+
 const STATUS_FILTERS = [
   { id: "all", label: "Todas" },
   { id: "aberta", label: "Abertas" },
@@ -127,6 +146,7 @@ const QUICK_FILTERS = [
 ] as const;
 
 const DEMO_WEBCHAT_WORKSPACE_SWIPE_THRESHOLD_PX = 84;
+const DEMO_WEBCHAT_LOAD_TIMEOUT_MS = 15_000;
 
 type StatusFilterId = (typeof STATUS_FILTERS)[number]["id"];
 type PriorityFilter = "all" | "alta" | "media" | "baixa";
@@ -200,10 +220,17 @@ function readStoredWebchatSessionIdFromPublicEntryPath(publicEntryPath?: string 
   }
 }
 
-function resolveDemoPublicEntryPath(publicEntryPath?: string | null, tenantSlug?: string | null) {
+function resolveDemoPublicEntryPath(
+  publicEntryPath?: string | null,
+  tenantSlug?: string | null,
+  entryChannel?: "whatsapp" | "webchat" | null,
+) {
   const rawPath = String(publicEntryPath || "").trim();
   const normalizedTenantSlug = String(tenantSlug || "").trim();
-  const tenantFallback = normalizedTenantSlug ? `/agendar/${encodeURIComponent(normalizedTenantSlug)}` : null;
+  const tenantFallback =
+    entryChannel === "webchat" && normalizedTenantSlug
+      ? `/agendar/${encodeURIComponent(normalizedTenantSlug)}`
+      : null;
 
   if (!rawPath) return tenantFallback;
 
@@ -1059,6 +1086,10 @@ export default function ConversasPage() {
   const [focusHandled, setFocusHandled] = useState(false);
   const currentUserPermissions = sessionQuery.data?.resolved_page_permissions;
   const isDemoUser = (sessionQuery.data?.roles ?? []).includes("demo_client");
+  const sessionDemoTestPhoneNumber = sessionQuery.data?.demo_test_phone_number ?? null;
+  const sessionDemoWhatsAppLink = sessionQuery.data?.demo_whatsapp_link ?? null;
+  const sessionDemoEntryChannel = sessionQuery.data?.demo_entry_channel ?? null;
+  const sessionDemoPublicEntryPath = sessionQuery.data?.demo_public_entry_path ?? null;
   const canCreateConversations = canAccessPage(currentUserPermissions, "conversas", "create");
   const canEditConversations = canAccessPage(currentUserPermissions, "conversas", "edit");
   const canDeleteConversations = canAccessPage(currentUserPermissions, "conversas", "delete");
@@ -1100,6 +1131,8 @@ export default function ConversasPage() {
   const [demoWorkspacePanel, setDemoWorkspacePanel] = useState<"whatsapp" | "webchat">("whatsapp");
   const [demoWorkspaceDragOffset, setDemoWorkspaceDragOffset] = useState(0);
   const [demoWebchatLaunchToken, setDemoWebchatLaunchToken] = useState(0);
+  const [demoWebchatFrameState, setDemoWebchatFrameState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [demoWebchatFrameError, setDemoWebchatFrameError] = useState<string | null>(null);
   const [demoWhatsAppStartedAt, setDemoWhatsAppStartedAt] = useState<string | null>(null);
   const [demoWhatsAppTrackedConversationId, setDemoWhatsAppTrackedConversationId] = useState<string | null>(null);
   const [demoWhatsAppTrackedPatientId, setDemoWhatsAppTrackedPatientId] = useState<string | null>(null);
@@ -1585,10 +1618,17 @@ export default function ConversasPage() {
     }
 
     const entry = readDemoWhatsAppEntry();
-    setDemoWhatsAppEntryPhone(entry.testPhoneNumber);
-    setDemoWhatsAppEntryLink(entry.whatsappLink);
-    setDemoEntryChannel(entry.entryChannel || (entry.whatsappLink ? "whatsapp" : null));
-    setDemoPublicEntryPath(entry.publicEntryPath);
+    const resolvedDemoTestPhoneNumber = entry.testPhoneNumber || sessionDemoTestPhoneNumber;
+    const resolvedDemoWhatsAppLink = entry.whatsappLink || sessionDemoWhatsAppLink;
+    const resolvedDemoPublicEntryPath = entry.publicEntryPath || sessionDemoPublicEntryPath;
+    setDemoWhatsAppEntryPhone(resolvedDemoTestPhoneNumber);
+    setDemoWhatsAppEntryLink(resolvedDemoWhatsAppLink);
+    const inferredEntryChannel =
+      entry.entryChannel ??
+      sessionDemoEntryChannel ??
+      (resolvedDemoPublicEntryPath ? "webchat" : resolvedDemoWhatsAppLink ? "whatsapp" : null);
+    setDemoEntryChannel(inferredEntryChannel);
+    setDemoPublicEntryPath(resolvedDemoPublicEntryPath);
     setDemoWhatsAppStartedAt(entry.startedAt);
     setDemoWhatsAppTrackedConversationId(entry.trackedConversationId);
     setDemoWhatsAppTrackedPatientId(entry.trackedPatientId);
@@ -1615,7 +1655,13 @@ export default function ConversasPage() {
 
     setDemoWhatsAppExperienceStage("entry");
     setDemoAgendaRedirectCountdown(null);
-  }, [isDemoUser]);
+  }, [
+    isDemoUser,
+    sessionDemoEntryChannel,
+    sessionDemoPublicEntryPath,
+    sessionDemoTestPhoneNumber,
+    sessionDemoWhatsAppLink,
+  ]);
 
   useEffect(() => {
     if (demoWhatsAppExperienceStage !== "appointment_ready" || demoAgendaRedirectCountdown === null) return;
@@ -1801,8 +1847,8 @@ export default function ConversasPage() {
     [demoWhatsAppEntryPhone],
   );
   const demoResolvedPublicEntryPath = useMemo(
-    () => resolveDemoPublicEntryPath(demoPublicEntryPath, sessionQuery.data?.tenant_slug),
-    [demoPublicEntryPath, sessionQuery.data?.tenant_slug],
+    () => resolveDemoPublicEntryPath(demoPublicEntryPath, sessionQuery.data?.tenant_slug, demoEntryChannel),
+    [demoEntryChannel, demoPublicEntryPath, sessionQuery.data?.tenant_slug],
   );
   const demoWorkspaceWebchatSrc = useMemo(() => {
     const rawPath = String(demoResolvedPublicEntryPath || "").trim();
@@ -1919,7 +1965,18 @@ export default function ConversasPage() {
   const demoHasPersistentWebchatEntry = isDemoUser && Boolean(demoResolvedPublicEntryPath);
   const demoUsesWebchatEntry = demoEntryChannel === "webchat" || demoHasPersistentWebchatEntry;
   const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoResolvedPublicEntryPath);
+  const demoWorkspaceSwipeEnabled = demoWorkspaceEnabled && !isDesktopLayout;
   const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
+  useEffect(() => {
+    if (!demoWorkspaceOpen || demoWebchatLaunchToken <= 0 || demoWebchatFrameState !== "loading") return;
+
+    const timeoutId = window.setTimeout(() => {
+      setDemoWebchatFrameState("error");
+      setDemoWebchatFrameError("O chat do site demorou para abrir. Tente novamente sem sair desta tela.");
+    }, DEMO_WEBCHAT_LOAD_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [demoWebchatFrameState, demoWebchatLaunchToken, demoWorkspaceOpen]);
   const showDemoEntryShortcut =
     (demoHasPersistentWebchatEntry ||
       (isDemoUser &&
@@ -1928,10 +1985,8 @@ export default function ConversasPage() {
     !demoWorkspaceOpen;
   const demoEntryShortcutLabel = demoUsesWebchatEntry
     ? demoWhatsAppExperienceStage === "entry"
-      ? "Testar chat do site"
-      : demoWhatsAppExperienceStage === "idle"
-        ? "Abrir chat do site"
-        : "Reabrir chat do site"
+      ? "Teste IA"
+      : "Reabrir teste IA"
     : demoWhatsAppExperienceStage === "entry"
       ? "Abrir WhatsApp da demo"
       : "Reabrir WhatsApp";
@@ -2179,6 +2234,7 @@ export default function ConversasPage() {
   // The docked guide should support free exploration of the WhatsApp workspace,
   // not take over the screen with automatic spotlight/simulation overlays.
   const allowAutoDockedConversationSequence = false;
+  const allowDemoConversationAutoSelection = false;
   const demoGuideDockedSequenceActive =
     allowAutoDockedConversationSequence &&
     isDemoUser &&
@@ -2293,6 +2349,8 @@ export default function ConversasPage() {
         // Ignore malformed demo paths and let the embedded page recover normally.
       }
     }
+    setDemoWebchatFrameState("loading");
+    setDemoWebchatFrameError(null);
     setDemoWebchatLaunchToken((current) => current + 1);
     setDemoWorkspacePanel("webchat");
     setDemoWorkspaceDragOffset(0);
@@ -2476,11 +2534,12 @@ export default function ConversasPage() {
   }
 
   useEffect(() => {
+    if (!allowDemoConversationAutoSelection) return;
     if (!isDemoUser || !demoTrackedConversation) return;
     if (!["entry", "awaiting_appointment", "appointment_ready"].includes(demoWhatsAppExperienceStage)) return;
     if (selectedConversationId === demoTrackedConversation.id) return;
     setSelectedConversationId(demoTrackedConversation.id);
-  }, [demoTrackedConversation, demoWhatsAppExperienceStage, isDemoUser, selectedConversationId]);
+  }, [allowDemoConversationAutoSelection, demoTrackedConversation, demoWhatsAppExperienceStage, isDemoUser, selectedConversationId]);
 
   useEffect(() => {
     if (demoWhatsAppExperienceStage !== "awaiting_appointment") return;
@@ -2799,16 +2858,16 @@ export default function ConversasPage() {
   };
 
   const handleDemoWorkspacePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!demoWorkspaceEnabled) return;
+    if (!demoWorkspaceSwipeEnabled) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest('[data-demo-workspace-ignore-swipe="true"]')) return;
+    if (isDemoWorkspaceInteractiveTarget(target)) return;
     demoWorkspaceSwipeRef.current = {
       startX: event.clientX,
       panel: demoWorkspacePanel,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
-  }, [demoWorkspaceEnabled, demoWorkspacePanel]);
+  }, [demoWorkspacePanel, demoWorkspaceSwipeEnabled]);
 
   const handleDemoWorkspacePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const gesture = demoWorkspaceSwipeRef.current;
@@ -2892,7 +2951,7 @@ export default function ConversasPage() {
       onPointerMove={handleDemoWorkspacePointerMove}
       onPointerUp={finishDemoWorkspaceGesture}
       onPointerCancel={cancelDemoWorkspaceGesture}
-      style={{ touchAction: demoWorkspaceEnabled ? "pan-y" : "auto" }}
+      style={{ touchAction: demoWorkspaceSwipeEnabled ? "pan-y" : "auto" }}
     >
       <div className="relative h-full w-full overflow-hidden">
         <div
@@ -2915,10 +2974,7 @@ export default function ConversasPage() {
               <div className="shrink-0 border-b border-stone-200 px-4 pb-4 pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">
-                      Inbox operacional
-                    </p>
-                    <div className="mt-1 flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                       <h1 className="truncate text-2xl font-semibold text-stone-900">WhatsApp</h1>
                       <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600">
                         {filteredConversations.length}
@@ -2981,10 +3037,10 @@ export default function ConversasPage() {
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3 sm:px-3">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-stone-50/70 px-2 py-3 sm:px-3">
                 {filteredConversations.length ? (
-                  <div className="space-y-2">
-                    {filteredConversations.map((item) => {
+                  <div className="space-y-3">
+                    {filteredConversations.map((item, index) => {
                       const patient = item.patient_id ? patientsById.get(item.patient_id) : null;
                       const lead = item.lead_id ? leadsById.get(item.lead_id) : null;
                       const ownerName = item.assigned_user_id ? usersById.get(item.assigned_user_id) ?? "" : "";
@@ -2995,58 +3051,61 @@ export default function ConversasPage() {
                         item.ai_summary || lead?.interest || patient?.operational_notes || "Sem contexto automático disponível.";
 
                       return (
-                        <button
+                        <div
                           key={item.id}
-                          type="button"
-                          data-tour-id={
-                            item.id === demoTourConversationId
-                              ? DEMO_TOUR_TARGETS.conversationItem
-                              : undefined
-                          }
-                          onClick={() => setSelectedConversationId(item.id)}
-                          className={cn(
-                            "w-full rounded-[24px] border px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                            isActive
-                              ? "border-primary/30 bg-primary/5 shadow-[0_12px_30px_rgba(15,23,42,0.08)]"
-                              : "border-transparent bg-white hover:border-stone-200 hover:bg-stone-50",
-                          )}
+                          className={cn("rounded-[28px] bg-white/90")}
+                          style={{
+                            border: isActive ? "1px solid rgba(45, 212, 191, 0.45)" : "1px solid #d6d3d1",
+                            boxShadow: isActive ? "0 10px 26px rgba(15,23,42,0.08)" : "0 0 0 1px rgba(214,211,209,0.92)",
+                          }}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-3">
-                              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-stone-100 text-sm font-semibold text-stone-700">
-                                {initials(patient?.full_name ?? lead?.name ?? "Paciente")}
+                          <button
+                            type="button"
+                            data-tour-id={
+                              item.id === demoTourConversationId
+                                ? DEMO_TOUR_TARGETS.conversationItem
+                                : undefined
+                            }
+                            onClick={() => setSelectedConversationId(item.id)}
+                            className={cn(
+                              "w-full rounded-[24px] border border-transparent bg-white px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                              isActive
+                                ? "bg-primary/5 shadow-[0_12px_30px_rgba(15,23,42,0.08)]"
+                                : "hover:bg-stone-50",
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-center gap-3">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-stone-100 text-sm font-semibold text-stone-700">
+                                  {initials(patient?.full_name ?? lead?.name ?? "Paciente")}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-stone-900">
+                                    {patient?.full_name ?? lead?.name ?? "Contato sem identificação"}
+                                  </p>
+                                  <p className="truncate text-xs text-stone-500">
+                                    {ownerName || channelLabel(item.channel)}
+                                  </p>
+                                </div>
                               </div>
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-stone-900">
-                                  {patient?.full_name ?? lead?.name ?? "Contato sem identificação"}
-                                </p>
-                                <p className="truncate text-xs text-stone-500">
-                                  {ownerName || channelLabel(item.channel)}
-                                </p>
+                              <div className="shrink-0 text-right">
+                                <p className="text-[11px] text-stone-500">{formatRelativeTime(item.last_message_at)}</p>
+                                <div className="mt-1 flex justify-end">
+                                  <StatusBadge value={item.status} />
+                                </div>
                               </div>
                             </div>
-                            <div className="shrink-0 text-right">
-                              <p className="text-[11px] text-stone-500">{formatRelativeTime(item.last_message_at)}</p>
-                              <div className="mt-1 flex justify-end">
-                                <StatusBadge value={item.status} />
-                              </div>
-                            </div>
-                          </div>
 
-                          <p className="mt-3 line-clamp-2 text-sm leading-5 text-stone-600">{preview}</p>
+                            <p className="mt-3 line-clamp-2 text-sm leading-5 text-stone-600">{preview}</p>
 
-                          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
-                            <Badge className={priorityBadgeClass(priority)}>
-                              {priority === "alta" ? "Alta" : priority === "media" ? "Média" : "Baixa"}
-                            </Badge>
-                            {aiEnabled ? <Badge className="bg-emerald-100 text-emerald-700">IA ativa</Badge> : null}
-                            {item.tags?.slice(0, 2).map((tag) => (
-                              <Badge key={tag} className="bg-stone-100 text-stone-600">
-                                {tag}
+                            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+                              <Badge className={priorityBadgeClass(priority)}>
+                                {priority === "alta" ? "Alta" : priority === "media" ? "Média" : "Baixa"}
                               </Badge>
-                            ))}
-                          </div>
-                        </button>
+                              {aiEnabled ? <Badge className="bg-emerald-100 text-emerald-700">IA ativa</Badge> : null}
+                            </div>
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -3102,6 +3161,35 @@ export default function ConversasPage() {
                         <div className="hidden sm:flex">
                           <StatusBadge value={selectedConversation.status} />
                         </div>
+                        <button
+                          type="button"
+                          className={cn(
+                            "group relative inline-flex h-10 w-[76px] shrink-0 items-center rounded-full border px-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                            selectedAiEnabled
+                              ? "border-emerald-300 bg-emerald-100/90 text-emerald-700"
+                              : "border-stone-300 bg-stone-200/90 text-stone-600",
+                            (toggleAiMutation.isPending || !canEditConversations) && "cursor-not-allowed opacity-70",
+                          )}
+                          onClick={() => toggleAiMutation.mutate(!selectedAiEnabled)}
+                          disabled={toggleAiMutation.isPending || !canEditConversations}
+                          aria-label={selectedAiEnabled ? "Desligar IA" : "Ligar IA"}
+                          title={selectedAiEnabled ? "Liga/desliga IA" : "Liga/desliga IA"}
+                        >
+                          <span
+                            className={cn(
+                              "pointer-events-none absolute left-1 top-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200",
+                              selectedAiEnabled ? "translate-x-0" : "translate-x-9",
+                            )}
+                          >
+                            {toggleAiMutation.isPending ? (
+                              <Loader2 size={14} className="animate-spin text-stone-500" />
+                            ) : null}
+                          </span>
+                          <span className="flex w-full items-center justify-between px-2 text-[11px] font-bold uppercase tracking-[0.16em]">
+                            <span className={cn("transition-opacity", selectedAiEnabled ? "opacity-100" : "opacity-0")}>ON</span>
+                            <span className={cn("transition-opacity", selectedAiEnabled ? "opacity-0" : "opacity-100")}>OFF</span>
+                          </span>
+                        </button>
                         <div ref={demoEntryShortcutAnchorRef} className="relative flex shrink-0 items-center">
                           <Button
                             type="button"
@@ -3671,30 +3759,6 @@ export default function ConversasPage() {
                             ) : null}
                           </div>
 
-                          {showDemoAiInsight ? (
-                            <div
-                              data-tour-id={DEMO_TOUR_TARGETS.aiIntent}
-                              className="mb-3 rounded-[24px] border border-[color:var(--tenant-primary)]/18 bg-[linear-gradient(135deg,rgba(0,168,132,0.08),rgba(0,212,255,0.08))] px-4 py-3"
-                            >
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge className="bg-white text-[color:var(--tenant-primary)]">IA operacional</Badge>
-                                {selectedAiLastDecision ? (
-                                  <Badge className="border border-white/80 bg-white/80 text-[color:var(--text-primary)]">
-                                    {aiDecisionLabel(selectedAiLastDecision)}
-                                  </Badge>
-                                ) : null}
-                              </div>
-                              <p className="mt-2 text-sm font-semibold text-[color:var(--text-primary)]">
-                                A IA já entendeu o contexto e organizou a próxima ação.
-                              </p>
-                              {selectedAiLastReason ? (
-                                <p className="mt-1 text-sm text-[color:var(--text-secondary)]">
-                                  Motivo: {aiReasonLabel(selectedAiLastReason)}
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : null}
-
                           {aiSuggestion ? (
                             <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2">
                               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3816,12 +3880,12 @@ export default function ConversasPage() {
 
       {showDemoEntryShortcut && demoUsesWebchatEntry && demoTopbarShortcutHost
         ? createPortal(
-            <div className="hidden items-center pr-2 md:flex">
+            <div className="hidden min-w-0 items-center justify-center pr-2 md:flex">
               <Button
                 type="button"
                 data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
                 data-demo-entry-shortcut="true"
-                className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
+                className="demo-entry-shortcut-attention pointer-events-auto h-11 whitespace-nowrap rounded-full border border-white/20 px-4 text-sm text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
                 onPointerDown={handleOpenDemoWhatsAppPointerDown}
                 onClick={handleOpenDemoWhatsAppClick}
               >
@@ -3830,6 +3894,25 @@ export default function ConversasPage() {
               </Button>
             </div>,
             demoTopbarShortcutHost,
+          )
+        : null}
+
+      {showDemoEntryShortcut && demoUsesWebchatEntry && typeof document !== "undefined"
+        ? createPortal(
+            <div className="pointer-events-none fixed inset-x-0 top-3 z-[145] flex justify-center px-20 md:hidden">
+              <Button
+                type="button"
+                data-tour-id={DEMO_TOUR_TARGETS.whatsappButton}
+                data-demo-entry-shortcut="true"
+                className="demo-entry-shortcut-attention pointer-events-auto h-10 max-w-full min-w-0 rounded-full border border-white/20 px-4 text-xs text-white shadow-[0_24px_50px_rgba(122,31,6,0.28)] focus-visible:ring-orange-200/70"
+                onPointerDown={handleOpenDemoWhatsAppPointerDown}
+                onClick={handleOpenDemoWhatsAppClick}
+              >
+                <Share2 size={15} />
+                <span className="truncate">{demoEntryShortcutLabel}</span>
+              </Button>
+            </div>,
+            document.body,
           )
         : null}
 
@@ -4302,12 +4385,42 @@ export default function ConversasPage() {
           <div className="relative h-full min-h-0 bg-white">
             {demoResolvedPublicEntryPath ? (
               demoWebchatLaunchToken > 0 ? (
-                <iframe
-                  key={demoWebchatLaunchToken}
-                  title="Webchat público da demo"
-                  src={demoWorkspaceWebchatSrc || demoResolvedPublicEntryPath}
-                  className="h-full w-full border-0 bg-white"
-                />
+                <>
+                  <iframe
+                    key={demoWebchatLaunchToken}
+                    title="Webchat público da demo"
+                    src={demoWorkspaceWebchatSrc || demoResolvedPublicEntryPath}
+                    className={cn(
+                      "h-full w-full border-0 bg-white transition-opacity duration-200",
+                      demoWebchatFrameState === "ready" ? "opacity-100" : "opacity-0",
+                    )}
+                    onLoad={() => {
+                      setDemoWebchatFrameState("ready");
+                      setDemoWebchatFrameError(null);
+                    }}
+                    onError={() => {
+                      setDemoWebchatFrameState("error");
+                      setDemoWebchatFrameError("Não foi possível carregar o chat do site agora.");
+                    }}
+                  />
+                  {demoWebchatFrameState !== "ready" ? (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[linear-gradient(180deg,#f6fbfa_0%,#eef5f2_100%)] px-6 text-center">
+                      <div className="w-full max-w-lg rounded-[30px] border border-emerald-200 bg-white/96 p-6 shadow-[0_28px_80px_rgba(15,23,42,0.14)] backdrop-blur">
+                        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                          <Loader2 size={24} className={cn(demoWebchatFrameState === "loading" && "animate-spin")} />
+                        </div>
+                        <p className="mt-4 text-lg font-semibold text-stone-900">
+                          {demoWebchatFrameState === "error" ? "O chat demorou mais do que o esperado" : "Abrindo o chat do site"}
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-stone-600">
+                          {demoWebchatFrameState === "error"
+                            ? demoWebchatFrameError || "Tente recarregar a simulação ou abrir a página pública em outra aba."
+                            : "Estamos preparando a página pública da demo. Você não vai mais ver uma tela branca enquanto ela carrega."}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="flex h-full items-center justify-center px-6 text-center">
                   <div className="max-w-md">

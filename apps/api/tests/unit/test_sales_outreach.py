@@ -418,6 +418,55 @@ def test_create_prospect_defaults_demo_background_settings(seeded_db, db_session
     assert demo_branding["background_image_opacity"] == sales_demo_service.DEMO_BACKGROUND_DEFAULT_OPACITY
 
 
+def test_create_prospect_uses_friendly_seed_key_and_duplicate_phone_suffix(seeded_db, db_session):
+    first = sales_demo_service.create_prospect(
+        db_session,
+        ProspectCreate(
+            clinic_name="Clinica Sorriso Claro",
+            whatsapp_phone="+55 11 97777-1111",
+            city="Sao Paulo",
+            state="SP",
+        ),
+        actor_id=None,
+    )
+    second = sales_demo_service.create_prospect(
+        db_session,
+        ProspectCreate(
+            clinic_name="Clinica Sorriso Claro",
+            whatsapp_phone="+55 11 97777-2222",
+            city="Sao Paulo",
+            state="SP",
+        ),
+        actor_id=None,
+    )
+
+    assert first.tenant_seed_key == "clinica-sorriso-claro"
+    assert second.tenant_seed_key == "clinica-sorriso-claro-2222"
+    assert first.created_at is not None
+    assert second.created_at is not None
+
+
+def test_issue_demo_access_uses_readable_clinic_token_with_duplicate_phone_suffix(seeded_db, db_session):
+    first = _create_prospect(db_session)
+    second = ProspectAccount(
+        clinic_name=first.clinic_name,
+        whatsapp_phone="+55 11 98888-2222",
+        city="Sao Paulo",
+        state="SP",
+        legal_basis="interesse_legitimo_b2b",
+        demo_tenant_id=seeded_db["tenant_a"].id,
+        demo_user_id=seeded_db["owner_a"].id,
+    )
+    db_session.add(second)
+    db_session.commit()
+    db_session.refresh(second)
+
+    raw_token = sales_demo_service.issue_demo_access(db_session, second, actor_id=None)
+
+    assert raw_token == "clinica-conversao-segura-2222"
+    assert second.demo_access_token_hash == sales_demo_service.sha256_text(raw_token)
+
+
 def test_generate_demo_applies_demo_intake_config_and_syncs_updates(monkeypatch, seeded_db, db_session):
     prospect = _create_prospect(db_session)
     prospect.proposal_snapshot = {
@@ -608,6 +657,36 @@ def test_redeem_demo_token_returns_webchat_entry_metadata(monkeypatch, seeded_db
     )
 
     assert redeemed["demo_target_path"] == "/conversas"
+    assert redeemed["demo_entry_channel"] == "webchat"
+    assert redeemed["demo_public_entry_path"] == f"/agendar/{generated['prospect'].slug}"
+
+
+def test_redeem_demo_token_defaults_to_webchat_when_demo_has_no_real_whatsapp(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    redeemed = sales_demo_service.redeem_demo_token(
+        db_session,
+        token=generated["access_token"],
+        session_id="demo-session-default-webchat",
+    )
+
+    assert redeemed["demo_whatsapp_link"] is None
     assert redeemed["demo_entry_channel"] == "webchat"
     assert redeemed["demo_public_entry_path"] == f"/agendar/{generated['prospect'].slug}"
 
