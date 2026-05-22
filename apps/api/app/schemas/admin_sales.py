@@ -243,6 +243,7 @@ class DemoActivityOutput(BaseModel):
 
 class ProspectOutput(BaseModel):
     id: UUID
+    slug: str | None = None
     clinic_name: str
     owner_name: str | None
     manager_name: str | None
@@ -275,6 +276,7 @@ class ProspectOutput(BaseModel):
     demo_last_login_at: datetime | None
     demo_status: str
     demo_expires_at: datetime | None
+    demo_booking_path: str | None = None
     demo_checklist: dict
     last_activity_at: datetime | None
     score_explanation: dict
@@ -395,6 +397,8 @@ class DemoProvisionOutput(BaseModel):
     prospect: ProspectOutput
     access_token: str
     demo_login_url: str
+    demo_booking_path: str | None = None
+    demo_booking_url: str | None = None
     checklist: dict
     ai_draft: dict
 
@@ -402,6 +406,8 @@ class DemoProvisionOutput(BaseModel):
 class DemoAccessOutput(BaseModel):
     access_token: str
     demo_login_url: str
+    demo_booking_path: str | None = None
+    demo_booking_url: str | None = None
     expires_at: datetime | None
 
 

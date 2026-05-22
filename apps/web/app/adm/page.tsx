@@ -39,6 +39,7 @@ import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, cn } fr
 
 type Prospect = {
   id: string;
+  slug?: string | null;
   clinic_name: string;
   owner_name?: string | null;
   manager_name?: string | null;
@@ -70,6 +71,7 @@ type Prospect = {
   demo_last_login_at?: string | null;
   demo_status: string;
   demo_expires_at?: string | null;
+  demo_booking_path?: string | null;
   demo_checklist: Record<string, boolean>;
   last_activity_at?: string | null;
   score_explanation: { points?: Record<string, number>; event_counts?: Record<string, number>; sessions?: number };
@@ -207,6 +209,13 @@ type OutreachLabResult = {
   video_url?: string | null;
   transcript: OutreachLabTurn[];
   metrics: Record<string, unknown>;
+};
+
+type DemoLinkPayload = {
+  demo_login_url?: string | null;
+  demo_booking_url?: string | null;
+  demo_booking_path?: string | null;
+  prospect?: Prospect | null;
 };
 
 type ProspectDemoAiSettings = {
@@ -360,6 +369,36 @@ type AdmWhatsappMessage = {
   read_at?: string | null;
   created_at: string;
 };
+
+function resolveBrowserOrigin() {
+  if (typeof window === "undefined") return "";
+  return window.location.origin;
+}
+
+function buildAbsoluteAppUrl(origin: string, rawUrlOrPath?: string | null) {
+  const value = `${rawUrlOrPath || ""}`.trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  if (!origin) return value;
+  try {
+    return new URL(value, origin).toString();
+  } catch {
+    return value;
+  }
+}
+
+function resolveProspectBookingLink(prospect: Prospect | null, origin: string) {
+  if (!prospect) return "";
+  return buildAbsoluteAppUrl(origin, prospect.demo_booking_path ?? null);
+}
+
+function resolvePayloadBookingLink(payload: DemoLinkPayload | null | undefined, origin: string) {
+  if (!payload) return "";
+  return buildAbsoluteAppUrl(
+    origin,
+    payload.demo_booking_url ?? payload.demo_booking_path ?? payload.prospect?.demo_booking_path ?? null,
+  );
+}
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {
   const response = (
@@ -1847,10 +1886,13 @@ export default function AdmPage() {
   const [officialMessagePreview, setOfficialMessagePreview] = useState<MessagePreview | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [appOrigin, setAppOrigin] = useState("");
   const [lastDemoLink, setLastDemoLink] = useState("");
+  const [lastBookingLink, setLastBookingLink] = useState("");
 
   useEffect(() => {
     setHasToken(Boolean(getAdminAccessToken()));
+    setAppOrigin(resolveBrowserOrigin());
   }, []);
 
   const overviewQuery = useQuery<Overview>({
@@ -1933,6 +1975,11 @@ export default function AdmPage() {
   }, [selectedId, selectedProspect]);
 
   useEffect(() => {
+    setLastDemoLink("");
+    setLastBookingLink("");
+  }, [selectedId]);
+
+  useEffect(() => {
     if (!officialWhatsAppProspect || !officialTemplates.length) return;
     if (!selectedOfficialTemplate) {
       const fallbackTemplate = officialTemplates[0];
@@ -1954,6 +2001,18 @@ export default function AdmPage() {
     selectedOfficialTemplateMessage,
   ]);
 
+  const syncLatestDemoLinks = (payload: DemoLinkPayload | null | undefined) => {
+    const nextDemoLink = `${payload?.demo_login_url || ""}`.trim();
+    const nextBookingLink = resolvePayloadBookingLink(payload, resolveBrowserOrigin() || appOrigin);
+    setLastDemoLink(nextDemoLink);
+    setLastBookingLink(nextBookingLink);
+  };
+
+  const selectedProspectBookingLink = useMemo(
+    () => resolveProspectBookingLink(selectedProspect, appOrigin),
+    [appOrigin, selectedProspect],
+  );
+
   const timelineQuery = useQuery<TimelineEvent[]>({
     queryKey: ["adm-prospect-timeline", selectedProspect?.id],
     queryFn: async () => (await api.get(`/admin/prospects/${selectedProspect?.id}/timeline`)).data,
@@ -1969,9 +2028,9 @@ export default function AdmPage() {
   const generateDemoMutation = useMutation({
     mutationFn: async (prospectId: string) => (await api.post(`/admin/prospects/${prospectId}/generate-demo`)).data,
     onSuccess: (data) => {
-      setLastDemoLink(data.demo_login_url);
+      syncLatestDemoLinks(data);
       navigator.clipboard?.writeText(data.demo_login_url);
-      toast.success("Demo gerada e link copiado.");
+      toast.success("Demo gerada. Link da demo copiado e agendamento pronto para copiar.");
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
@@ -1983,7 +2042,7 @@ export default function AdmPage() {
   const accessMutation = useMutation({
     mutationFn: async (prospectId: string) => (await api.post(`/admin/prospects/${prospectId}/send-demo-access`)).data,
     onSuccess: (data) => {
-      setLastDemoLink(data.demo_login_url);
+      syncLatestDemoLinks(data);
       navigator.clipboard?.writeText(data.demo_login_url);
       toast.success("Link de demo copiado.");
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
@@ -2042,7 +2101,7 @@ export default function AdmPage() {
       ).data,
     onSuccess: (data) => {
       if (data.demo_login_url) {
-        setLastDemoLink(data.demo_login_url);
+        syncLatestDemoLinks(data);
         navigator.clipboard?.writeText(data.demo_login_url);
       }
       const label =
@@ -2068,7 +2127,7 @@ export default function AdmPage() {
       (await api.post<OutreachResult>(`/admin/prospects/${prospectId}/outreach/automation/start`)).data,
     onSuccess: (data) => {
       if (data.demo_login_url) {
-        setLastDemoLink(data.demo_login_url);
+        syncLatestDemoLinks(data);
         navigator.clipboard?.writeText(data.demo_login_url);
       }
       toast.success("Automacao comercial iniciada. O WhatsApp vai acompanhar a resposta e avancar para pitch e video.");
@@ -2092,7 +2151,7 @@ export default function AdmPage() {
       ).data,
     onSuccess: (data) => {
       if (data.demo_login_url) {
-        setLastDemoLink(data.demo_login_url);
+        syncLatestDemoLinks(data);
       }
       toast.success(
         data.converted
@@ -2482,6 +2541,8 @@ export default function AdmPage() {
                 timeline={timelineQuery.data ?? []}
                 activity={activityQuery.data ?? []}
                 lastDemoLink={lastDemoLink}
+                lastBookingLink={lastBookingLink}
+                bookingLink={selectedProspectBookingLink}
                 onGenerateDemo={() => generateDemoMutation.mutate(selectedProspect.id)}
                 onIssueAccess={() => accessMutation.mutate(selectedProspect.id)}
                 onRecordContact={() => contactMutation.mutate(selectedProspect.id)}
@@ -2780,6 +2841,8 @@ function ProspectDetail({
   timeline,
   activity,
   lastDemoLink,
+  lastBookingLink,
+  bookingLink,
   onGenerateDemo,
   onIssueAccess,
   onRecordContact,
@@ -2796,6 +2859,8 @@ function ProspectDetail({
   timeline: TimelineEvent[];
   activity: ActivityEvent[];
   lastDemoLink: string;
+  lastBookingLink: string;
+  bookingLink: string;
   onGenerateDemo: () => void;
   onIssueAccess: () => void;
   onRecordContact: () => void;
@@ -2817,6 +2882,7 @@ function ProspectDetail({
   const lastLabRun = outreachLab.last_run && typeof outreachLab.last_run === "object" ? outreachLab.last_run : null;
   const automationLabel = outreachAutomationLabel(outreach);
   const [labScenario, setLabScenario] = useState<string>("manager_interested");
+  const resolvedBookingLink = lastBookingLink || bookingLink;
 
   useEffect(() => {
     const fallbackScenario = typeof lastLabRun?.scenario === "string" ? lastLabRun.scenario : "manager_interested";
@@ -2869,6 +2935,14 @@ function ProspectDetail({
             <Button variant="outline" onClick={onIssueAccess} disabled={!prospect.demo_tenant_id}>
               <Send size={16} />
               Copiar acesso
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => navigator.clipboard?.writeText(resolvedBookingLink)}
+              disabled={!resolvedBookingLink}
+            >
+              <Clipboard size={16} />
+              Copiar agendamento
             </Button>
             <Button variant="outline" onClick={onRecordContact}>
               <PhoneCall size={16} />
@@ -3022,14 +3096,31 @@ function ProspectDetail({
             ) : null}
           </div>
 
-          {lastDemoLink ? (
+          {lastDemoLink || resolvedBookingLink ? (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate">{lastDemoLink}</span>
-                <Button className="h-8 px-2" variant="outline" onClick={() => navigator.clipboard?.writeText(lastDemoLink)}>
-                  <Clipboard size={14} />
-                </Button>
-              </div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Links da clinica</p>
+              {lastDemoLink ? (
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700/80">Link da demo</p>
+                    <span className="block truncate">{lastDemoLink}</span>
+                  </div>
+                  <Button className="h-8 px-2" variant="outline" onClick={() => navigator.clipboard?.writeText(lastDemoLink)}>
+                    <Clipboard size={14} />
+                  </Button>
+                </div>
+              ) : null}
+              {resolvedBookingLink ? (
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700/80">Link do agendamento</p>
+                    <span className="block truncate">{resolvedBookingLink}</span>
+                  </div>
+                  <Button className="h-8 px-2" variant="outline" onClick={() => navigator.clipboard?.writeText(resolvedBookingLink)}>
+                    <Clipboard size={14} />
+                  </Button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </CardContent>

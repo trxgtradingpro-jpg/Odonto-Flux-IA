@@ -442,6 +442,35 @@ def build_demo_login_url(base_url: str, token: str) -> str:
     return f"{base_url}/login?demo_token={token}"
 
 
+def build_demo_booking_path(clinic_slug: str) -> str:
+    return f"/agendar/{clinic_slug}"
+
+
+def build_demo_booking_url(base_url: str, clinic_slug: str) -> str:
+    normalized_base = str(base_url or "").rstrip("/") or "http://localhost:3000"
+    return f"{normalized_base}{build_demo_booking_path(clinic_slug)}"
+
+
+def _resolve_demo_booking_slug(db: Session, *, prospect: ProspectAccount) -> str | None:
+    if not prospect.demo_tenant_id:
+        return None
+    tenant = db.get(Tenant, prospect.demo_tenant_id)
+    if not tenant:
+        return None
+    return str(tenant.slug or "").strip() or None
+
+
+def _resolve_demo_booking_path(db: Session, *, prospect: ProspectAccount) -> str | None:
+    demo_slug = _resolve_demo_booking_slug(db, prospect=prospect)
+    if not demo_slug:
+        return None
+    return build_demo_booking_path(demo_slug)
+
+
+def resolve_demo_booking_path(db: Session, *, prospect: ProspectAccount) -> str | None:
+    return _resolve_demo_booking_path(db, prospect=prospect)
+
+
 def _demo_email(prospect: ProspectAccount) -> str:
     seed = prospect.tenant_seed_key or _slugify(prospect.clinic_name)
     return f"demo+{seed}@demo.clinicfluxai.com.br"
@@ -731,6 +760,9 @@ def serialize_service(service: ProspectService) -> dict:
 def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_children: bool = True) -> dict:
     units: list[dict] = []
     services: list[dict] = []
+    demo_booking_slug = _resolve_demo_booking_slug(db, prospect=prospect)
+    prospect_slug = demo_booking_slug or prospect.tenant_seed_key
+    demo_booking_path = build_demo_booking_path(demo_booking_slug) if demo_booking_slug else None
     if include_children:
         units = [
             serialize_unit(item)
@@ -747,6 +779,7 @@ def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_childr
 
     return {
         "id": prospect.id,
+        "slug": prospect_slug,
         "clinic_name": prospect.clinic_name,
         "owner_name": prospect.owner_name,
         "manager_name": prospect.manager_name,
@@ -779,6 +812,7 @@ def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_childr
         "demo_last_login_at": prospect.demo_last_login_at,
         "demo_status": prospect.demo_status,
         "demo_expires_at": prospect.demo_expires_at,
+        "demo_booking_path": demo_booking_path,
         "demo_checklist": prospect.demo_checklist or {},
         "last_activity_at": prospect.last_activity_at,
         "score_explanation": prospect.score_explanation or {},
@@ -2860,10 +2894,13 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
         db.commit()
         db.refresh(prospect)
         raw_token = issue_demo_access(db, prospect, actor_id=actor_id)
+        demo_booking_slug = _resolve_demo_booking_slug(db, prospect=prospect)
         return {
             "prospect": prospect,
             "access_token": raw_token,
             "demo_login_url": build_demo_login_url(base_url, raw_token),
+            "demo_booking_path": build_demo_booking_path(demo_booking_slug) if demo_booking_slug else None,
+            "demo_booking_url": build_demo_booking_url(base_url, demo_booking_slug) if demo_booking_slug else None,
             "checklist": prospect.demo_checklist,
             "ai_draft": _latest_ai_output(db, prospect.id),
         }
@@ -2985,10 +3022,13 @@ def generate_demo(db: Session, prospect: ProspectAccount, *, actor_id: UUID | No
     db.commit()
     db.refresh(prospect)
     raw_token = issue_demo_access(db, prospect, actor_id=actor_id)
+    demo_booking_slug = _resolve_demo_booking_slug(db, prospect=prospect)
     return {
         "prospect": prospect,
         "access_token": raw_token,
         "demo_login_url": build_demo_login_url(base_url, raw_token),
+        "demo_booking_path": build_demo_booking_path(demo_booking_slug) if demo_booking_slug else None,
+        "demo_booking_url": build_demo_booking_url(base_url, demo_booking_slug) if demo_booking_slug else None,
         "checklist": prospect.demo_checklist,
         "ai_draft": ai_draft,
     }

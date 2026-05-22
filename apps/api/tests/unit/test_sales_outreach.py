@@ -650,6 +650,11 @@ def test_redeem_demo_token_returns_webchat_entry_metadata(monkeypatch, seeded_db
         base_url="http://localhost:3000",
     )
 
+    demo_tenant = db_session.get(Tenant, generated["prospect"].demo_tenant_id)
+    assert demo_tenant is not None
+    assert generated["demo_booking_path"] == f"/agendar/{demo_tenant.slug}"
+    assert generated["demo_booking_url"] == f"http://localhost:3000{generated['demo_booking_path']}"
+
     redeemed = sales_demo_service.redeem_demo_token(
         db_session,
         token=generated["access_token"],
@@ -658,7 +663,7 @@ def test_redeem_demo_token_returns_webchat_entry_metadata(monkeypatch, seeded_db
 
     assert redeemed["demo_target_path"] == "/conversas"
     assert redeemed["demo_entry_channel"] == "webchat"
-    assert redeemed["demo_public_entry_path"] == f"/agendar/{generated['prospect'].slug}"
+    assert redeemed["demo_public_entry_path"] == generated["demo_booking_path"]
 
 
 def test_redeem_demo_token_defaults_to_webchat_when_demo_has_no_real_whatsapp(monkeypatch, seeded_db, db_session):
@@ -680,6 +685,9 @@ def test_redeem_demo_token_defaults_to_webchat_when_demo_has_no_real_whatsapp(mo
         base_url="http://localhost:3000",
     )
 
+    assert generated["demo_booking_path"]
+    assert generated["demo_booking_url"] == f"http://localhost:3000{generated['demo_booking_path']}"
+
     redeemed = sales_demo_service.redeem_demo_token(
         db_session,
         token=generated["access_token"],
@@ -688,7 +696,7 @@ def test_redeem_demo_token_defaults_to_webchat_when_demo_has_no_real_whatsapp(mo
 
     assert redeemed["demo_whatsapp_link"] is None
     assert redeemed["demo_entry_channel"] == "webchat"
-    assert redeemed["demo_public_entry_path"] == f"/agendar/{generated['prospect'].slug}"
+    assert redeemed["demo_public_entry_path"] == generated["demo_booking_path"]
 
 
 def test_generate_demo_populates_business_week_with_conversation_backed_appointments(monkeypatch, seeded_db, db_session):

@@ -36,13 +36,15 @@ def test_sales_admin_generates_isolated_demo(client, auth_headers):
     assert demo["prospect"]["demo_user_id"]
     assert demo["access_token"]
     assert "demo_token=" in demo["demo_login_url"]
+    assert demo["demo_booking_path"]
+    assert demo["demo_booking_url"] == f"http://localhost:3000{demo['demo_booking_path']}"
 
     redeemed = client.post("/api/v1/demo/auth/redeem-token", json={"token": demo["access_token"]})
     assert redeemed.status_code == 200
     assert redeemed.json()["demo_target_path"] == "/conversas"
     assert redeemed.json()["demo_whatsapp_link"] is None
     assert redeemed.json()["demo_entry_channel"] == "webchat"
-    assert redeemed.json()["demo_public_entry_path"] == f"/agendar/{demo['prospect']['slug']}"
+    assert redeemed.json()["demo_public_entry_path"] == demo["demo_booking_path"]
     demo_auth = {"Authorization": f"Bearer {redeemed.json()['access_token']}"}
 
     me = client.get("/api/v1/auth/me", headers=demo_auth)
@@ -50,7 +52,7 @@ def test_sales_admin_generates_isolated_demo(client, auth_headers):
     assert me.json()["tenant_id"] == demo["prospect"]["demo_tenant_id"]
     assert "demo_client" in me.json()["roles"]
     assert me.json()["demo_entry_channel"] == "webchat"
-    assert me.json()["demo_public_entry_path"] == f"/agendar/{demo['prospect']['slug']}"
+    assert me.json()["demo_public_entry_path"] == demo["demo_booking_path"]
 
     guide = client.get("/api/v1/demo/guide", headers=demo_auth)
     assert guide.status_code == 200

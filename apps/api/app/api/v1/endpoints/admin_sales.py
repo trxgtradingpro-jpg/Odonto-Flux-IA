@@ -748,6 +748,8 @@ def generate_demo(
         "prospect": sales.serialize_prospect(db, result["prospect"]),
         "access_token": result["access_token"],
         "demo_login_url": result["demo_login_url"],
+        "demo_booking_path": result["demo_booking_path"],
+        "demo_booking_url": result["demo_booking_url"],
         "checklist": result["checklist"],
         "ai_draft": result["ai_draft"],
     }
@@ -763,9 +765,15 @@ def send_demo_access(
     sales.require_sales_write(principal)
     prospect = _get_prospect(db, prospect_id)
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
+    demo_booking_path = sales.resolve_demo_booking_path(db, prospect=prospect)
+    demo_booking_url = None
+    if demo_booking_path:
+        demo_booking_url = f"{_base_url(request).rstrip('/')}{demo_booking_path}"
     return {
         "access_token": raw_token,
         "demo_login_url": sales.build_demo_login_url(_base_url(request), raw_token),
+        "demo_booking_path": demo_booking_path,
+        "demo_booking_url": demo_booking_url,
         "expires_at": prospect.demo_access_token_expires_at,
     }
 
