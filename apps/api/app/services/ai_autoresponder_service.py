@@ -1296,7 +1296,11 @@ def _is_placeholder_name(value: str | None) -> bool:
     text = str(value or "").strip().lower()
     if not text:
         return True
-    return text.startswith("contato whatsapp ") or text.startswith("paciente webchat")
+    return (
+        text.startswith("contato whatsapp ")
+        or text.startswith("paciente webchat")
+        or text.startswith("paciente do agendamento")
+    )
 
 
 def _is_webchat_placeholder_phone(value: str | None) -> bool:
@@ -3601,6 +3605,29 @@ def _extract_requested_date_from_text(*, text: str, timezone: ZoneInfo) -> date 
     normalized = _normalize_for_match(text)
     now_local = datetime.now(UTC).astimezone(timezone).date()
 
+    if "depois de amanha" in normalized or "depois de amanhã" in normalized:
+        return now_local + timedelta(days=2)
+    if re.search(r"\bamanha\b", normalized) or re.search(r"\bamanhã\b", normalized):
+        return now_local + timedelta(days=1)
+    if re.search(r"\bhoje\b", normalized):
+        return now_local
+
+    weekday_aliases = (
+        ("segunda", 0),
+        ("terca", 1),
+        ("terça", 1),
+        ("quarta", 2),
+        ("quinta", 3),
+        ("sexta", 4),
+        ("sabado", 5),
+        ("sábado", 5),
+        ("domingo", 6),
+    )
+    for label, weekday in weekday_aliases:
+        if re.search(rf"\b{label}(?:\s+feira)?\b", normalized):
+            delta_days = (weekday - now_local.weekday()) % 7
+            return now_local + timedelta(days=delta_days)
+
     slash_match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", normalized)
     if slash_match:
         day = int(slash_match.group(1))
@@ -4006,6 +4033,20 @@ def _extract_time_choice(text: str) -> str | None:
     if match:
         hour = int(match.group(1))
         minute = int(match.group(2))
+        return f"{hour:02d}:{minute:02d}"
+
+    compact_match = re.search(r"^\s*([01]?\d|2[0-3])([0-5]\d)\s*$", text or "")
+    if not compact_match:
+        compact_match = re.search(r"\b(?:as|às)\s*([01]?\d|2[0-3])\s*([0-5]\d)\b", _normalize_for_match(text or ""))
+    if compact_match:
+        hour = int(compact_match.group(1))
+        minute = int(compact_match.group(2))
+        return f"{hour:02d}:{minute:02d}"
+
+    hour_minute_match = re.search(r"\b(?:as|às)\s*([01]?\d|2[0-3])\s*h\s*([0-5]\d)\b", _normalize_for_match(text or ""))
+    if hour_minute_match:
+        hour = int(hour_minute_match.group(1))
+        minute = int(hour_minute_match.group(2))
         return f"{hour:02d}:{minute:02d}"
 
     loose_hour_match = re.search(r"\b(?:as|às)\s*([01]?\d|2[0-3])\b", _normalize_for_match(text or ""))
@@ -5535,9 +5576,41 @@ def _latest_ai_wizard_message(db: Session, *, conversation: Conversation) -> Mes
     message = latest_messages[0]
     payload = message.payload if isinstance(message.payload, dict) else {}
     mode = str(payload.get("mode") or "").strip()
-    if mode.startswith("booking_") or mode == "welcome_message_start" or mode == "post_appointment_menu":
+    if mode.startswith("booking_") or mode in {
+        "welcome_message_start",
+        "post_appointment_menu",
+        "no_slots_general",
+        "no_slots_for_period",
+        "no_slots_for_period_with_alternatives",
+    }:
         return message
     return None
+
+
+CONSECUTIVE_GUARD_EXEMPT_BOOKING_MODES = {
+    "booking_wizard_resume_or_restart",
+    "booking_wizard_service_select",
+    "booking_wizard_unit_select",
+    "booking_wizard_day_select",
+    "booking_wizard_time_select",
+    "booking_wizard_confirm",
+    "booking_reschedule_day_select",
+    "booking_reschedule_time_select",
+    "booking_reschedule_confirm",
+    "no_slots_general",
+    "no_slots_for_period",
+    "no_slots_for_period_with_alternatives",
+    "appointment_created",
+    "appointment_already_created",
+    "booking_request_cpf_after_booking",
+    "booking_post_confirmation_options",
+    "booking_post_information_followup",
+    "post_appointment_menu",
+}
+
+
+def _mode_exempts_consecutive_guard(mode: str | None) -> bool:
+    return str(mode or "").strip() in CONSECUTIVE_GUARD_EXEMPT_BOOKING_MODES
 
 
 def _normalize_resume_value(value: Any) -> str:
@@ -6656,29 +6729,33 @@ def _wizard_text_matches_current_step(
     if not normalized_inbound:
         return False
 
+    has_explicit_time = _extract_time_choice(inbound_text) is not None
+    weekday_terms = (
+        "segunda",
+        "terca",
+        "terça",
+        "quarta",
+        "quinta",
+        "sexta",
+        "sabado",
+        "sábado",
+        "domingo",
+        "amanha",
+        "amanhã",
+        "hoje",
+    )
+    has_day_reference = bool(
+        requested_date
+        or re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", inbound_text)
+        or any(term in normalized_inbound for term in weekday_terms)
+    )
+    has_availability_signal = _is_explicit_availability_request(inbound_text)
+
     if step in {"day", "reschedule_day"}:
-        weekday_terms = (
-            "segunda",
-            "terca",
-            "terça",
-            "quarta",
-            "quinta",
-            "sexta",
-            "sabado",
-            "sábado",
-            "domingo",
-            "amanha",
-            "amanhã",
-            "hoje",
-        )
-        return bool(
-            requested_date
-            or re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", inbound_text)
-            or any(term in normalized_inbound for term in weekday_terms)
-        )
+        return bool(has_day_reference or has_explicit_time or period or has_availability_signal)
 
     if step in {"time", "reschedule_time"}:
-        return bool(_extract_time_choice(inbound_text) or period)
+        return bool(has_explicit_time or period or has_day_reference or has_availability_signal)
 
     if step == "unit":
         unit_terms = (
@@ -6693,10 +6770,22 @@ def _wizard_text_matches_current_step(
             "leste",
             "oeste",
         )
-        return any(term in normalized_inbound for term in unit_terms)
+        return bool(
+            any(term in normalized_inbound for term in unit_terms)
+            or has_day_reference
+            or has_explicit_time
+            or period
+            or has_availability_signal
+        )
 
     if step == "service":
-        return _wizard_has_explicit_service_inbound(inbound_text)
+        return bool(
+            _wizard_has_explicit_service_inbound(inbound_text)
+            or has_day_reference
+            or has_explicit_time
+            or period
+            or has_availability_signal
+        )
 
     if step in {"confirm", "cancel_confirm", "reschedule_confirm"}:
         return _is_booking_confirmation_message(inbound_text) or normalized_inbound in {
@@ -6792,7 +6881,7 @@ def _try_booking_wizard_response(
         latest_payload = latest_wizard.payload if isinstance(latest_wizard.payload, dict) else {}
         latest_mode = str(latest_payload.get("mode") or "").strip()
         latest_scheduling = latest_payload.get("scheduling") if isinstance(latest_payload.get("scheduling"), dict) else {}
-        latest_step = _wizard_step_from_mode(latest_mode) or ""
+        latest_step = _wizard_step_from_mode(latest_mode) or str(latest_scheduling.get("wizard_step") or "").strip()
         plain_preferred_name = (
             _extract_preferred_name_from_text(inbound_text, allow_plain=True)
             if latest_step == "service"
@@ -7559,6 +7648,18 @@ def _try_booking_wizard_response(
                     session_token=latest_session_token,
                 )
 
+            if requested_date and requested_date != selected_day:
+                return _wizard_build_time_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    selected_date=requested_date,
+                    config=config,
+                    session_token=latest_session_token,
+                )
+
             slot_choices = latest_scheduling.get("slot_choices") if isinstance(latest_scheduling.get("slot_choices"), list) else []
             selected_choice = _wizard_select_time_choice(selection_token, slot_choices)
             if not selected_choice:
@@ -7579,6 +7680,72 @@ def _try_booking_wizard_response(
                 selected_date=selected_day,
                 period=carried_period,
                 selected_slot_choice=selected_choice,
+                session_token=latest_session_token,
+            )
+
+        if latest_mode == "no_slots_general" and latest_step in {"day", "time"}:
+            selected_service = str(latest_scheduling.get("procedure_type") or "").strip() or "Avaliação inicial"
+            if selection_token_normalized in {"day_change_service", "time_change_service", "trocar servico", "trocar serviço"}:
+                return _wizard_build_service_step_response(
+                    db,
+                    conversation=conversation,
+                    intro_text="Perfeito. Vamos escolher outro serviço:",
+                    period=carried_period,
+                    requested_date=carried_requested_date,
+                    session_token=latest_session_token,
+                )
+            if selection_token_normalized in {"menu_human", "falar com atendente"}:
+                return {
+                    "mode": "menu_human_handoff",
+                    "response_text": "Perfeito. Vou te encaminhar para um atendente agora.",
+                    "metadata": {
+                        "reason": "patient_requested_human",
+                        "handoff_required": True,
+                        "handoff_reason": "patient_requested_human",
+                    },
+                }
+
+            unit_id_raw = latest_scheduling.get("unit_id")
+            try:
+                unit_id = UUID(str(unit_id_raw)) if unit_id_raw else None
+            except (TypeError, ValueError):
+                unit_id = None
+            unit = db.scalar(
+                select(Unit).where(
+                    Unit.id == unit_id,
+                    Unit.tenant_id == conversation.tenant_id,
+                    Unit.is_active.is_(True),
+                )
+            ) if unit_id else None
+            if not unit:
+                return {
+                    "mode": "no_unit_available",
+                    "response_text": "Não consegui acessar essa clínica agora. Pode escolher outra opção?",
+                    "metadata": {"reason": "no_unit_available"},
+                }
+
+            latest_requested_day = _parse_iso_date(latest_scheduling.get("requested_date"))
+            if latest_step == "time" and requested_date and requested_date != latest_requested_day:
+                return _wizard_build_time_step_response(
+                    db,
+                    conversation=conversation,
+                    unit=unit,
+                    procedure_type=selected_service,
+                    period=carried_period,
+                    selected_date=requested_date,
+                    config=config,
+                    session_token=latest_session_token,
+                )
+
+            return _wizard_build_day_step_response(
+                db,
+                conversation=conversation,
+                unit=unit,
+                procedure_type=selected_service,
+                period=carried_period,
+                requested_date=requested_date or latest_requested_day or carried_requested_date,
+                operation_timezone=operation_timezone,
+                config=config,
                 session_token=latest_session_token,
             )
 
@@ -10108,7 +10275,7 @@ def process_inbound_message(
 
     consecutive_count = int(conversation.ai_autoresponder_consecutive_count or 0)
     max_consecutive = int(config.get("max_consecutive_auto_replies") or 3)
-    if consecutive_count >= max_consecutive:
+    if consecutive_count >= max_consecutive and not _mode_exempts_consecutive_guard(latest_wizard_mode):
         return finish_without_reply(
             final_decision=DECISION_HANDOFF,
             reason="max_consecutive_reached",
@@ -10544,6 +10711,7 @@ def process_inbound_message(
 
             final_decision = DECISION_HANDOFF if handoff_required else DECISION_RESPONDED
             decision_reason = "response_sent_handoff" if handoff_required else "response_sent"
+            preserve_consecutive_limit = _mode_exempts_consecutive_guard(scheduling_mode)
 
             decision = _create_decision(
                 db,
@@ -10584,7 +10752,9 @@ def process_inbound_message(
             conversation.ai_autoresponder_last_decision = final_decision
             conversation.ai_autoresponder_last_reason = decision_reason
             conversation.ai_autoresponder_last_at = datetime.now(UTC)
-            conversation.ai_autoresponder_consecutive_count = 0 if handoff_required else consecutive_count + 1
+            conversation.ai_autoresponder_consecutive_count = (
+                0 if handoff_required or preserve_consecutive_limit else consecutive_count + 1
+            )
             conversation.last_message_at = datetime.now(UTC)
             db.add(conversation)
             db.commit()

@@ -308,6 +308,32 @@ def test_platform_admin_endpoint_requires_role(client, auth_headers):
     assert 'total_tenants' in allowed.json()
 
 
+def test_platform_admin_lists_implementation_catalog(client, auth_headers):
+    response = client.get('/api/v1/admin/platform/implementations', headers=auth_headers['admin'])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['summary']['total'] >= 5
+    keys = {item['key'] for item in payload['items']}
+    assert 'implementation.public_booking_webchat' in keys
+    assert 'implementation.adm_implementation_control_center' in keys
+
+
+def test_platform_admin_toggles_implementation_flag(client, auth_headers):
+    toggled = client.patch(
+        '/api/v1/admin/platform/implementations/implementation.sales_outreach_automation',
+        json={'enabled': True},
+        headers=auth_headers['admin'],
+    )
+    assert toggled.status_code == 200
+    assert toggled.json()['enabled'] is True
+    assert toggled.json()['key'] == 'implementation.sales_outreach_automation'
+
+    listed = client.get('/api/v1/admin/platform/implementations', headers=auth_headers['admin'])
+    assert listed.status_code == 200
+    item = next(entry for entry in listed.json()['items'] if entry['key'] == 'implementation.sales_outreach_automation')
+    assert item['enabled'] is True
+
+
 def test_platform_admin_whatsapp_settings_use_system_sender_tenant(client, auth_headers, monkeypatch):
     from app.api.v1.endpoints import admin_platform
     from app.services import sales_demo_service

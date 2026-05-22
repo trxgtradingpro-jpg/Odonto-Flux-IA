@@ -39,7 +39,7 @@ def _now() -> datetime:
 
 def _placeholder_patient_name(value: str | None) -> bool:
     normalized = str(value or "").strip().casefold()
-    return not normalized or normalized in {"paciente webchat", "paciente", "novo paciente"}
+    return not normalized or normalized in {"paciente webchat", "paciente", "novo paciente", "paciente do agendamento"}
 
 
 def _hash_token(raw_token: str) -> str:
@@ -430,6 +430,19 @@ def _latest_public_summary_draft(db: Session, *, session: LinkFlowSession) -> di
     return event.payload if event and isinstance(event.payload, dict) else {}
 
 
+def _latest_public_booking_progress(
+    db: Session,
+    *,
+    conversation: Conversation | None,
+) -> dict[str, Any]:
+    if not conversation:
+        return {}
+    from app.services.ai_autoresponder_service import _latest_saved_booking_state
+
+    state = _latest_saved_booking_state(db, conversation=conversation)
+    return state if isinstance(state, dict) else {}
+
+
 def _unit_name_by_id(db: Session, *, tenant_id: UUID, unit_id: UUID | None) -> str | None:
     if not unit_id:
         return None
@@ -699,6 +712,7 @@ def public_webchat_booking_summary(
     conversation = db.get(Conversation, session.linked_conversation_id) if session.linked_conversation_id else None
     appointment = db.get(Appointment, session.linked_appointment_id) if session.linked_appointment_id else None
     draft = _latest_public_summary_draft(db, session=session)
+    progress_state = _latest_public_booking_progress(db, conversation=conversation)
 
     patient_name = None if _placeholder_patient_name(patient.full_name if patient else None) else _clean_summary_text(patient.full_name if patient else None, max_length=180)
     patient_email = _clean_summary_text(patient.email if patient else None, max_length=180)
@@ -712,20 +726,58 @@ def public_webchat_booking_summary(
         except (TypeError, ValueError):
             draft_unit_id = None
 
+    progress_unit_id: UUID | None = None
+    raw_progress_unit_id = progress_state.get("clinic_id")
+    if raw_progress_unit_id:
+        try:
+            progress_unit_id = UUID(str(raw_progress_unit_id))
+        except (TypeError, ValueError):
+            progress_unit_id = None
+
     current_unit_id = (
         appointment.unit_id
         if appointment
-        else conversation.unit_id if conversation and conversation.unit_id else patient.unit_id if patient and patient.unit_id else session.unit_id or draft_unit_id
+        else conversation.unit_id if conversation and conversation.unit_id else patient.unit_id if patient and patient.unit_id else session.unit_id or draft_unit_id or progress_unit_id
     )
-    unit_name = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=current_unit_id)
+    unit_name = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=current_unit_id) or _clean_summary_text(progress_state.get("clinic_name"), max_length=120)
 
     procedure_value = _clean_summary_text(
-        appointment.procedure_type if appointment and appointment.procedure_type else draft.get("procedure_type"),
+        appointment.procedure_type
+        if appointment and appointment.procedure_type
+        else progress_state.get("service") or draft.get("procedure_type"),
         max_length=120,
     )
-    preferred_date = _parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None
+    preferred_date = (
+        _parse_summary_preferred_date(draft.get("preferred_date"))
+        if draft.get("preferred_date")
+        else _parse_summary_preferred_date(progress_state.get("date")) if progress_state.get("date") else None
+    )
     preferred_time = _clean_summary_text(draft.get("preferred_time"), max_length=80)
-    confirmed_slot = appointment.starts_at.isoformat() if appointment and appointment.starts_at else preferred_time
+    progress_selected_slot = (
+        progress_state.get("selected_slot")
+        if isinstance(progress_state.get("selected_slot"), dict)
+        else {}
+    )
+    progress_slot_starts_at = _clean_summary_text(progress_selected_slot.get("starts_at_utc"), max_length=80)
+    progress_slot_time = _clean_summary_text(
+        progress_selected_slot.get("time") or progress_state.get("time"),
+        max_length=80,
+    )
+    progress_slot_label = _clean_summary_text(progress_selected_slot.get("label"), max_length=140)
+    confirmed_slot = (
+        appointment.starts_at.isoformat()
+        if appointment and appointment.starts_at
+        else progress_slot_starts_at or preferred_time or progress_slot_time or progress_slot_label
+    )
+    confirmed_slot_source = (
+        "auto"
+        if appointment and appointment.starts_at
+        else "conversation"
+        if progress_slot_starts_at
+        else "manual"
+        if confirmed_slot
+        else None
+    )
     preferred_dates, preferred_times = _public_summary_schedule_options(
         db,
         session=session,
@@ -745,12 +797,27 @@ def public_webchat_booking_summary(
         "email": _summary_value(patient_email, source="auto" if patient_email else None),
         "birth_date": _summary_value(birth_date_value, source="auto" if birth_date_value else None),
         "unit": {
-            **_summary_value(unit_name, source="auto" if appointment or (conversation and conversation.unit_id) or (patient and patient.unit_id) or session.unit_id else "manual"),
+            **_summary_value(
+                unit_name,
+                source=(
+                    "auto"
+                    if appointment or (conversation and conversation.unit_id) or (patient and patient.unit_id) or session.unit_id
+                    else "conversation"
+                    if progress_state.get("clinic_name") or progress_unit_id
+                    else "manual"
+                ),
+            ),
             "unit_id": str(current_unit_id) if current_unit_id else None,
         },
-        "procedure": _summary_value(procedure_value, source="auto" if appointment and appointment.procedure_type else "manual"),
-        "preferred_date": _summary_value(preferred_date, source="manual"),
-        "confirmed_slot": _summary_value(confirmed_slot, source="auto" if appointment and appointment.starts_at else "manual"),
+        "procedure": _summary_value(
+            procedure_value,
+            source="auto" if appointment and appointment.procedure_type else "conversation" if progress_state.get("service") else "manual",
+        ),
+        "preferred_date": _summary_value(
+            preferred_date,
+            source="conversation" if progress_state.get("date") and not draft.get("preferred_date") else "manual",
+        ),
+        "confirmed_slot": _summary_value(confirmed_slot, source=confirmed_slot_source),
     }
 
     completion_order = ["patient_name", "email", "birth_date", "unit", "procedure", "confirmed_slot"]

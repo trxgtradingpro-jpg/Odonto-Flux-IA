@@ -3,6 +3,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,10 @@ from app.integrations.whatsapp.infobip import InfobipWhatsAppProvider
 from app.integrations.whatsapp.twilio import TwilioWhatsAppProvider
 from app.models import OutboxMessage, ProspectAccount, WhatsAppAccount
 from app.models.enums import OutboxStatus
+from app.services.implementation_registry_service import (
+    list_platform_implementations,
+    set_platform_implementation_enabled,
+)
 from app.services import sales_demo_service as sales
 from app.services.audit_service import record_audit
 from app.services.dashboard_service import global_admin_metrics, global_admin_overview
@@ -22,6 +27,10 @@ from app.services.monitoring_service import monitoring_snapshot
 from app.services.whatsapp_service import normalize_whatsapp_provider_name, whatsapp_account_issues
 
 router = APIRouter(prefix="/admin/platform", tags=["admin_platform"])
+
+
+class ImplementationToggleInput(BaseModel):
+    enabled: bool
 
 
 def _provider_validation_hint(provider_name: str) -> str:
@@ -176,6 +185,40 @@ def admin_health(db: Session = Depends(get_db)):
 @router.get("/overview", dependencies=[Depends(require_roles("admin_platform"))])
 def overview(db: Session = Depends(get_db)):
     return global_admin_overview(db)
+
+
+@router.get("/implementations", dependencies=[Depends(require_roles("admin_platform"))])
+def implementations(db: Session = Depends(get_db)):
+    return list_platform_implementations(db)
+
+
+@router.patch("/implementations/{implementation_key}")
+def toggle_implementation(
+    implementation_key: str,
+    payload: ImplementationToggleInput,
+    principal: Principal = Depends(require_roles("admin_platform")),
+    db: Session = Depends(get_db),
+):
+    item = set_platform_implementation_enabled(
+        db,
+        key=implementation_key,
+        enabled=bool(payload.enabled),
+    )
+    db.commit()
+    record_audit(
+        db,
+        action="admin_platform.implementation.toggle",
+        entity_type="feature_flag",
+        entity_id=str(item["key"]),
+        tenant_id=None,
+        user_id=principal.user.id,
+        metadata={
+            "enabled": item["enabled"],
+            "delivery_status": item["delivery_status"],
+            "category": item["category"],
+        },
+    )
+    return item
 
 
 @router.get("/monitoring", dependencies=[Depends(require_roles("admin_platform"))])

@@ -1,0 +1,166 @@
+Quero que voce execute este trabalho de ponta a ponta no repositorio `C:\Users\Gui Trader\Documents\GitHub\OdontoFlux\odontoflux`, sem parar em analise, sem encerrar cedo e sem tratar como resolvido ate validar no sistema real.
+
+Objetivo principal:
+Corrigir o fluxo de agendamento conversacional da ClinicFlux AI, validar profundamente a qualidade das conversas, criar uma central administrativa em `/adm` para controle de implementacoes, validar tudo funcionando de verdade e no final fazer commit e push para `main`.
+
+Regra geral de execucao:
+- Voce pode ligar tudo que for necessario para trabalhar e testar.
+- Se precisar subir Docker, rebuildar containers, iniciar `api`, `web`, `worker`, `scheduler`, `postgres`, `redis`, rodar migrations, seeds, testes unitarios, testes de integracao, Playwright, navegador local, verificacoes reais em rotas locais ou qualquer dependencia tecnica, pode fazer diretamente.
+- Nao fique pedindo permissao para iniciar dependencias tecnicas necessarias para o trabalho.
+- Se precisar limpar cache, recriar volumes, reiniciar servicos ou preparar autenticacao de teste, faca.
+- Se algum teste falhar por causa do ambiente, tente corrigir o ambiente primeiro antes de considerar a validacao bloqueada.
+
+Bug real que precisa ser corrigido:
+Houve uma conversa de agendamento em que o paciente concluiu todo o fluxo e a IA respondeu como se o agendamento estivesse confirmado, mas o sistema nao refletiu isso corretamente.
+
+Caso real:
+- Canal: atendimento online da clinica
+- Clinica: `LENTES EM RESINA TATUAPE`
+- Servico: `Avaliacao clinica`
+- Unidade: `Unidade principal`
+- Data: `sexta-feira, 22/05/2026`
+- Horario: `09:30`
+- Nome: `Guilherme Sousa`
+- CPF: `12008189465`
+
+Problemas observados:
+1. Na lateral esquerda do chat o horario/status continuou como `Aguardando confirmacao`, mesmo depois da conversa terminar com confirmacao.
+2. O agendamento nao apareceu na agenda real da clinica.
+3. A IA falou como se estivesse confirmado, mas a confirmacao real do sistema nao aconteceu de forma consistente.
+
+O que voce deve fazer:
+1. Investigar o fluxo completo de agendamento por conversa:
+   - entrada da mensagem
+   - interpretacao da intencao
+   - selecao de servico
+   - selecao de unidade
+   - selecao de data
+   - selecao de horario
+   - confirmacao do slot
+   - coleta de nome
+   - coleta de CPF
+   - persistencia dos dados
+   - atualizacao do resumo lateral
+   - criacao real do agendamento
+   - exibicao na agenda da clinica
+2. Descobrir exatamente por que a confirmacao textual da IA ficou desacoplada da confirmacao real do backend.
+3. Corrigir isso de forma estrutural, nao com remendo visual e nao com ajuste fake de status.
+4. Garantir que quando a IA disser que o agendamento esta confirmado, isso realmente signifique que:
+   - o slot foi validado de verdade
+   - o appointment foi criado de verdade
+   - o status e o resumo lateral foram atualizados corretamente
+   - o item aparece na agenda real da clinica
+   - os dados de paciente e cadastro ficaram consistentes
+5. Corrigir qualquer divergencia entre conversa, persistencia, agenda e interface.
+
+Regra de qualidade da ClinicFlux AI:
+Quero atendimento realmente humano.
+Sempre que voce ajustar qualquer resposta, qualquer fluxo ou qualquer decisao, pergunte mentalmente:
+- um humano realmente atenderia assim?
+- essa resposta esta natural?
+- ela responde exatamente o que o paciente perguntou naquele momento?
+- ela guia com clareza sem parecer robatica?
+- ela mantem contexto sem repetir desnecessariamente?
+Se a resposta nao estiver humana, adequada ao contexto e convincente, ajuste de novo.
+
+Validacao obrigatoria com 50 conversas completas:
+Quero uma bateria seria de `50 conversas completas`, avaliadas mensagem por mensagem.
+
+Em cada conversa voce deve verificar se a IA:
+- mantem contexto do inicio ao fim
+- responde a pergunta correta para aquele momento
+- nao se perde no fluxo
+- nao contradiz o estado real do sistema
+- fala de forma humana
+- conduz o paciente com clareza
+- entende linguagem natural
+- nao usa respostas frias, truncadas, mecanicas ou fora de timing
+- nao confirma algo que nao foi realmente persistido
+- fecha corretamente quando o assunto termina
+
+Cobertura minima esperada nas 50 conversas:
+- agendamento direto
+- agendamento com linguagem natural como `quero fazer avaliacao amanha`
+- escolha de servico por texto livre
+- escolha por numero
+- troca de servico
+- troca de unidade
+- troca de dia
+- troca de horario
+- paciente indeciso
+- paciente fazendo mais de uma pergunta na mesma mensagem
+- pergunta sobre valor antes do agendamento
+- pedido para falar com humano
+- suporte
+- reclamacao
+- erro de entendimento
+- linguagem informal
+- mensagens curtas
+- mensagens ambiguas
+- encerramento cordial
+- nome e CPF apos confirmacao
+- verificacao se o agendamento realmente entrou no sistema
+
+Regra rigida da bateria:
+- Se aparecer qualquer erro em qualquer uma das 50 conversas, em qualquer mensagem, em qualquer detalhe de contexto, humanizacao, acao incorreta, resposta errada, confirmacao falsa ou falha de persistencia:
+  - pare
+  - corrija o sistema
+  - reavalie rapidamente se um humano atenderia daquela forma
+  - ajuste ate ficar bom
+  - reinicie a contagem dos 50 testes do zero
+- O objetivo final so e atingido quando houver `50 conversas limpas consecutivas`.
+
+Central de implementacoes em `/adm`:
+Depois da correcao e da validacao conversacional, crie uma pagina administrativa em `/adm` para controle operacional de implementacoes.
+
+Essa pagina deve permitir:
+- ver implementacoes ja feitas
+- ver implementacoes que existem mas ainda estao desativadas
+- ver implementacoes que ainda faltam ativar quando isso for detectavel
+- ver status de cada implementacao
+- ativar ou desativar cada implementacao
+- persistir esse controle de forma real no sistema
+
+Essa pagina nao deve ser apenas visual.
+Ela deve ser operacional de verdade.
+Se precisar criar estrutura de feature flags, registry de implementacoes, catalogo administrativo ou configuracao persistente, faca de forma organizada, sustentavel e coerente com a arquitetura existente.
+
+Regras de arquitetura e seguranca:
+- Antes de alterar, entenda o fluxo atual completo.
+- Preserve a arquitetura do projeto.
+- Nao invente dados dinamicos.
+- Nao marque como confirmado sem validacao real.
+- Nao crie gambiarra para so parecer que funcionou.
+- Nao quebre fluxos existentes.
+- Nao reverta alteracoes do usuario sem necessidade.
+- Se houver diferenca entre fluxo demo e fluxo operacional real, identifique e corrija no caminho certo.
+- Sempre prefira corrigir a origem do problema.
+
+Validacao final obrigatoria:
+Antes de encerrar, confirme com evidencia real:
+- que o fluxo de conversa atualiza corretamente o status do agendamento
+- que o agendamento aparece na agenda da clinica
+- que as 50 conversas passaram de forma consecutiva
+- que as respostas ficaram humanas e coerentes
+- que a pagina `/adm` foi criada
+- que o controle de ativacao/desativacao funciona e persiste
+- que web, backend e integracoes tocadas por voce ficaram consistentes
+
+Entrega final:
+Ao concluir:
+1. diga objetivamente o que foi corrigido
+2. diga como validou
+3. diga quais testes executou
+4. diga quais erros encontrou no caminho
+5. diga se houve limitacoes de ambiente
+6. faca commit
+7. faca push para `main`
+
+Regra de postura:
+- Nao pare em explicacoes genericas.
+- Nao considere a fala da IA como confirmacao suficiente.
+- Nao trate como resolvido sem validar no sistema real.
+- Nao encerre enquanto ainda houver incoerencia entre conversa, resumo lateral, agenda e persistencia.
+- Se for necessario repetir ciclos de ajuste e teste, repita ate fechar corretamente.
+
+Pode comecar imediatamente e seguir sem pausas desnecessarias ate concluir.

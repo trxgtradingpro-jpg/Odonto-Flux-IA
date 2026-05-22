@@ -34,6 +34,7 @@ from app.services.webchat_service import (
     ensure_webchat_conversation,
     list_public_webchat_messages,
     post_public_webchat_message,
+    public_webchat_booking_summary,
     validate_public_webchat_session,
 )
 from app.services.sales_demo_service import cleanup_demo_resources, ensure_sales_outreach_sender_tenant
@@ -481,6 +482,80 @@ def test_webchat_channel_dispatch_persists_local_message(seeded_db, db_session):
     assert outbound.status == MessageStatus.SENT.value
     assert (outbound.payload or {}).get("webchat_delivered") is True
     assert bundle.session.last_assistant_message_at is not None
+
+
+def test_public_webchat_summary_uses_wizard_progress_and_hides_placeholder_name(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    config = _enable_webchat_intake(db_session, tenant)
+    unit = Unit(
+        tenant_id=tenant.id,
+        name="Unidade principal",
+        code="PRINCIPAL",
+        is_active=True,
+        address={},
+        working_hours={},
+    )
+    db_session.add(unit)
+    db_session.flush()
+
+    bundle = create_webchat_link_flow_session(
+        db_session,
+        tenant=tenant,
+        config=config,
+        landing_path="/agendar/tenant-b",
+        unit_id=unit.id,
+    )
+    capture_public_contact_phone(
+        db_session,
+        session=bundle.session,
+        raw_phone="(11) 99999-1111",
+    )
+    conversation = ensure_webchat_conversation(db_session, session=bundle.session, tenant=tenant)
+    outbound = Message(
+        tenant_id=tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.OUTBOUND.value,
+        channel="webchat",
+        sender_type="ai",
+        body="Perfeito, esta quase pronto. Posso confirmar seu agendamento?",
+        message_type="text",
+        payload={
+            "mode": "booking_wizard_confirm",
+            "scheduling": {
+                "procedure_type": "Avaliacao odontologica",
+                "service_selected": "Avaliacao odontologica",
+                "unit_id": str(unit.id),
+                "unit_name": unit.name,
+                "requested_date": "2026-05-22",
+                "selected_slot": {
+                    "time": "09:30",
+                    "label": "sexta-feira, 22/05 as 09:30",
+                    "starts_at_utc": "2026-05-22T12:30:00+00:00",
+                    "starts_at_local": "2026-05-22T09:30:00-03:00",
+                },
+            },
+        },
+        status=MessageStatus.SENT.value,
+    )
+    db_session.add(outbound)
+    db_session.commit()
+    db_session.refresh(bundle.session)
+
+    summary = public_webchat_booking_summary(
+        db_session,
+        session=bundle.session,
+        tenant=tenant,
+    )
+
+    assert summary["fields"]["patient_name"]["value"] is None
+    assert summary["fields"]["patient_name"]["complete"] is False
+    assert summary["fields"]["unit"]["value"] == "Unidade principal"
+    assert summary["fields"]["procedure"]["value"] == "Avaliacao odontologica"
+    assert summary["fields"]["preferred_date"]["value"] == "2026-05-22"
+    assert summary["fields"]["confirmed_slot"]["value"] == "2026-05-22T12:30:00+00:00"
+    assert summary["fields"]["confirmed_slot"]["source"] == "conversation"
+    assert summary["progress"]["complete_count"] == 3
+    assert summary["status"]["appointment_created"] is False
 
 
 def test_webchat_message_idempotency_and_safe_serialization(monkeypatch, seeded_db, db_session):

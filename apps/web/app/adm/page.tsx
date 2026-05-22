@@ -2336,6 +2336,13 @@ export default function AdmPage() {
                 <Clipboard size={16} />
                 Mensagens prontas
               </Link>
+              <Link
+                href="/adm/implementacoes"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+              >
+                <SlidersHorizontal size={16} />
+                Implementacoes
+              </Link>
             </div>
           </CardContent>
         </Card>
