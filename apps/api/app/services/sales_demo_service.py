@@ -1120,6 +1120,17 @@ def ensure_demo_branding_ready(
     return next_theme
 
 
+def _current_demo_background_from_theme(value: dict | None) -> dict[str, str | float]:
+    if not isinstance(value, dict):
+        return _normalize_demo_background_settings(None)
+    return _normalize_demo_background_settings(
+        {
+            "background_image_url": value.get("demo_background_image_url"),
+            "background_image_opacity": value.get("demo_background_opacity"),
+        }
+    )
+
+
 def ensure_demo_intake_config_ready(
     db: Session,
     *,
@@ -2172,6 +2183,7 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
             value = str(value)
         setattr(prospect, key, value)
     prospect.updated_by = actor_id
+    db.flush()
     if prospect.demo_tenant_id:
         ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
@@ -3524,8 +3536,24 @@ def resolve_demo_runtime_entry_context(
         )
     )
     existing_value = existing_setting.value if existing_setting and isinstance(existing_setting.value, dict) else None
+    desired_background = _demo_background_settings(prospect)
+    existing_theme = db.scalar(
+        select(Setting).where(
+            Setting.tenant_id == tenant_id,
+            Setting.key == "branding.theme",
+        )
+    )
+    current_background = _current_demo_background_from_theme(
+        existing_theme.value if existing_theme and isinstance(existing_theme.value, dict) else None
+    )
+    needs_commit = False
     if existing_value != desired_config:
         _upsert_setting(db, tenant_id=tenant_id, key="intake.config", value=desired_config)
+        needs_commit = True
+    if current_background != desired_background:
+        ensure_demo_branding_ready(db, tenant_id=tenant_id, prospect=prospect)
+        needs_commit = True
+    if needs_commit:
         db.commit()
 
     entry_metadata = _resolve_demo_entry_metadata(db, prospect=prospect)
@@ -3570,6 +3598,9 @@ def redeem_demo_token(db: Session, *, token: str, session_id: str | None = None)
     user = db.get(User, prospect.demo_user_id)
     if not user or not user.is_active:
         raise ApiError(status_code=401, code="DEMO_USER_INVALID", message="Usuario de demo invalido")
+    ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
+    ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
+    ensure_demo_branding_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
     roles = [row[0] for row in db.execute(select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)).all()]
     access_token = create_access_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)
     refresh_token = create_refresh_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)

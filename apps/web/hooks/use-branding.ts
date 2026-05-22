@@ -94,9 +94,9 @@ function parseOpacity(value: unknown, fallback: number): number {
   return Math.min(Math.max(parsed, 0), 1);
 }
 
-export function useBranding() {
+export function useBranding(scopeKey: string) {
   return useQuery<BrandingTheme>({
-    queryKey: ["branding-theme"],
+    queryKey: ["branding-theme", scopeKey],
     queryFn: async () => {
       const response = await api.get<{ data: SettingItem[] }>("/settings");
       const settings = response.data.data ?? [];

@@ -666,6 +666,63 @@ def test_redeem_demo_token_returns_webchat_entry_metadata(monkeypatch, seeded_db
     assert redeemed["demo_public_entry_path"] == generated["demo_booking_path"]
 
 
+def test_redeem_demo_token_resyncs_demo_background_theme(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    prospect.proposal_snapshot = {
+        "demo_branding": {
+            "background_image_url": "data:image/png;base64,updated-background",
+            "background_image_opacity": 0.58,
+        },
+    }
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    branding_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == generated["prospect"].demo_tenant_id,
+            Setting.key == "branding.theme",
+        )
+    )
+    assert branding_setting is not None
+    branding_setting.value = {
+        **branding_setting.value,
+        "demo_background_image_url": "/images/dental-floss-smile-background.png",
+        "demo_background_opacity": 0.18,
+    }
+    db_session.add(branding_setting)
+    db_session.commit()
+
+    sales_demo_service.redeem_demo_token(
+        db_session,
+        token=generated["access_token"],
+        session_id="demo-session-background-sync",
+    )
+
+    refreshed_branding_setting = db_session.scalar(
+        select(Setting).where(
+            Setting.tenant_id == generated["prospect"].demo_tenant_id,
+            Setting.key == "branding.theme",
+        )
+    )
+    assert refreshed_branding_setting is not None
+    assert refreshed_branding_setting.value["demo_background_image_url"] == "data:image/png;base64,updated-background"
+    assert refreshed_branding_setting.value["demo_background_opacity"] == 0.58
+
+
 def test_redeem_demo_token_defaults_to_webchat_when_demo_has_no_real_whatsapp(monkeypatch, seeded_db, db_session):
     prospect = _create_prospect(db_session)
     db_session.add(prospect)

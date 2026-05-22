@@ -74,4 +74,42 @@ test.describe('demo branding background', () => {
         opacityVar: '0.63',
       });
   });
+
+  test('accepts uploaded-style data urls for the demo background image', async ({ page }) => {
+    const dataUrl =
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiBmaWxsPSIjMTBiOTgxIi8+PC9zdmc+';
+
+    await page.route('**/api/v1/settings', async (route) => {
+      await route.fulfill({
+        json: {
+          data: [
+            {
+              id: 'branding-theme',
+              key: 'branding.theme',
+              value: {
+                demo_background_image_url: dataUrl,
+                demo_background_opacity: 0.41,
+              },
+              is_secret: false,
+            },
+          ],
+        },
+      });
+    });
+
+    await page.goto('/dashboard', { waitUntil: 'networkidle' });
+    await page.waitForSelector('.branded-content-frame', { timeout: 20000 });
+
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => ({
+          backgroundVar: document.documentElement.style.getPropertyValue('--branded-demo-background-image').trim(),
+          opacityVar: document.documentElement.style.getPropertyValue('--branded-demo-background-opacity').trim(),
+        }));
+      })
+      .toMatchObject({
+        backgroundVar: expect.stringContaining('data:image/svg+xml;base64'),
+        opacityVar: '0.41',
+      });
+  });
 });

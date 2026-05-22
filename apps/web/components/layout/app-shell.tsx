@@ -55,7 +55,8 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
   const [hideChromeForDemoWorkspace, setHideChromeForDemoWorkspace] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const sessionQuery = useSession();
-  const brandingQuery = useBranding();
+  const brandingScopeKey = sessionQuery.data?.tenant_id ?? `platform:${sessionQuery.data?.id ?? "anonymous"}`;
+  const brandingQuery = useBranding(brandingScopeKey);
   const branding = brandingQuery.data;
   const pathname = usePathname();
   const router = useRouter();
