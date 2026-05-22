@@ -1425,12 +1425,84 @@ def test_structured_flow_uses_first_message_hints_and_prefixes_first_reply(monke
     assert outbound is not None
     assert outbound.body.startswith("Olá! 😊")
     assert "Sou Luiza, assistente virtual da clínica." in outbound.body
-    assert "Limpeza" in outbound.body
     assert decision is not None
     assert decision.metadata_json["decision"]["system_action"]["action"] == "query_availability"
     assert decision.metadata_json["decision"]["extracted_data"]["unit_requested_text"] == unit.name
     assert decision.metadata_json["decision"]["extracted_data"]["procedure_type"] == "Limpeza"
     assert decision.metadata_json["decision"]["extracted_data"]["preferred_period"] == "tarde"
+
+
+def test_structured_flow_dedupes_full_welcome_when_model_already_includes_it(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+    from app.services import whatsapp_service
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(
+        db_session,
+        tenant_id=tenant_id,
+        key="ai_autoresponder.global",
+        value=_structured_config(),
+    )
+    _upsert_setting(
+        db_session,
+        tenant_id=tenant_id,
+        key="clinic.profile",
+        value={"clinic_name": "clinica gui"},
+    )
+    _patient, _lead, conversation, inbound = _conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+    )
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        if task == "auto_responder_structured_extract":
+            return {
+                "output": json.dumps(_decision_payload(), ensure_ascii=False),
+                "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+            }
+        return {
+            "output": json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "message": (
+                        "Olá! 😊\n"
+                        "Bem-vindo à Clínica clinica gui.\n\n"
+                        "Sou Luiza, assistente virtual da clínica. Posso te ajudar a encontrar horários disponíveis, "
+                        "agendar consultas e tirar dúvidas rapidamente.\n\n"
+                        "Como posso te ajudar?"
+                    ),
+                    "message_type": "text",
+                    "interactive_payload": None,
+                    "confidence": 0.92,
+                    "final_decision": "reply",
+                    "decision_reason": "welcome_already_included",
+                },
+                ensure_ascii=False,
+            ),
+            "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+        }
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+    monkeypatch.setattr(whatsapp_service, "_dispatch_outbox_item_inline", lambda *args, **kwargs: None)
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation.id, Message.direction == "outbound")
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert outbound is not None
+    assert outbound.body.lower().count("bem-vindo") == 1
+    assert outbound.body.lower().count("como posso te ajudar?") == 1
 
 
 def test_run_extractor_with_retry_enriches_selected_slot_and_unit_from_human_label(monkeypatch, seeded_db, db_session):

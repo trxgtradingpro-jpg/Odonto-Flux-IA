@@ -4176,6 +4176,44 @@ def _strip_structured_leading_greeting(text: str) -> str:
     ).strip()
 
 
+def _normalize_structured_match(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip()).lower()
+
+
+def _dedupe_structured_repeated_leading_units(units: list[str]) -> list[str] | None:
+    if len(units) < 2:
+        return None
+    normalized_units = [_normalize_structured_match(unit) for unit in units]
+    max_block_size = len(normalized_units) // 2
+    for block_size in range(max_block_size, 0, -1):
+        if normalized_units[:block_size] == normalized_units[block_size : block_size * 2]:
+            return units[:block_size] + units[block_size * 2 :]
+    return None
+
+
+def _dedupe_structured_repeated_leading_text_block(text: str) -> str:
+    output = str(text or "").strip()
+    if not output:
+        return ""
+
+    line_units = [chunk.strip() for chunk in output.splitlines() if chunk.strip()]
+    deduped_lines = _dedupe_structured_repeated_leading_units(line_units)
+    if deduped_lines is not None:
+        return "\n".join(deduped_lines).strip()
+
+    paragraph_units = [chunk.strip() for chunk in re.split(r"\n\s*\n", output) if chunk.strip()]
+    deduped_paragraphs = _dedupe_structured_repeated_leading_units(paragraph_units)
+    if deduped_paragraphs is not None:
+        return "\n\n".join(deduped_paragraphs).strip()
+
+    sentence_units = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s*", output) if chunk.strip()]
+    deduped_sentences = _dedupe_structured_repeated_leading_units(sentence_units)
+    if deduped_sentences is not None:
+        return " ".join(deduped_sentences).strip()
+
+    return output
+
+
 def _prepend_structured_first_reply_greeting_if_needed(
     *,
     patient_reply: PatientReplyOutput,
@@ -4191,9 +4229,18 @@ def _prepend_structured_first_reply_greeting_if_needed(
         "Sou Luiza, assistente virtual da clínica. Posso te ajudar a encontrar horários disponíveis, "
         "agendar consultas e tirar dúvidas rapidamente."
     )
-    body = _strip_structured_leading_greeting(patient_reply.message)
+    raw_message = str(patient_reply.message or "").strip()
+    normalized_greeting = _normalize_structured_match(greeting)
+    if _normalize_structured_match(raw_message).startswith(normalized_greeting):
+        return patient_reply.model_copy(update={"message": _dedupe_structured_repeated_leading_text_block(raw_message)})
+    body = _strip_structured_leading_greeting(raw_message)
+    greeting_tail = _normalize_structured_match(_strip_structured_leading_greeting(greeting))
+    if greeting_tail and _normalize_structured_match(body).startswith(greeting_tail):
+        salutation = greeting.splitlines()[0].strip()
+        message = f"{salutation}\n{body}"
+        return patient_reply.model_copy(update={"message": _dedupe_structured_repeated_leading_text_block(message)})
     message = f"{greeting}\n\n{body}" if body else f"{greeting}\n\nComo posso te ajudar?"
-    return patient_reply.model_copy(update={"message": message})
+    return patient_reply.model_copy(update={"message": _dedupe_structured_repeated_leading_text_block(message)})
 
 
 def _parse_slot_datetime(value: Any) -> datetime | None:

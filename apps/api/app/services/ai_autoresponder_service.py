@@ -3982,9 +3982,17 @@ def _prepend_first_reply_greeting_if_needed(
         profile = knowledge_base.get("clinic_profile") if isinstance(knowledge_base.get("clinic_profile"), dict) else {}
         clinic_name = _compact_text(profile.get("clinic_name"), max_length=120)
     greeting = _build_default_first_reply_greeting(clinic_name=clinic_name)
-    body = _strip_leading_generic_greeting(text)
+    raw_text = str(text or "").strip()
+    normalized_greeting = _normalize_for_match(greeting)
+    if _normalize_for_match(raw_text).startswith(normalized_greeting):
+        return _dedupe_repeated_leading_text_block(raw_text)
+    body = _strip_leading_generic_greeting(raw_text)
     if not body:
         return greeting
+    greeting_tail = _normalize_for_match(_strip_leading_generic_greeting(greeting))
+    if greeting_tail and _normalize_for_match(body).startswith(greeting_tail):
+        salutation = greeting.splitlines()[0].strip()
+        return _dedupe_repeated_leading_text_block(f"{salutation}\n{body}")
     if _normalize_for_match(body).startswith(_normalize_for_match(greeting)):
         return body
     return f"{greeting}\n\n{body}"
@@ -8211,6 +8219,8 @@ def _normalize_response_text(db: Session, *, conversation: Conversation, text: s
     output = str(text or "").strip()
     if not output:
         return ""
+
+    output = _dedupe_repeated_leading_text_block(output)
 
     # Normaliza listas numeradas e separadores visuais para leitura no WhatsApp.
     output = output.replace(" | ", "\n")
