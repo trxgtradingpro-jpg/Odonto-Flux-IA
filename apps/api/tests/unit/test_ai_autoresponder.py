@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.services.ai_autoresponder_service import (
     CPF_CONTACT_CHANNEL,
+    _compose_text_reply_with_options_fallback,
     _capture_patient_registration_from_inbound,
     _extract_time_choice,
     _list_available_slots,
@@ -3607,6 +3608,35 @@ def test_welcome_message_collapses_duplicated_custom_greeting_in_webchat(seeded_
     assert (outbound.body or "").count("Como posso te ajudar?") == 1
     assert "Menu inicial:" in (outbound.body or "")
     assert "1) Agendamentos" in (outbound.body or "")
+
+
+def test_options_fallback_does_not_repeat_welcome_when_only_line_breaks_change():
+    base_text = (
+        "Olá! 😊\n"
+        "Bem-vindo à Clínica clinica gui.\n"
+        "Sou Luiza, assistente virtual da clínica. Posso te ajudar a encontrar horários disponíveis, agendar consultas e tirar dúvidas rapidamente.\n"
+        "Como posso te ajudar?"
+    )
+    payload = {
+        "section_title": "Menu inicial",
+        "body_text": (
+            "Olá! 😊\n\n"
+            "Bem-vindo à Clínica clinica gui.\n\n"
+            "Sou Luiza, assistente virtual da clínica. Posso te ajudar a encontrar horários disponíveis, agendar consultas e tirar dúvidas rapidamente.\n\n"
+            "Como posso te ajudar?"
+        ),
+        "rows": [
+            {"title": "Agendamentos", "description": "Marcar, reagendar ou horários"},
+            {"title": "Serviços", "description": "Ver procedimentos e valores"},
+        ],
+    }
+
+    output = _compose_text_reply_with_options_fallback(base_text, interactive_payload=payload)
+
+    assert output.count("Bem-vindo à Clínica clinica gui.") == 1
+    assert output.count("Como posso te ajudar?") == 1
+    assert "Menu inicial:" in output
+    assert "1) Agendamentos" in output
 
 
 def test_welcome_menu_services_selection_returns_service_overview_in_webchat(seeded_db, db_session):

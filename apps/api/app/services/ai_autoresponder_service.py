@@ -3575,7 +3575,8 @@ def _reschedule_appointment_from_ai(
 def _normalize_for_match(text: str) -> str:
     normalized = unicodedata.normalize("NFD", text or "")
     stripped = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
-    return stripped.lower().strip()
+    collapsed = re.sub(r"\s+", " ", stripped.lower())
+    return collapsed.strip()
 
 
 def _detect_period_preference(text: str) -> str | None:
