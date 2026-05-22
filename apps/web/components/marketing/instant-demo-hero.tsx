@@ -137,6 +137,8 @@ function QuickAction({
   return (
     <a
       href={href}
+      target="_blank"
+      rel="noopener noreferrer"
       className={cn(
         "inline-flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-semibold transition sm:w-auto",
         variant === "solid"
@@ -215,11 +217,11 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
     <section id="demo-rapida" className="mx-auto w-full max-w-7xl px-4 pb-12 pt-10 sm:px-6 lg:px-8 lg:pb-18 lg:pt-14">
       <div className="relative overflow-hidden rounded-[42px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top_left,_rgba(45,212,191,0.28),_transparent_24%),radial-gradient(circle_at_bottom_left,_rgba(251,191,36,0.22),_transparent_20%),linear-gradient(135deg,#09231d_0%,#0a3a31_44%,#0f172a_100%)] px-5 py-6 shadow-[0_36px_120px_rgba(2,6,23,0.28)] sm:px-7 sm:py-8 lg:px-10 lg:py-10">
         <div className="pointer-events-none absolute -right-12 top-10 h-44 w-44 rounded-full bg-amber-300/20 blur-3xl" />
-        <div className="pointer-events-none absolute bottom-6 left-6 h-36 w-36 rounded-full bg-teal-300/18 blur-3xl" />
+        <div className="pointer-events-none absolute bottom-6 left-6 h-36 w-36 rounded-full bg-teal-300/[0.18] blur-3xl" />
 
         <div className="relative grid gap-8 lg:grid-cols-[1.02fr_0.98fr] lg:items-start">
           <div className="pt-2">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/14 bg-white/8 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-100">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.14] bg-white/[0.08] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-100">
               <Sparkles className="h-4 w-4" />
               Demo imediata para clinicas
             </div>
@@ -228,28 +230,28 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
               Crie sua demo e teste o agendamento da clinica em menos de 1 minuto.
             </h1>
 
-            <p className="mt-5 max-w-2xl text-base leading-7 text-white/76 sm:text-lg">
+            <p className="mt-5 max-w-2xl text-base leading-7 text-white/[0.76] sm:text-lg">
               {BRAND_DESCRIPTION}
             </p>
 
-            <p className="mt-4 max-w-2xl text-base leading-7 text-white/76 sm:text-lg">
+            <p className="mt-4 max-w-2xl text-base leading-7 text-white/[0.76] sm:text-lg">
               Preencha os dados da clinica, gere sua demo agora e saia daqui com dois acessos prontos: a demo do
               sistema e o agendamento oficial para simular a jornada de um paciente.
             </p>
 
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               {HERO_METRICS.map((metric) => (
-                <div key={metric.label} className="rounded-[26px] border border-white/12 bg-white/8 p-4 backdrop-blur">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/56">{metric.label}</p>
+                <div key={metric.label} className="rounded-[26px] border border-white/[0.12] bg-white/[0.08] p-4 backdrop-blur">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/[0.56]">{metric.label}</p>
                   <p className="mt-2 text-2xl font-black text-white">{metric.value}</p>
-                  <p className="mt-2 text-sm leading-6 text-white/72">{metric.detail}</p>
+                  <p className="mt-2 text-sm leading-6 text-white/[0.72]">{metric.detail}</p>
                 </div>
               ))}
             </div>
 
             <div className="mt-8 grid gap-3 sm:grid-cols-3">
               {TRUST_POINTS.map((item) => (
-                <div key={item} className="rounded-[22px] border border-white/10 bg-white/6 p-4 text-sm text-white/82">
+                <div key={item} className="rounded-[22px] border border-white/[0.10] bg-white/[0.06] p-4 text-sm text-white/[0.82]">
                   <div className="flex items-start gap-3">
                     <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
                     <span>{item}</span>
@@ -261,14 +263,14 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
             <div className="mt-8 flex flex-wrap gap-3">
               <a
                 href={salesWhatsappUrl}
-                className="inline-flex items-center justify-center rounded-full border border-white/14 bg-white/8 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/14"
+                className="inline-flex items-center justify-center rounded-full border border-white/[0.14] bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.14]"
               >
                 <PhoneCall className="mr-2 h-4 w-4" />
                 Falar com especialista
               </a>
               <a
                 href={loginUrl}
-                className="inline-flex items-center justify-center rounded-full border border-white/14 px-5 py-3 text-sm font-semibold text-white/78 transition hover:border-white/22 hover:bg-white/8 hover:text-white"
+                className="inline-flex items-center justify-center rounded-full border border-white/[0.14] px-5 py-3 text-sm font-semibold text-white/[0.78] transition hover:border-white/[0.22] hover:bg-white/[0.08] hover:text-white"
               >
                 <ShieldCheck className="mr-2 h-4 w-4" />
                 Entrar na plataforma
@@ -277,18 +279,18 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
           </div>
 
           <div className="relative">
-            <div className="rounded-[34px] border border-white/16 bg-white/92 p-5 shadow-[0_24px_80px_rgba(15,23,42,0.2)] backdrop-blur sm:p-6">
+            <div className="rounded-[34px] border border-white/[0.16] bg-[linear-gradient(180deg,rgba(11,67,57,0.92)_0%,rgba(8,48,41,0.96)_100%)] p-5 shadow-[0_24px_80px_rgba(15,23,42,0.2)] backdrop-blur sm:p-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-700">Ative a sua demo agora</p>
-                  <h2 className="mt-2 text-2xl font-black text-stone-950">Crie e acesse em menos de 1 minuto</h2>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-200">Ative a sua demo agora</p>
+                  <h2 className="mt-2 text-2xl font-black text-white">Crie e acesse em menos de 1 minuto</h2>
                 </div>
-                <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                <div className="rounded-full border border-emerald-200/30 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-800">
                   Demo + agendamento
                 </div>
               </div>
 
-              <p className="mt-4 text-sm leading-6 text-stone-600">
+              <p className="mt-4 text-sm leading-6 text-white/[0.72]">
                 Cadastre sua clinica, gere a demo e teste o fluxo como dono da operacao e tambem como paciente.
               </p>
 
@@ -360,7 +362,7 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
                 <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
                   <div className="grid gap-4">
                     <label className="grid gap-2">
-                      <span className="text-sm font-semibold text-stone-900">Nome da clinica</span>
+                      <span className="text-sm font-semibold text-white">Nome da clinica</span>
                       <input
                         type="text"
                         value={form.clinic_name}
@@ -371,7 +373,7 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
                     </label>
 
                     <label className="grid gap-2">
-                      <span className="text-sm font-semibold text-stone-900">Responsavel ou dono</span>
+                      <span className="text-sm font-semibold text-white">Responsavel ou dono</span>
                       <input
                         type="text"
                         value={form.owner_name}
@@ -382,7 +384,7 @@ export function InstantDemoHero({ salesWhatsappUrl, loginUrl }: InstantDemoHeroP
                     </label>
 
                     <label className="grid gap-2">
-                      <span className="text-sm font-semibold text-stone-900">Telefone para contato</span>
+                      <span className="text-sm font-semibold text-white">Telefone para contato</span>
                       <input
                         type="tel"
                         value={form.phone}
