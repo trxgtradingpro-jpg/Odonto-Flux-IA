@@ -318,6 +318,10 @@ ADM_BOOTSTRAP_MANAGED_KEY = "adm_bootstrap_managed"
 ADM_BOOTSTRAP_VERSION_KEY = "adm_bootstrap_version"
 ADM_INITIAL_PASSWORD_KEY = "adm_initial_password"
 ADM_BOOTSTRAP_DISPLAY_NAME = "Admin Comercial ClinicFlux AI"
+PUBLIC_SITE_QUICK_DEMO_TAGS = ("site_home_demo", "demo_rapida")
+PUBLIC_SITE_QUICK_DEMO_CHANNEL = "site_home_demo"
+PUBLIC_SITE_QUICK_DEMO_LEAD_SOURCE = "site_home_demo"
+PUBLIC_SITE_QUICK_DEMO_NOTE = "Demo rapida solicitada pela home publica."
 
 
 def _adm_bootstrap_credentials_configured() -> bool:
@@ -479,6 +483,43 @@ def _demo_email(prospect: ProspectAccount) -> str:
 def _random_password() -> str:
     # Meets the local password policy while staying temporary and non-human-picked.
     return f"Demo.{secrets.token_urlsafe(16)}A1"
+
+
+def _public_site_demo_snapshot() -> dict:
+    intake_settings = jsonable_encoder(DEMO_INTAKE_DEFAULT_SETTINGS)
+    link_flow = intake_settings.get("link_flow") if isinstance(intake_settings.get("link_flow"), dict) else {}
+    intake_settings["mode"] = "hybrid"
+    intake_settings["link_flow"] = {
+        **link_flow,
+        "enabled": True,
+        "cta_mode": "webchat",
+        "headline": "Agendamento oficial da clinica",
+        "trust_message": "Teste o agendamento como se fosse um paciente em menos de um minuto.",
+        "button_label": "Simular como paciente",
+    }
+    return {
+        "demo_intake": intake_settings,
+    }
+
+
+def _find_public_site_prospect(db: Session, *, clinic_name: str, phone: str) -> ProspectAccount | None:
+    normalized_name = str(clinic_name or "").strip().lower()
+    raw_phone = str(phone or "").strip()
+    if not normalized_name and not raw_phone:
+        return None
+
+    stmt = (
+        select(ProspectAccount)
+        .where(
+            or_(
+                ProspectAccount.whatsapp_phone == raw_phone,
+                ProspectAccount.phone == raw_phone,
+                func.lower(ProspectAccount.clinic_name) == normalized_name,
+            )
+        )
+        .order_by(ProspectAccount.updated_at.desc())
+    )
+    return db.scalar(stmt.limit(1))
 
 
 def ensure_sales_roles(db: Session) -> dict[str, Role]:
@@ -2142,6 +2183,84 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
     db.commit()
     db.refresh(prospect)
     return prospect
+
+
+def create_or_reuse_public_site_demo(
+    db: Session,
+    *,
+    clinic_name: str,
+    owner_name: str,
+    phone: str,
+    base_url: str,
+) -> dict:
+    from app.schemas.admin_sales import ProspectCreate
+
+    normalized_clinic_name = str(clinic_name or "").strip()
+    normalized_owner_name = str(owner_name or "").strip()
+    normalized_phone = str(phone or "").strip()
+    demo_snapshot = _public_site_demo_snapshot()
+
+    prospect = _find_public_site_prospect(
+        db,
+        clinic_name=normalized_clinic_name,
+        phone=normalized_phone,
+    )
+    status = "reused" if prospect else "created"
+
+    if not prospect:
+        payload = ProspectCreate(
+            clinic_name=normalized_clinic_name,
+            owner_name=normalized_owner_name,
+            phone=normalized_phone,
+            whatsapp_phone=normalized_phone,
+            notes=PUBLIC_SITE_QUICK_DEMO_NOTE,
+            lead_source=PUBLIC_SITE_QUICK_DEMO_LEAD_SOURCE,
+            first_contact_channel=PUBLIC_SITE_QUICK_DEMO_CHANNEL,
+            first_contact_at=_now(),
+            uses_whatsapp_heavily=True,
+            tags=list(PUBLIC_SITE_QUICK_DEMO_TAGS),
+            proposal_snapshot=demo_snapshot,
+        )
+        prospect = create_prospect(db, payload, actor_id=None)
+    else:
+        merged_snapshot = {
+            **(prospect.proposal_snapshot or {}),
+            **demo_snapshot,
+        }
+        prospect.owner_name = prospect.owner_name or normalized_owner_name
+        prospect.phone = prospect.phone or normalized_phone
+        prospect.whatsapp_phone = prospect.whatsapp_phone or normalized_phone
+        prospect.notes = prospect.notes or PUBLIC_SITE_QUICK_DEMO_NOTE
+        prospect.lead_source = prospect.lead_source or PUBLIC_SITE_QUICK_DEMO_LEAD_SOURCE
+        prospect.first_contact_channel = prospect.first_contact_channel or PUBLIC_SITE_QUICK_DEMO_CHANNEL
+        prospect.first_contact_at = prospect.first_contact_at or _now()
+        prospect.uses_whatsapp_heavily = True
+        prospect.tags = sorted(set(prospect.tags or []).union(PUBLIC_SITE_QUICK_DEMO_TAGS))
+        prospect.proposal_snapshot = _sanitize_demo_configuration_snapshot(
+            db,
+            snapshot=merged_snapshot,
+            current_prospect_id=prospect.id,
+        )
+        add_timeline(
+            db,
+            prospect,
+            event_type="public.quick_demo.requested",
+            event_label="Demo rapida solicitada pela home publica",
+            actor_type="system",
+            payload={"source": "landing_page"},
+        )
+        db.add(prospect)
+        db.commit()
+        db.refresh(prospect)
+
+    result = generate_demo(
+        db,
+        prospect,
+        actor_id=None,
+        base_url=base_url,
+    )
+    result["status"] = status
+    return result
 
 
 def recalculate_score(db: Session, prospect: ProspectAccount) -> ProspectAccount:

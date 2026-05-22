@@ -22,14 +22,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@odontoflux/ui";
-import { BRAND_DESCRIPTION, BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
-
-const PAIN_POINTS = [
-  "WhatsApp da clinica vira uma fila invisivel, sem dono e sem processo.",
-  "Agenda, confirmacao, comparecimento e retorno ficam desconectados.",
-  "Leads entram, mas a recepcao nao consegue acompanhar tudo com consistencia.",
-  "O dono sente que a operacao cresce mais devagar do que o potencial da clinica.",
-];
+import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
+import { InstantDemoHero } from "@/components/marketing/instant-demo-hero";
 
 const VALUE_PILLARS = [
   {
@@ -272,8 +266,8 @@ function ActionLink({
   const classes = cn(
     "inline-flex items-center justify-center rounded-full px-5 py-3 text-sm font-semibold transition",
     variant === "solid"
-      ? "bg-white text-stone-950 hover:bg-emerald-50"
-      : "border border-white/15 bg-white/5 text-white hover:bg-white/10",
+      ? "bg-stone-950 text-white shadow-[0_18px_40px_rgba(15,23,42,0.12)] hover:bg-emerald-900"
+      : "border border-stone-300 bg-white/80 text-stone-900 hover:bg-stone-100",
     className,
   );
   const isExternal = href.startsWith("http://") || href.startsWith("https://") || href.startsWith("mailto:");
@@ -300,7 +294,7 @@ function ActionLink({
 
 function SectionTag({ children }: { children: React.ReactNode }) {
   return (
-    <p className="inline-flex rounded-full border border-stone-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-stone-600">
+    <p className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-800">
       {children}
     </p>
   );
@@ -308,207 +302,61 @@ function SectionTag({ children }: { children: React.ReactNode }) {
 
 export function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#f6f0e8] text-stone-950">
-      <div className="absolute inset-x-0 top-0 h-[720px] bg-[radial-gradient(circle_at_top_left,_rgba(22,163,74,0.2),_transparent_36%),radial-gradient(circle_at_top_right,_rgba(59,130,246,0.16),_transparent_28%),linear-gradient(180deg,#07110d_0%,#0b1720_58%,#f6f0e8_100%)]" />
+    <div className="min-h-screen bg-[#f5f0e8] text-stone-950">
+      <div className="absolute inset-x-0 top-0 h-[760px] bg-[radial-gradient(circle_at_top_left,_rgba(20,184,166,0.16),_transparent_24%),radial-gradient(circle_at_top_right,_rgba(245,158,11,0.14),_transparent_20%),linear-gradient(180deg,#fcfaf6_0%,#f5f0e8_62%,#f5f0e8_100%)]" />
 
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-stone-950/82 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-stone-200/80 bg-[#f5f0e8]/88 backdrop-blur-xl">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-[18px] bg-gradient-to-br from-emerald-300 via-teal-300 to-cyan-300 text-sm font-black text-stone-950 shadow-[0_10px_30px_rgba(16,185,129,0.25)]">
+            <div className="flex h-11 w-11 items-center justify-center rounded-[18px] bg-gradient-to-br from-emerald-300 via-teal-300 to-amber-200 text-sm font-black text-stone-950 shadow-[0_10px_30px_rgba(16,185,129,0.18)]">
               {BRAND_MONOGRAM}
             </div>
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">{BRAND_NAME}</p>
-              <p className="text-sm font-semibold text-white">{BRAND_TAGLINE}</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-500">{BRAND_NAME}</p>
+              <p className="text-sm font-semibold text-stone-950">{BRAND_TAGLINE}</p>
             </div>
           </div>
 
           <nav className="hidden items-center gap-5 md:flex">
-            <Link href="#solucao" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#solucao" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Solucao
             </Link>
-            <Link href="#quem-somos" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#quem-somos" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Quem somos
             </Link>
-            <Link href="#como-funciona" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#como-funciona" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Como funciona
             </Link>
-            <Link href="#piloto" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#piloto" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Piloto
             </Link>
-            <Link href="#planos" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#planos" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Planos
             </Link>
-            <Link href="#contato" className="text-sm font-medium text-white/70 transition hover:text-white">
+            <Link href="#contato" className="text-sm font-medium text-stone-600 transition hover:text-stone-950">
               Contato
             </Link>
-            <ActionLink href={SALES_DEMO_URL} className="px-4 py-2">
-              Ver demonstracao
+            <ActionLink href="#demo-rapida" className="px-4 py-2">
+              Criar demo agora
             </ActionLink>
             <Link
               href="/login"
-              className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+              className="inline-flex items-center rounded-full border border-stone-300 bg-white/80 px-4 py-2 text-sm font-semibold text-stone-900 transition hover:bg-stone-100"
             >
-              Ativar minha IA
+              Entrar
             </Link>
           </nav>
 
           <div className="flex items-center gap-2 md:hidden">
-            <ActionLink href={SALES_DEMO_URL} className="px-4 py-2 text-xs">
-              Ver demo
+            <ActionLink href="#demo-rapida" className="px-4 py-2 text-xs">
+              Criar demo
             </ActionLink>
           </div>
         </div>
       </header>
 
       <main className="relative z-10">
-        <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-12 sm:px-6 lg:px-8 lg:pb-20 lg:pt-16">
-          <div className="grid gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.24em] text-emerald-100">
-                <Sparkles className="h-4 w-4" />
-                Plataforma SaaS para clinicas em crescimento
-              </div>
-
-              <h1 className="mt-6 max-w-4xl font-heading text-4xl font-black leading-[1.02] text-white sm:text-5xl lg:text-7xl">
-                {BRAND_NAME}
-              </h1>
-
-              <p className="mt-6 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-                {BRAND_TAGLINE}
-              </p>
-
-              <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-                {BRAND_DESCRIPTION}
-              </p>
-
-              <div className="mt-8 flex flex-wrap gap-3">
-                <ActionLink href={SALES_DEMO_URL}>
-                  Ver demonstracao
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </ActionLink>
-                <ActionLink href={SALES_WHATSAPP_URL} variant="outline">
-                  Falar com especialista
-                  <ArrowUpRight className="ml-2 h-4 w-4" />
-                </ActionLink>
-                <Link
-                  href="/login"
-                  className="inline-flex items-center justify-center rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/5 hover:text-white"
-                >
-                  Testar atendimento com IA
-                </Link>
-              </div>
-
-              <div className="mt-10 grid gap-3 sm:grid-cols-2">
-                {PAIN_POINTS.map((pain) => (
-                  <div
-                    key={pain}
-                    className="rounded-[22px] border border-white/10 bg-white/6 p-4 text-sm text-white/82 backdrop-blur"
-                  >
-                    <div className="flex items-start gap-3">
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-                      <span>{pain}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-8 flex flex-wrap gap-3">
-                <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  Atendimento 24h
-                </div>
-                <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  Qualificacao automatica
-                </div>
-                <div className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white/72">
-                  Recuperacao de leads antigos
-                </div>
-              </div>
-            </div>
-
-            <div className="relative">
-              <div className="absolute -left-10 top-10 h-24 w-24 rounded-full bg-emerald-300/20 blur-3xl" />
-              <div className="absolute -right-8 bottom-16 h-28 w-28 rounded-full bg-cyan-300/20 blur-3xl" />
-
-              <div className="relative overflow-hidden rounded-[36px] border border-white/12 bg-white/8 p-4 shadow-[0_40px_120px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-                <div className="rounded-[30px] border border-stone-200 bg-[#fcf8f3] p-5 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
-                  <div className="flex items-center justify-between gap-3 rounded-[22px] bg-stone-950 px-4 py-3 text-white">
-                    <div>
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-200/70">
-                        Workspace clinico
-                      </p>
-                      <p className="text-sm font-semibold">Gestao da clinica em tempo real</p>
-                    </div>
-                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold">
-                      Unidade Centro
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid gap-4 lg:grid-cols-[0.7fr_1.3fr]">
-                    <div className="rounded-[24px] border border-stone-200 bg-white p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Fluxo de atendimento</p>
-                      <div className="mt-4 space-y-3">
-                        <div className="rounded-2xl bg-emerald-50 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Lead entrou</p>
-                          <p className="mt-1 text-sm font-semibold">Paciente chamou no WhatsApp</p>
-                        </div>
-                        <div className="rounded-2xl bg-amber-50 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Recepcao responde</p>
-                          <p className="mt-1 text-sm font-semibold">IA ajuda a manter padrao</p>
-                        </div>
-                        <div className="rounded-2xl bg-cyan-50 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Consulta agendada</p>
-                          <p className="mt-1 text-sm font-semibold">Agenda e equipe em sincronia</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="rounded-[24px] border border-stone-200 bg-white p-5">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Posicionamento comercial</p>
-                        <h2 className="mt-2 text-2xl font-black text-stone-950">
-                          Menos caos no dia a dia. Mais previsibilidade para recepcao, dono e equipe.
-                        </h2>
-                        <p className="mt-3 text-sm leading-6 text-stone-600">
-                          A venda certa nao e mostrar uma agenda isolada. E mostrar como a clinica sai de mensagens
-                          soltas e passa a operar com atendimento, agendamento, comparecimento e retorno conectados.
-                        </p>
-                      </div>
-
-                      <div className="grid gap-4 sm:grid-cols-2">
-                        <div className="rounded-[22px] border border-stone-200 bg-stone-950 p-4 text-white">
-                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-200/70">Melhor forma de vender</p>
-                          <p className="mt-3 text-lg font-bold">Piloto assistido com implantacao premium</p>
-                        </div>
-                        <div className="rounded-[22px] border border-stone-200 bg-white p-4">
-                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Cliente ideal</p>
-                          <p className="mt-3 text-lg font-bold text-stone-950">
-                            Clinica que depende de WhatsApp e precisa organizar a operacao
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-[20px] border border-stone-200 bg-[#f6efe5] p-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-stone-500">Recepcao</p>
-                          <p className="mt-2 text-sm font-bold text-stone-950">Mais processo</p>
-                        </div>
-                        <div className="rounded-[20px] border border-stone-200 bg-[#eef6f2] p-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-stone-500">Agenda</p>
-                          <p className="mt-2 text-sm font-bold text-stone-950">Mais controle</p>
-                        </div>
-                        <div className="rounded-[20px] border border-stone-200 bg-[#eef3f8] p-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-stone-500">Gestao</p>
-                          <p className="mt-2 text-sm font-bold text-stone-950">Mais visibilidade</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+        <InstantDemoHero salesWhatsappUrl={SALES_WHATSAPP_URL} loginUrl="/login" />
 
         <section id="solucao" className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
           <div className="rounded-[34px] border border-stone-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-8">

@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     privacy,
     professionals,
     public_booking,
+    public_site,
     reports,
     settings,
     support,
@@ -58,6 +59,7 @@ api_router.include_router(support.router)
 api_router.include_router(dashboards.router)
 api_router.include_router(audit.router)
 api_router.include_router(public_booking.router)
+api_router.include_router(public_site.router)
 api_router.include_router(webhooks_whatsapp.router)
 api_router.include_router(admin_platform.router)
 api_router.include_router(admin_sales.router)

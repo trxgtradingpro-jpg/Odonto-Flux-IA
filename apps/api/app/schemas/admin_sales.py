@@ -65,6 +65,12 @@ class ProspectCreate(BaseModel):
     services: list[ProspectServiceInput] = []
 
 
+class PublicSiteQuickDemoInput(BaseModel):
+    clinic_name: str = Field(min_length=2, max_length=255)
+    owner_name: str = Field(min_length=2, max_length=180)
+    phone: str = Field(min_length=8, max_length=30)
+
+
 class ProspectUpdate(BaseModel):
     clinic_name: str | None = None
     owner_name: str | None = None
@@ -409,6 +415,14 @@ class DemoAccessOutput(BaseModel):
     demo_booking_path: str | None = None
     demo_booking_url: str | None = None
     expires_at: datetime | None
+
+
+class PublicSiteQuickDemoOutput(BaseModel):
+    prospect: "ProspectOutput"
+    status: Literal["created", "reused"]
+    demo_login_url: str
+    demo_booking_path: str | None = None
+    demo_booking_url: str | None = None
 
 
 class ProspectInsightsOutput(BaseModel):
