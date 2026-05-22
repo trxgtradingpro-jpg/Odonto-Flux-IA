@@ -3554,6 +3554,61 @@ def test_welcome_message_uses_text_field_when_greeting_example_is_object(seeded_
     assert "inferred" not in (outbound.body or "")
 
 
+def test_welcome_message_collapses_duplicated_custom_greeting_in_webchat(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+    welcome_block = (
+        "Olá! 😊\n"
+        "Bem-vindo à Clínica LENTES EM RESINA TATUAPÉ.\n\n"
+        "Sou Luiza, assistente virtual da clínica. Posso te ajudar a encontrar horários disponíveis, "
+        "agendar consultas e tirar dúvidas rapidamente.\n\n"
+        "Como posso te ajudar?"
+    )
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "clinic_profile": {
+                "clinic_name": "LENTES EM RESINA TATUAPÉ",
+                "welcome_greeting_example": f"{welcome_block}\n\n{welcome_block}",
+            }
+        },
+    )
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Oi",
+        channel="webchat",
+    )
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") == "welcome_message_start"
+    assert outbound is not None
+    assert (outbound.body or "").count("Olá! 😊") == 1
+    assert (outbound.body or "").count("Como posso te ajudar?") == 1
+    assert "Menu inicial:" in (outbound.body or "")
+    assert "1) Agendamentos" in (outbound.body or "")
+
+
 def test_welcome_menu_services_selection_returns_service_overview_in_webchat(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())

@@ -3895,7 +3895,9 @@ def _resolve_welcome_greeting_from_knowledge(knowledge_base: dict[str, Any] | No
         else {}
     )
 
-    custom_greeting = _compact_text(profile.get("welcome_greeting_example"), max_length=700)
+    custom_greeting = _dedupe_repeated_leading_text_block(
+        _compact_text(profile.get("welcome_greeting_example"), max_length=700)
+    )
     if custom_greeting:
         return custom_greeting
 
@@ -3914,6 +3916,43 @@ def _build_default_first_reply_greeting(*, clinic_name: str | None, include_ques
     if include_question:
         return f"{message}\n\nComo posso te ajudar?"
     return message
+
+
+def _dedupe_repeated_leading_units(units: list[str]) -> list[str] | None:
+    if len(units) < 2:
+        return None
+
+    normalized_units = [_normalize_for_match(unit) for unit in units]
+    max_block_size = len(normalized_units) // 2
+    for block_size in range(max_block_size, 0, -1):
+        first_block = normalized_units[:block_size]
+        second_block = normalized_units[block_size : block_size * 2]
+        if first_block and first_block == second_block:
+            return units[:block_size] + units[block_size * 2 :]
+    return None
+
+
+def _dedupe_repeated_leading_text_block(text: str) -> str:
+    output = str(text or "").strip()
+    if not output:
+        return ""
+
+    line_units = [chunk.strip() for chunk in output.splitlines() if chunk.strip()]
+    deduped_lines = _dedupe_repeated_leading_units(line_units)
+    if deduped_lines is not None:
+        return "\n".join(deduped_lines).strip()
+
+    paragraph_units = [chunk.strip() for chunk in re.split(r"\n\s*\n", output) if chunk.strip()]
+    deduped_paragraphs = _dedupe_repeated_leading_units(paragraph_units)
+    if deduped_paragraphs is not None:
+        return "\n\n".join(deduped_paragraphs).strip()
+
+    sentence_units = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s*", output) if chunk.strip()]
+    deduped_sentences = _dedupe_repeated_leading_units(sentence_units)
+    if deduped_sentences is not None:
+        return " ".join(deduped_sentences).strip()
+
+    return output
 
 
 def _strip_leading_generic_greeting(text: str) -> str:
@@ -3967,6 +4006,10 @@ def _build_conversation_start_welcome_response(
             row["description"] = description[:72]
         rows.append(row)
 
+    resolved_intro_text = _dedupe_repeated_leading_text_block(
+        intro_text or _build_default_first_reply_greeting(clinic_name=None, include_question=True)
+    )
+
     metadata = _wizard_metadata_with_session(
         metadata={
             "reason": "welcome_message_start",
@@ -3974,10 +4017,7 @@ def _build_conversation_start_welcome_response(
             "button_title": "Opções",
             "section_title": "Menu inicial",
             "header_text": "Atendimento",
-            "body_text": (
-                intro_text
-                or _build_default_first_reply_greeting(clinic_name=None, include_question=True)
-            ),
+            "body_text": resolved_intro_text,
             "footer_text": "Toque em uma opção para continuar.",
         },
         session_token=session_token,
@@ -3986,10 +4026,7 @@ def _build_conversation_start_welcome_response(
 
     return {
         "mode": "welcome_message_start",
-        "response_text": (
-            intro_text
-            or _build_default_first_reply_greeting(clinic_name=None, include_question=True)
-        ),
+        "response_text": resolved_intro_text,
         "metadata": metadata,
     }
 
@@ -4917,13 +4954,15 @@ def _compose_text_reply_with_options_fallback(
     *,
     interactive_payload: dict[str, Any] | None,
 ) -> str:
-    base_text = str(reply_text or "").strip()
+    base_text = _dedupe_repeated_leading_text_block(reply_text)
     if not isinstance(interactive_payload, dict):
         return base_text
 
     lines: list[str] = []
     normalized_base = _normalize_for_match(base_text)
-    body_text = _compact_text(interactive_payload.get("body_text"), max_length=400)
+    body_text = _dedupe_repeated_leading_text_block(
+        _compact_text(interactive_payload.get("body_text"), max_length=400)
+    )
     option_lines = _interactive_payload_option_lines(interactive_payload)
     audio_hint = "Você pode responder com o número da opção, escrever do seu jeito ou mandar áudio que eu entendo."
 
