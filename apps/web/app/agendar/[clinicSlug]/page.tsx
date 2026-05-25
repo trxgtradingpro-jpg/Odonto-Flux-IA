@@ -435,6 +435,7 @@ function PublicWebchat({
 
   return (
     <div
+      data-public-webchat-shell="true"
       className={cn(
         "relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#0b141a] font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
         embedded
@@ -442,30 +443,31 @@ function PublicWebchat({
           : "sm:rounded-[30px] sm:border sm:border-white/60 sm:bg-white/82 sm:text-[var(--booking-text)] sm:shadow-[0_22px_70px_rgba(15,23,42,0.12)] sm:backdrop-blur",
       )}
     >
-      {!embedded ? <div className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#1f2c33] bg-[#111b21] px-2.5 py-2 text-[#e9edef] sm:h-auto sm:border-stone-200 sm:bg-white/92 sm:px-5 sm:py-3 sm:text-stone-900">
+      {!embedded ? <div data-public-webchat-header="true" className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#1f2c33] bg-[#111b21] px-2.5 py-2 text-[#e9edef] sm:h-auto sm:border-stone-200 sm:bg-white/92 sm:px-5 sm:py-3 sm:text-stone-900">
         <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#202c33] text-[#00a884] shadow-sm sm:h-11 sm:w-11 sm:bg-[var(--booking-primary)] sm:text-white">
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0 leading-tight [&>p:nth-child(4)]:hidden sm:[&>p:nth-child(4)]:block">
-            <p data-testid="public-webchat-mobile-title" className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
-            <p className="hidden truncate text-sm font-semibold text-stone-900 sm:block">Atendimento online</p>
-            <p className="truncate text-[12px] leading-4 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
-            <p className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
+            <p data-testid="public-webchat-mobile-title" data-public-webchat-mobile-title="true" className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
+            <p data-public-webchat-desktop-title="true" className="hidden truncate text-sm font-semibold text-stone-900 sm:block">Atendimento online</p>
+            <p data-public-webchat-mobile-subtitle="true" className="truncate text-[12px] leading-4 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
+            <p data-public-webchat-desktop-subtitle="true" className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
+        <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
           <Video className="h-6 w-6" />
           <Phone className="h-6 w-6" />
           <MoreVertical className="h-6 w-6" />
         </div>
-        <div className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
+        <div data-public-webchat-online-badge="true" className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
           Online
         </div>
       </div> : null}
 
       <div
         ref={viewportRef}
+        data-public-webchat-thread="true"
         className={cn(
           "whatsapp-chat-thread-surface-dark min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-2",
           embedded
@@ -524,6 +526,7 @@ function PublicWebchat({
       </div>
 
       <div
+        data-public-webchat-composer="true"
         className={cn("relative z-20 border-t border-transparent bg-[#0b141a] px-2 py-1.5 sm:border-stone-200 sm:bg-white/94 sm:px-5 sm:py-3", embedded && "sm:shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}
         style={{
           paddingBottom: "calc(0.375rem + env(safe-area-inset-bottom))",
@@ -542,12 +545,14 @@ function PublicWebchat({
           <div className="flex h-12 flex-1 items-center gap-2 rounded-[24px] border-none bg-[#202c33] px-4 text-[#e9edef] shadow-none transition focus-within:ring-1 focus-within:ring-[#00a884]/40 sm:h-auto sm:rounded-[28px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[var(--booking-text)] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] sm:focus-within:border-[var(--booking-primary)] sm:focus-within:ring-2 sm:focus-within:ring-[color:color-mix(in_srgb,var(--booking-primary)_16%,transparent)]">
             <input
               ref={inputRef}
+              data-public-webchat-input="true"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onFocus={() => setComposerFocused(true)}
               onBlur={() => setComposerFocused(false)}
               maxLength={1200}
               placeholder="Digite sua mensagem..."
+              style={{ fontSize: "16px" }}
               className="h-full min-w-0 flex-1 border-none bg-transparent text-[16px] leading-5 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-sm sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
             />
             <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" />
@@ -1442,6 +1447,7 @@ export default function PublicBookingPage() {
 
   return (
     <main
+      data-public-webchat-page={isWebchat ? "true" : undefined}
       className={cn(
         "box-border overflow-hidden text-[var(--booking-text)]",
         isWebchat
@@ -1451,6 +1457,7 @@ export default function PublicBookingPage() {
       style={pageStyle}
     >
       <div
+        data-public-webchat-page-shell={isWebchat ? "true" : undefined}
         className={cn(
           "box-border flex h-full w-full flex-col overflow-hidden",
           isWebchat
@@ -1458,7 +1465,7 @@ export default function PublicBookingPage() {
             : "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
         )}
       >
-        <header className={cn("border-b border-white/60 px-5 py-5 sm:px-7", isWebchat && "hidden sm:block")}>
+        <header data-public-webchat-page-header={isWebchat ? "true" : undefined} className={cn("border-b border-white/60 px-5 py-5 sm:px-7", isWebchat && "hidden sm:block")}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-3">
@@ -1489,6 +1496,7 @@ export default function PublicBookingPage() {
         </header>
 
         <section
+          data-public-webchat-section={isWebchat ? "true" : undefined}
           className={cn(
             "relative flex min-h-0 flex-1 overflow-hidden",
             isWebchat ? "p-0 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6" : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",

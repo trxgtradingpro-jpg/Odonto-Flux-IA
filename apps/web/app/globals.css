@@ -193,6 +193,112 @@ body {
   }
 }
 
+@media (hover: none) and (pointer: coarse) {
+  html,
+  body {
+    touch-action: manipulation;
+  }
+
+  [data-public-webchat-page="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    background: #0b141a !important;
+  }
+
+  [data-public-webchat-page-shell="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #0b141a !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  [data-public-webchat-page-header="true"] {
+    display: none !important;
+  }
+
+  [data-public-webchat-section="true"] {
+    display: flex !important;
+    grid-template-columns: none !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    padding: 0 !important;
+  }
+
+  [data-public-webchat-shell="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #0b141a !important;
+    color: #e9edef !important;
+    box-shadow: none !important;
+    font-family: Roboto, Arial, sans-serif !important;
+  }
+
+  [data-public-webchat-header="true"] {
+    display: flex !important;
+    height: 64px !important;
+    border-color: #1f2c33 !important;
+    background: #111b21 !important;
+    padding: 8px 10px !important;
+    color: #e9edef !important;
+  }
+
+  [data-public-webchat-mobile-title="true"] {
+    display: block !important;
+    color: #e9edef !important;
+    font-size: 20px !important;
+    font-weight: 400 !important;
+    line-height: 24px !important;
+  }
+
+  [data-public-webchat-desktop-title="true"],
+  [data-public-webchat-desktop-subtitle="true"],
+  [data-public-webchat-online-badge="true"] {
+    display: none !important;
+  }
+
+  [data-public-webchat-mobile-subtitle="true"] {
+    display: block !important;
+    color: #8696a0 !important;
+  }
+
+  [data-public-webchat-actions="true"] {
+    display: flex !important;
+    color: #e9edef !important;
+  }
+
+  [data-public-webchat-thread="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    padding-right: 8px !important;
+    padding-left: 8px !important;
+    background-color: #0b141a !important;
+  }
+
+  [data-public-webchat-composer="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    border-color: transparent !important;
+    background: #0b141a !important;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom)) !important;
+  }
+
+  [data-public-webchat-input="true"] {
+    min-height: 44px !important;
+    font-size: 16px !important;
+    line-height: 20px !important;
+    color: #e9edef !important;
+    transform: translateZ(0);
+  }
+}
+
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-sidebar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-topbar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-support-fab="true"] {

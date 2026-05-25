@@ -299,6 +299,14 @@ test.describe('public link flow landing', () => {
 
   test('keeps the public webchat layout usable on mobile', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    const client = await page.context().newCDPSession(page);
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 2.75,
+      mobile: true,
+    });
     await page.addInitScript(() => {
       const listeners = new Map<string, Set<() => void>>();
       const viewport = {
@@ -406,10 +414,13 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
+    await expect.poll(async () => page.evaluate(() => window.matchMedia('(hover: none) and (pointer: coarse)').matches)).toBeTruthy();
     const viewportMeta = await page.locator('meta[name="viewport"]').getAttribute('content');
     expect(viewportMeta).toContain('width=device-width');
     expect(viewportMeta).toContain('initial-scale=1');
+    expect(viewportMeta).toContain('minimum-scale=1');
     expect(viewportMeta).toContain('maximum-scale=1');
+    expect(viewportMeta).toContain('interactive-widget=resizes-visual');
     expect(viewportMeta).toMatch(/user-scalable=(no|false|0)/);
     await expect(page.getByText('Atendimento online - canal oficial da clinica')).toBeVisible();
     await expect
@@ -449,6 +460,9 @@ test.describe('public link flow landing', () => {
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
 
     const messageInput = page.getByPlaceholder('Digite sua mensagem...');
+    await expect
+      .poll(async () => messageInput.evaluate((node) => getComputedStyle(node).fontSize))
+      .toBe('16px');
     await messageInput.focus();
     await page.evaluate(() => {
       (
