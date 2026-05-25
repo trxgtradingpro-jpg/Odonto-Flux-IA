@@ -417,8 +417,12 @@ def capture_public_contact_phone(
     return public_contact_phone_state(db, session=session)
 
 
-def build_whatsapp_url(*, phone: str, raw_token: str, clinic_name: str) -> str:
-    message = f"{LINK_FLOW_TOKEN_PREFIX}:{raw_token} Ola, vim pelo agendamento oficial da {clinic_name}."
+def build_whatsapp_url(*, phone: str, raw_token: str | None, clinic_name: str) -> str:
+    base_message = f"Ola, vim pelo agendamento oficial da {clinic_name}."
+    if raw_token:
+        message = f"{LINK_FLOW_TOKEN_PREFIX}:{raw_token} {base_message}"
+    else:
+        message = base_message
     return f"https://wa.me/{phone}?text={quote(message)}"
 
 

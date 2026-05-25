@@ -96,6 +96,7 @@ class ProspectUpdate(BaseModel):
     legal_basis: str | None = None
     roi_inputs: dict | None = None
     proposal_snapshot: dict | None = None
+    services: list[ProspectServiceInput] | None = None
 
 
 class ProspectNoteInput(BaseModel):

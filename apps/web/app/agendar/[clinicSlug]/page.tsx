@@ -582,10 +582,6 @@ function PublicWebchat({
           <div className="w-full max-w-sm rounded-[28px] border border-white/15 bg-[#111b21] p-5 text-left text-[#e9edef] shadow-[0_24px_60px_rgba(15,23,42,0.35)]">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-base font-semibold">Como voce quer continuar?</p>
-                <p className="mt-1 text-sm text-[#8696a0]">
-                  Use o numero oficial da clinica para seguir por WhatsApp ou ligacao.
-                </p>
               </div>
               <button
                 type="button"
@@ -1708,19 +1704,28 @@ export default function PublicBookingPage() {
               />
             ) : null}
             {showPublicBookingLoadingPanel ? (
-              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/60 bg-white/82 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur">
+              <div className="flex h-full min-h-0 w-full items-center justify-center rounded-[30px] border border-white/10 bg-[#111b21]/95 p-6 text-center shadow-[0_22px_70px_rgba(15,23,42,0.28)] backdrop-blur">
                 <div className="max-w-md">
-                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--booking-border)] bg-white shadow-sm">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white shadow-sm">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--booking-primary)] border-r-transparent" />
                   </div>
-                  <p className="mt-4 text-lg font-semibold text-stone-900">
+                  <p className="mt-4 text-lg font-semibold text-white">
                     {error ? "Reconectando atendimento..." : "Carregando atendimento..."}
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+                  <p className="mt-2 text-sm leading-6 text-white/85">
                     {error
                       ? "A conexao oscilou, mas a demo continua tentando abrir o chat automaticamente."
                       : "Preparando a conversa oficial da clinica para voce e tentando novamente automaticamente ate conectar."}
                   </p>
+                  {error ? (
+                    <button
+                      type="button"
+                      onClick={() => window.location.reload()}
+                      className="mt-4 inline-flex min-h-[44px] items-center justify-center rounded-full border border-white/15 bg-white px-5 text-sm font-semibold text-[#111b21] shadow-sm transition hover:bg-white/90"
+                    >
+                      Atualizar pagina
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}

@@ -2172,6 +2172,7 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
 
 def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id: UUID | None) -> ProspectAccount:
     data = payload.model_dump(exclude_unset=True)
+    services_payload = data.pop("services", None)
     if "proposal_snapshot" in data:
         data["proposal_snapshot"] = _sanitize_demo_configuration_snapshot(
             db,
@@ -2184,7 +2185,28 @@ def update_prospect(db: Session, prospect: ProspectAccount, payload, *, actor_id
         setattr(prospect, key, value)
     prospect.updated_by = actor_id
     db.flush()
+    if services_payload is not None:
+        db.execute(delete(ProspectService).where(ProspectService.prospect_account_id == prospect.id))
+        for service in services_payload:
+            service_name = str(service.get("service_name") or "").strip()
+            if len(service_name) < 2:
+                continue
+            db.add(
+                ProspectService(
+                    prospect_account_id=prospect.id,
+                    service_name=service_name,
+                    category=str(service.get("category") or "").strip() or None,
+                    duration_minutes=max(15, min(int(service.get("duration_minutes") or 60), 480)),
+                    price_range=str(service.get("price_range") or "").strip() or None,
+                    description=str(service.get("description") or "").strip() or service_name,
+                )
+            )
+        db.flush()
     if prospect.demo_tenant_id:
+        if services_payload is not None:
+            demo_units = db.execute(select(Unit).where(Unit.tenant_id == prospect.demo_tenant_id)).scalars().all()
+            services = _ensure_demo_services(db, prospect)
+            _sync_demo_service_catalog(db, tenant_id=prospect.demo_tenant_id, services=services, demo_units=demo_units)
         ensure_demo_intake_config_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_ai_autoresponder_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)
         ensure_demo_branding_ready(db, tenant_id=prospect.demo_tenant_id, prospect=prospect)

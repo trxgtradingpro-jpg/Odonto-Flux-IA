@@ -273,6 +273,14 @@ type ProspectEditFormState = {
   demo_max_consecutive_auto_replies: number;
   demo_background_image_url: string;
   demo_background_opacity: number;
+  services: Array<{
+    id: string;
+    service_name: string;
+    price_range: string;
+    duration_minutes: number;
+    description: string;
+    category: string;
+  }>;
   notes: string;
   do_not_contact: boolean;
 };
@@ -553,6 +561,17 @@ function platformWhatsAppAccountLabel(account: PlatformWhatsAppAccountItem) {
   return `${primary} - ${provider}`;
 }
 
+function createEditableProspectService(service?: Prospect["services"][number], index = 0): ProspectEditFormState["services"][number] {
+  return {
+    id: service?.id ?? `draft-service-${index}-${Date.now()}`,
+    service_name: service?.service_name ?? "",
+    price_range: service?.price_range ?? "",
+    duration_minutes: service?.duration_minutes ?? 60,
+    description: service?.description ?? "",
+    category: service?.category ?? "",
+  };
+}
+
 function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
   const demoAi = getDemoAiSettingsSnapshot(prospect);
   const demoWhatsApp = getDemoWhatsAppSettingsSnapshot(prospect);
@@ -581,6 +600,7 @@ function prospectToEditForm(prospect: Prospect): ProspectEditFormState {
     demo_max_consecutive_auto_replies: demoAi.max_consecutive_auto_replies,
     demo_background_image_url: demoBackground.background_image_url,
     demo_background_opacity: demoBackground.background_image_opacity,
+    services: (prospect.services ?? []).map((service, index) => createEditableProspectService(service, index)),
     notes: prospect.notes ?? "",
     do_not_contact: Boolean(prospect.do_not_contact),
   };
@@ -1523,6 +1543,7 @@ function EditProspectDrawer({
           demo_max_consecutive_auto_replies: 10,
           demo_background_image_url: DEFAULT_DEMO_BACKGROUND_IMAGE_URL,
           demo_background_opacity: DEFAULT_DEMO_BACKGROUND_OPACITY,
+          services: [],
           notes: "",
           do_not_contact: false,
         },
@@ -1536,6 +1557,33 @@ function EditProspectDrawer({
 
   const updateField = <Key extends keyof ProspectEditFormState>(key: Key, value: ProspectEditFormState[Key]) => {
     setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateServiceField = (
+    index: number,
+    key: keyof ProspectEditFormState["services"][number],
+    value: string | number,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      services: current.services.map((service, currentIndex) =>
+        currentIndex === index ? { ...service, [key]: value } : service,
+      ),
+    }));
+  };
+
+  const addServiceField = () => {
+    setForm((current) => ({
+      ...current,
+      services: [...current.services, createEditableProspectService(undefined, current.services.length)],
+    }));
+  };
+
+  const removeServiceField = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      services: current.services.filter((_, currentIndex) => currentIndex !== index),
+    }));
   };
 
   const handleEditDemoBackgroundUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -1583,6 +1631,15 @@ function EditProspectDrawer({
             },
             demo_branding: buildDemoBackgroundSnapshot(form.demo_background_image_url, form.demo_background_opacity),
           },
+          services: form.services
+            .map((service) => ({
+              service_name: service.service_name.trim(),
+              price_range: nullableText(service.price_range),
+              duration_minutes: Math.min(Math.max(Number(service.duration_minutes) || 60, 15), 480),
+              description: service.description.trim() || service.service_name.trim(),
+              category: nullableText(service.category),
+            }))
+            .filter((service) => service.service_name.length >= 2),
           notes: form.notes,
           do_not_contact: form.do_not_contact,
         })
@@ -1801,6 +1858,60 @@ function EditProspectDrawer({
           <section className="rounded-2xl border border-stone-200 p-4">
             <SectionIntro title="Contexto comercial" text="Dor percebida e observacoes internas para o follow-up." />
             <div className="mt-4 grid gap-3">
+              <Field
+                label="Servicos da clinica"
+                helper="Edite os servicos oficiais e o preco exibido na demo. Ao salvar, isso atualiza a demo atual desta clinica."
+              >
+                <div className="space-y-3">
+                  {form.services.length ? (
+                    form.services.map((service, index) => (
+                      <div key={service.id} className="rounded-2xl border border-stone-200 bg-stone-50 p-3">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_110px]">
+                          <div>
+                            <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Servico</label>
+                            <Input
+                              className="mt-2"
+                              value={service.service_name}
+                              onChange={(event) => updateServiceField(index, "service_name", event.target.value)}
+                              disabled={mutation.isPending}
+                              placeholder="Ex.: Lente em resina"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-semibold uppercase tracking-wide text-stone-500">Preco</label>
+                            <Input
+                              className="mt-2"
+                              value={service.price_range}
+                              onChange={(event) => updateServiceField(index, "price_range", event.target.value)}
+                              disabled={mutation.isPending}
+                              placeholder="Ex.: A partir de R$ 1.200"
+                            />
+                          </div>
+                          <div className="flex items-end">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => removeServiceField(index)}
+                              disabled={mutation.isPending}
+                            >
+                              Remover
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-5 text-sm text-stone-600">
+                      Nenhum servico cadastrado ainda. Adicione o primeiro abaixo.
+                    </div>
+                  )}
+                  <Button type="button" variant="outline" onClick={addServiceField} disabled={mutation.isPending}>
+                    <Plus size={16} />
+                    Adicionar servico
+                  </Button>
+                </div>
+              </Field>
               <Field label="Principal dor percebida" helper="Ex.: perde paciente no WhatsApp, agenda baguncada, retorno esquecido.">
                 <Input value={form.main_pain} onChange={(event) => updateField("main_pain", event.target.value)} disabled={mutation.isPending} />
               </Field>

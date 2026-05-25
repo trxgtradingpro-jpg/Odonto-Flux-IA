@@ -155,7 +155,7 @@ def _public_contact_channels(
         return {"phone": None, "whatsapp_url": None}
     return {
         "phone": phone,
-        "whatsapp_url": build_whatsapp_url(phone=phone, raw_token="public-contact", clinic_name=clinic_name),
+        "whatsapp_url": build_whatsapp_url(phone=phone, raw_token=None, clinic_name=clinic_name),
     }
 
 
