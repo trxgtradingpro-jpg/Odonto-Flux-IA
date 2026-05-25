@@ -504,7 +504,7 @@ function PublicWebchat({
     const viewport = viewportRef.current;
     if (!viewport) return;
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-  }, [messages, sending]);
+  }, [assistantTyping, messages, sending]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
