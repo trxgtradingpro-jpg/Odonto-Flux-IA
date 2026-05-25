@@ -6314,10 +6314,15 @@ def _wizard_build_day_step_response(
         session_token=session_token,
         step="day",
     )
+    visible_day_lines = [f"{index}) {choice['label']}" for index, choice in enumerate(day_choices[:7], start=1)]
 
     response = {
         "mode": "booking_wizard_day_select",
-        "response_text": f"Ótimo, essa unidade funciona para você. Agora vou te mostrar os dias disponíveis para {procedure_type} na {unit.name}.",
+        "response_text": (
+            f"Ótimo, essa unidade funciona para você. Aqui estão os dias disponíveis para {procedure_type} na {unit.name}:\n"
+            + "\n".join(visible_day_lines)
+            + "\nEscolha uma das opções acima ou me diga a data que prefere."
+        ),
         "metadata": metadata,
     }
     return _append_webchat_existing_patient_lookup_hint(
