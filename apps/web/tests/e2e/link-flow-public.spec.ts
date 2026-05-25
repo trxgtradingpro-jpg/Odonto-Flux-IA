@@ -11,6 +11,9 @@ const branding = {
   border_color: '#d6d3d1',
 };
 
+const mobileLongMessage =
+  'Ate vc esta precisando usar a API do WhatsApp mas nao sabe como fazer kkk imagina as clinicas que recebe varias msgs todo dia';
+
 const emptySummary: {
   session_status: string;
   progress: { complete_count: number; total_count: number };
@@ -296,6 +299,50 @@ test.describe('public link flow landing', () => {
 
   test('keeps the public webchat layout usable on mobile', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      const listeners = new Map<string, Set<() => void>>();
+      const viewport = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        offsetTop: 0,
+        offsetLeft: 0,
+        pageTop: 0,
+        pageLeft: 0,
+        scale: 1,
+        addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+          const callback =
+            typeof listener === 'function' ? listener : () => listener.handleEvent(new Event(type));
+          const current = listeners.get(type) ?? new Set<() => void>();
+          current.add(callback);
+          listeners.set(type, current);
+        },
+        removeEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+          const callback =
+            typeof listener === 'function' ? listener : () => listener.handleEvent(new Event(type));
+          listeners.get(type)?.forEach((registered) => {
+            if (registered === callback) {
+              listeners.get(type)?.delete(registered);
+            }
+          });
+        },
+        dispatch(type: string) {
+          listeners.get(type)?.forEach((listener) => listener());
+        },
+      };
+
+      Object.defineProperty(window, 'visualViewport', {
+        configurable: true,
+        value: viewport,
+      });
+
+      (window as typeof window & {
+        __setVisualViewportHeight?: (height: number) => void;
+      }).__setVisualViewportHeight = (height: number) => {
+        viewport.height = height;
+        viewport.dispatch('resize');
+        viewport.dispatch('scroll');
+      };
+    });
 
     await page.route('**/api/v1/public/booking/tenant-a/sessions', async (route) => {
       await route.fulfill({
@@ -320,7 +367,22 @@ test.describe('public link flow landing', () => {
     await page.route('**/api/v1/public/booking/sessions/*/chat/messages**', async (route) => {
       await route.fulfill({
         json: {
-          data: [],
+          data: [
+            {
+              id: 'mobile-long-patient-message',
+              role: 'patient',
+              text: mobileLongMessage,
+              created_at: '2026-05-25T03:55:00Z',
+              status: 'sent',
+            },
+            {
+              id: 'mobile-assistant-reply',
+              role: 'assistant',
+              text: 'Sabe eu sei ne anjo',
+              created_at: '2026-05-25T03:59:00Z',
+              status: 'sent',
+            },
+          ],
         },
       });
     });
@@ -344,11 +406,22 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
-    await expect(page.getByText('Atendimento online')).toBeVisible();
+    await expect(page.getByText('Atendimento online - canal oficial da clinica')).toBeVisible();
     await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
     await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
     await expect(page.getByRole('button', { name: /Abrir resumo do atendimento/i })).toBeVisible();
+    const longBubble = page.getByTestId('public-webchat-message-bubble').first();
+    await expect(longBubble).toContainText(mobileLongMessage);
+
+    const metricsBeforeKeyboard = await longBubble.locator('p').first().evaluate((node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = node.getBoundingClientRect();
+      const lineCount = Array.from(range.getClientRects()).filter((item) => item.width > 0).length;
+      range.detach();
+      return { bubbleWidth: node.parentElement?.getBoundingClientRect().width ?? 0, textWidth: rect.width, lineCount };
+    });
 
     const summaryHandle = page.getByTestId('booking-summary-mobile-handle');
     const handleBox = await summaryHandle.boundingBox();
@@ -364,6 +437,34 @@ test.describe('public link flow landing', () => {
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'open');
     await page.getByRole('button', { name: /Fechar resumo do atendimento/i }).click();
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');
+
+    const messageInput = page.getByPlaceholder('Digite sua mensagem...');
+    await messageInput.focus();
+    await page.evaluate(() => {
+      (
+        window as typeof window & {
+          __setVisualViewportHeight?: (height: number) => void;
+        }
+      ).__setVisualViewportHeight?.(520);
+    });
+    await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
+    await expect
+      .poll(async () => {
+        const sendButtonBox = await page.getByRole('button', { name: /Enviar mensagem/i }).boundingBox();
+        return sendButtonBox ? sendButtonBox.y + sendButtonBox.height : null;
+      })
+      .toBeLessThanOrEqual(520);
+    const metricsAfterKeyboard = await longBubble.locator('p').first().evaluate((node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = node.getBoundingClientRect();
+      const lineCount = Array.from(range.getClientRects()).filter((item) => item.width > 0).length;
+      range.detach();
+      return { bubbleWidth: node.parentElement?.getBoundingClientRect().width ?? 0, textWidth: rect.width, lineCount };
+    });
+    expect(Math.abs(metricsAfterKeyboard.bubbleWidth - metricsBeforeKeyboard.bubbleWidth)).toBeLessThanOrEqual(1);
+    expect(Math.abs(metricsAfterKeyboard.textWidth - metricsBeforeKeyboard.textWidth)).toBeLessThanOrEqual(1);
+    expect(metricsAfterKeyboard.lineCount).toBe(metricsBeforeKeyboard.lineCount);
 
     const [hasHorizontalOverflow, pageScrolled] = await page.evaluate(() => {
       const hasX = document.documentElement.scrollWidth > window.innerWidth + 1;

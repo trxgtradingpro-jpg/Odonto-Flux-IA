@@ -13,11 +13,15 @@ import {
   Mail,
   MapPinHouse,
   MessageCircle,
+  MoreVertical,
+  Paperclip,
+  Phone,
   List,
   PencilLine,
   SendHorizontal,
   ShieldCheck,
   Sparkles,
+  Video,
   UserRound,
   X,
 } from "lucide-react";
@@ -282,8 +286,11 @@ function PublicWebchat({
   const [sending, setSending] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [composerFocused, setComposerFocused] = useState(false);
   const openedRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const lastMessageId = messages.length ? messages[messages.length - 1]?.id : undefined;
   const token = session.public_access_token || "";
 
@@ -346,6 +353,44 @@ function PublicWebchat({
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) return;
+
+    const syncKeyboardInset = () => {
+      if (!composerFocused) {
+        setKeyboardInset(0);
+        return;
+      }
+      const nextInset = Math.max(0, window.innerHeight - (visualViewport.height + visualViewport.offsetTop));
+      setKeyboardInset(nextInset > 8 ? nextInset : 0);
+    };
+
+    syncKeyboardInset();
+    visualViewport.addEventListener("resize", syncKeyboardInset);
+    visualViewport.addEventListener("scroll", syncKeyboardInset);
+    window.addEventListener("orientationchange", syncKeyboardInset);
+
+    return () => {
+      visualViewport.removeEventListener("resize", syncKeyboardInset);
+      visualViewport.removeEventListener("scroll", syncKeyboardInset);
+      window.removeEventListener("orientationchange", syncKeyboardInset);
+    };
+  }, [composerFocused]);
+
+  useEffect(() => {
+    if (!composerFocused) return;
+    const viewport = viewportRef.current;
+    const input = inputRef.current;
+    if (!viewport || !input) return;
+
+    window.requestAnimationFrame(() => {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, [composerFocused, keyboardInset]);
+
   async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
@@ -391,23 +436,30 @@ function PublicWebchat({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-1 flex-col overflow-hidden",
+        "relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#0b141a] font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
         embedded
-          ? "bg-white"
-          : "rounded-[30px] border border-white/60 bg-white/82 shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur",
+          ? "sm:bg-white"
+          : "sm:rounded-[30px] sm:border sm:border-white/60 sm:bg-white/82 sm:text-[var(--booking-text)] sm:shadow-[0_22px_70px_rgba(15,23,42,0.12)] sm:backdrop-blur",
       )}
     >
-      {!embedded ? <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white/92 px-4 py-3 sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--booking-primary)] text-white shadow-sm">
+      {!embedded ? <div className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#1f2c33] bg-[#111b21] px-2.5 py-2 text-[#e9edef] sm:h-auto sm:border-stone-200 sm:bg-white/92 sm:px-5 sm:py-3 sm:text-stone-900">
+        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#202c33] text-[#00a884] shadow-sm sm:h-11 sm:w-11 sm:bg-[var(--booking-primary)] sm:text-white">
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-stone-900">Atendimento online</p>
+          <div className="min-w-0 leading-tight [&>p:nth-child(4)]:hidden sm:[&>p:nth-child(4)]:block">
+            <p className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
+            <p className="hidden truncate text-sm font-semibold text-stone-900 sm:block">Atendimento online</p>
+            <p className="truncate text-[12px] leading-4 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
             <p className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
           </div>
         </div>
-        <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+        <div className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
+          <Video className="h-6 w-6" />
+          <Phone className="h-6 w-6" />
+          <MoreVertical className="h-6 w-6" />
+        </div>
+        <div className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
           Online
         </div>
       </div> : null}
@@ -415,20 +467,25 @@ function PublicWebchat({
       <div
         ref={viewportRef}
         className={cn(
-          "whatsapp-chat-thread-surface min-h-0 flex-1 space-y-4 overflow-y-auto",
-          embedded ? "px-4 py-4 sm:px-5" : "px-4 py-5 sm:px-5",
+          "whatsapp-chat-thread-surface-dark min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-2",
+          embedded
+            ? "sm:space-y-4 sm:px-5 sm:py-4"
+            : "sm:space-y-4 sm:px-5 sm:py-5",
         )}
+        style={{
+          paddingBottom: keyboardInset ? `${keyboardInset + 72}px` : undefined,
+        }}
       >
         {loadingMessages ? (
-          <div className="max-w-[88%] rounded-[24px] border border-stone-200 bg-white px-4 py-3 text-sm text-[var(--booking-muted)] shadow-sm">
+          <div className="w-fit max-w-[80%] rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:text-[var(--booking-muted)]">
             Carregando conversa...
           </div>
         ) : null}
         {!loadingMessages && messages.length === 0 ? (
           <div className="flex justify-start">
-            <div className="max-w-[88%] rounded-[24px] border border-stone-200 bg-white px-4 py-3 text-sm leading-6 text-[var(--booking-text)] shadow-sm">
-              <p className="font-medium text-stone-900">Oi, eu sou a assistente de agendamento.</p>
-              <p className="mt-1 text-[var(--booking-muted)]">
+            <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[16px] leading-[21px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:leading-6 sm:text-[var(--booking-text)]">
+              <p className="font-medium text-[#e9edef] sm:text-stone-900">Oi, eu sou a assistente de agendamento.</p>
+              <p className="mt-1 text-[#8696a0] sm:text-[var(--booking-muted)]">
                 Me conte o que voce precisa e eu vou te ajudar por aqui. Exemplo: Quero agendar uma avaliacao esta semana.
               </p>
             </div>
@@ -439,16 +496,17 @@ function PublicWebchat({
           return (
             <div key={message.id} className={`flex ${isPatient ? "justify-end" : "justify-start"}`}>
               <div
+                data-testid="public-webchat-message-bubble"
                 className={[
-                  "max-w-[88%] rounded-[24px] px-4 py-3 text-sm leading-6 shadow-sm sm:max-w-[78%]",
+                  "w-fit max-w-[80%] rounded-lg px-2.5 py-1.5 text-[16px] leading-[21px] text-[#e9edef] shadow-sm sm:max-w-[78%] sm:rounded-[24px] sm:px-4 sm:py-3 sm:text-sm sm:leading-6",
                   isPatient
-                    ? "rounded-br-[10px] bg-[var(--booking-primary)] text-white"
-                    : "rounded-bl-[10px] border border-stone-200 bg-white text-[var(--booking-text)]",
+                    ? "rounded-br-[3px] bg-[#005c4b] sm:rounded-br-[10px] sm:bg-[var(--booking-primary)] sm:text-white"
+                    : "rounded-bl-[3px] bg-[#202c33] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:text-[var(--booking-text)]",
                 ].join(" ")}
               >
                 <p className="whitespace-pre-wrap break-words">{message.text}</p>
                 <div
-                  className={`mt-2 text-[11px] ${isPatient ? "text-white/80" : "text-[var(--booking-muted)]"}`}
+                  className={`mt-0.5 flex justify-end text-[11px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
                 >
                   {formatPublicMessageTime(message.created_at)}
                 </div>
@@ -458,34 +516,46 @@ function PublicWebchat({
         })}
         {sending ? (
           <div className="flex justify-start">
-            <div className="rounded-[20px] border border-stone-200 bg-white px-4 py-2 text-xs text-[var(--booking-muted)] shadow-sm">
+            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-xs sm:text-[var(--booking-muted)]">
               Recebi sua mensagem. Estou preparando a resposta...
             </div>
           </div>
         ) : null}
       </div>
 
-      <div className={cn("border-t border-stone-200 bg-white/94 px-4 py-3 sm:px-5", embedded && "shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}>
+      <div
+        className={cn("relative z-20 border-t border-transparent bg-[#0b141a] px-2 py-1.5 sm:border-stone-200 sm:bg-white/94 sm:px-5 sm:py-3", embedded && "sm:shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}
+        style={{
+          paddingBottom: "calc(0.375rem + env(safe-area-inset-bottom))",
+          transform: keyboardInset ? `translateY(-${keyboardInset}px)` : undefined,
+          transition: "transform 180ms ease-out",
+          willChange: keyboardInset ? "transform" : undefined,
+        }}
+      >
         {chatError ? (
-          <p className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] leading-5 text-amber-100 sm:mb-3 sm:rounded-2xl sm:border-amber-200 sm:bg-amber-50 sm:px-4 sm:py-3 sm:text-sm sm:text-amber-900">
             {chatError}
           </p>
         ) : null}
 
-        <form onSubmit={handleSendMessage} className="flex items-end gap-3">
-          <div className="flex-1 rounded-[28px] border border-stone-200 bg-white px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition focus-within:border-[var(--booking-primary)] focus-within:ring-2 focus-within:ring-[color:color-mix(in_srgb,var(--booking-primary)_16%,transparent)]">
+        <form onSubmit={handleSendMessage} className="flex items-end gap-2 sm:gap-3">
+          <div className="flex h-12 flex-1 items-center gap-2 rounded-[24px] border-none bg-[#202c33] px-4 text-[#e9edef] shadow-none transition focus-within:ring-1 focus-within:ring-[#00a884]/40 sm:h-auto sm:rounded-[28px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[var(--booking-text)] sm:shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] sm:focus-within:border-[var(--booking-primary)] sm:focus-within:ring-2 sm:focus-within:ring-[color:color-mix(in_srgb,var(--booking-primary)_16%,transparent)]">
             <input
+              ref={inputRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onFocus={() => setComposerFocused(true)}
+              onBlur={() => setComposerFocused(false)}
               maxLength={1200}
               placeholder="Digite sua mensagem..."
-              className="h-7 w-full border-none bg-transparent text-sm text-[var(--booking-text)] outline-none placeholder:text-stone-400"
+              className="h-full min-w-0 flex-1 border-none bg-transparent text-[16px] leading-5 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-sm sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
             />
+            <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" />
           </div>
           <button
             type="submit"
             disabled={!draft.trim() || sending}
-            className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[var(--booking-primary)] text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#00a884] text-[#0b141a] shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:bg-[#2a3942] disabled:text-[#8696a0] sm:bg-[var(--booking-primary)] sm:text-white sm:disabled:opacity-60"
             aria-label="Enviar mensagem"
           >
             <SendHorizontal className="h-5 w-5" aria-hidden="true" />
@@ -1374,17 +1444,21 @@ export default function PublicBookingPage() {
     <main
       className={cn(
         "box-border overflow-hidden text-[var(--booking-text)]",
-        "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
+        isWebchat
+          ? "h-[100dvh] bg-[#0b141a] p-0 sm:bg-[var(--booking-background)] sm:px-6 sm:py-5 lg:px-10"
+          : "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
       )}
       style={pageStyle}
     >
       <div
         className={cn(
           "box-border flex h-full w-full flex-col overflow-hidden",
-          "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
+          isWebchat
+            ? "bg-[#0b141a] sm:mx-auto sm:max-w-7xl sm:rounded-[34px] sm:border sm:border-white/70 sm:bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] sm:shadow-[0_28px_90px_rgba(15,23,42,0.12)] sm:backdrop-blur"
+            : "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
         )}
       >
-        <header className="border-b border-white/60 px-5 py-5 sm:px-7">
+        <header className={cn("border-b border-white/60 px-5 py-5 sm:px-7", isWebchat && "hidden sm:block")}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-3">
@@ -1417,7 +1491,7 @@ export default function PublicBookingPage() {
         <section
           className={cn(
             "relative flex min-h-0 flex-1 overflow-hidden",
-            "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
+            isWebchat ? "p-0 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6" : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
           )}
         >
           {isWebchat ? (

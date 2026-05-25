@@ -147,6 +147,52 @@ body {
     repeat;
 }
 
+.whatsapp-chat-thread-surface-dark {
+  background-color: #0b141a;
+  background-image:
+    radial-gradient(circle at 18px 24px, rgba(134, 150, 160, 0.12) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 58px 64px, rgba(134, 150, 160, 0.09) 0 1px, transparent 1.5px),
+    linear-gradient(135deg, rgba(134, 150, 160, 0.05) 0 1px, transparent 1px),
+    linear-gradient(180deg, rgba(11, 20, 26, 0.2), rgba(11, 20, 26, 0.2));
+  background-position:
+    0 0,
+    0 0,
+    0 0,
+    center center;
+  background-size:
+    84px 84px,
+    104px 104px,
+    28px 28px,
+    cover;
+  background-repeat:
+    repeat,
+    repeat,
+    repeat,
+    no-repeat;
+}
+
+@media (min-width: 640px) {
+  .whatsapp-chat-thread-surface-dark {
+    background-color: #f6f1e8;
+    background-image:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.38),
+        rgba(255, 255, 255, 0.22)
+      ),
+      url("/images/whatsapp-chat-background.png");
+    background-position:
+      center center,
+      center top;
+    background-size:
+      cover,
+      560px auto;
+    background-repeat:
+      no-repeat,
+      repeat;
+  }
+}
+
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-sidebar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-topbar="true"],
 html[data-demo-webchat-workspace-open="true"] [data-app-shell-support-fab="true"] {
