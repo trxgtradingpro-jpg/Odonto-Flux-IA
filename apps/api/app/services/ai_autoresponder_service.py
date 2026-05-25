@@ -5893,6 +5893,11 @@ def _wizard_active_units(db: Session, *, tenant_id: UUID) -> list[Unit]:
     ).scalars().all()
 
 
+def _wizard_single_active_unit(db: Session, *, tenant_id: UUID) -> Unit | None:
+    units = _wizard_active_units(db, tenant_id=tenant_id)
+    return units[0] if len(units) == 1 else None
+
+
 def _wizard_service_options(
     db: Session,
     *,
@@ -6012,6 +6017,45 @@ def _wizard_build_service_step_response(
         db,
         conversation=conversation,
         response=response,
+    )
+
+
+def _wizard_build_unit_or_day_step_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    procedure_type: str,
+    period: str | None,
+    requested_date: date | None,
+    operation_timezone: ZoneInfo,
+    config: dict[str, Any],
+    session_token: str | None = None,
+) -> dict[str, Any]:
+    single_unit = _wizard_single_active_unit(db, tenant_id=conversation.tenant_id)
+    if single_unit:
+        if conversation.unit_id != single_unit.id:
+            conversation.unit_id = single_unit.id
+            db.add(conversation)
+            db.flush()
+        return _wizard_build_day_step_response(
+            db,
+            conversation=conversation,
+            unit=single_unit,
+            procedure_type=procedure_type,
+            period=period,
+            requested_date=requested_date,
+            operation_timezone=operation_timezone,
+            config=config,
+            session_token=session_token,
+        )
+
+    return _wizard_build_unit_step_response(
+        db,
+        conversation=conversation,
+        procedure_type=procedure_type,
+        period=period,
+        requested_date=requested_date,
+        session_token=session_token,
     )
 
 
@@ -6493,12 +6537,14 @@ def _wizard_resume_saved_step_response(
     session_token = str(saved_state.get("session_token") or "").strip() or None
 
     if not unit:
-        return _wizard_build_unit_step_response(
+        return _wizard_build_unit_or_day_step_response(
             db,
             conversation=conversation,
             procedure_type=service,
             period=period,
             requested_date=requested_date,
+            operation_timezone=operation_timezone,
+            config=config,
             session_token=session_token,
         )
 
@@ -6571,6 +6617,11 @@ def _wizard_resume_saved_step_response(
 
 def _wizard_parse_confirmation_choice(token: str) -> bool | None:
     normalized = _normalize_for_match(token or "")
+    option_index = _extract_option_index_choice(token)
+    if option_index == 1:
+        return True
+    if option_index == 2:
+        return False
     if any(keyword in normalized for keyword in BOOKING_WIZARD_CONFIRM_YES_KEYWORDS):
         return True
     if any(keyword in normalized for keyword in BOOKING_WIZARD_CONFIRM_NO_KEYWORDS):
@@ -6580,6 +6631,9 @@ def _wizard_parse_confirmation_choice(token: str) -> bool | None:
 
 def _wizard_parse_confirmation_action(token: str) -> str | None:
     normalized = _normalize_for_match(token or "")
+    option_index = _extract_option_index_choice(token)
+    if option_index == 3:
+        return "change_time"
     if any(keyword in normalized for keyword in BOOKING_WIZARD_CHANGE_TIME_KEYWORDS):
         return "change_time"
     if any(keyword in normalized for keyword in BOOKING_WIZARD_CHANGE_DAY_KEYWORDS):
@@ -7486,12 +7540,14 @@ def _try_booking_wizard_response(
                     requested_date=carried_requested_date,
                     session_token=latest_session_token,
                 )
-            return _wizard_build_unit_step_response(
+            return _wizard_build_unit_or_day_step_response(
                 db,
                 conversation=conversation,
                 procedure_type=selected_service,
                 period=carried_period,
                 requested_date=carried_requested_date,
+                operation_timezone=operation_timezone,
+                config=config,
                 session_token=latest_session_token,
             )
 

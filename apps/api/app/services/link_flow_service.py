@@ -43,6 +43,7 @@ LINK_FLOW_ALLOWED_EVENTS = {
     "webchat_message_sent",
     "webchat_first_ai_response",
     "webchat_session_resumed",
+    "webchat_fallback_reply_sent",
     "webchat_summary_updated",
     "webchat_summary_manual_followup_sent",
     "webchat_session_closed",

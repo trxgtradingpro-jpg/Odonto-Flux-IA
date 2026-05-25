@@ -1754,6 +1754,70 @@ def test_booking_wizard_no_slots_general_keeps_interactive_options(seeded_db, db
     assert appointment is None
 
 
+def test_single_active_unit_skips_unit_question_after_service_selection(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    existing_units = db_session.execute(
+        select(Unit).where(Unit.tenant_id == tenant_id, Unit.is_active.is_(True))
+    ).scalars().all()
+    for unit in existing_units:
+        unit.is_active = False
+        db_session.add(unit)
+
+    single_unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade principal")
+    _ensure_professional(db_session, tenant_id=tenant_id, unit_id=single_unit.id, full_name="Dra. Principal")
+    db_session.commit()
+
+    conversation, first_inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar uma avaliacao",
+    )
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_inbound.id,
+    )
+    assert first_result["status"] == "responded"
+
+    latest_outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert latest_outbound is not None
+    service_rows = (((latest_outbound.payload or {}).get("interactive") or {}).get("rows") or [])
+    assert service_rows
+
+    service_inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="Opção 1",
+        message_type="interactive_list_reply",
+        payload={"interactive_reply": {"id": service_rows[0]["id"], "title": "Opção 1"}},
+    )
+    service_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=service_inbound.id,
+    )
+    db_session.refresh(conversation)
+
+    assert service_result["status"] == "responded"
+    assert service_result.get("scheduling_mode") == "booking_wizard_day_select"
+    assert conversation.unit_id == single_unit.id
+
+
 def test_followup_slot_option_confirms_and_persists_appointment(seeded_db, db_session):
     tenant_id = seeded_db["tenant_a"].id
     _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
@@ -2860,6 +2924,112 @@ def test_webchat_confirmation_keeps_session_open_and_requests_registration_field
     assert session.status == "linked"
     assert session.closed_at is None
     assert session.linked_appointment_id == appointment.id
+
+
+def test_webchat_confirmation_accepts_numeric_option_one(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=_base_ai_config())
+
+    conversation, _ = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero agendar uma avaliacao esta semana.",
+        channel="webchat",
+    )
+    patient = db_session.get(Patient, conversation.patient_id)
+    unit = _ensure_unit(db_session, tenant_id=tenant_id)
+    professional = _ensure_professional(db_session, tenant_id=tenant_id, unit_id=unit.id, full_name="Dra. Webchat")
+    assert patient is not None
+
+    patient.unit_id = unit.id
+    conversation.unit_id = unit.id
+    db_session.add(patient)
+    db_session.add(conversation)
+    db_session.flush()
+
+    selected_day = (datetime.now(UTC) + timedelta(days=2)).date()
+    starts_at_utc = datetime.now(UTC) + timedelta(days=2, hours=3)
+    ends_at_utc = starts_at_utc + timedelta(minutes=60)
+    session = LinkFlowSession(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        mode="link_flow",
+        cta_mode="webchat",
+        channel="webchat",
+        token_hash=f"token-numeric-{conversation.id}",
+        public_access_token_hash=f"public-numeric-{conversation.id}",
+        status="linked",
+        landing_path="/agendar/tenant-a",
+        utm_payload={},
+        linked_conversation_id=conversation.id,
+        linked_patient_id=patient.id,
+        linked_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    db_session.add(session)
+    db_session.flush()
+
+    confirm_prompt = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="webchat",
+        sender_type="ai",
+        body=(
+            "Perfeito, esta quase pronto. Posso confirmar seu agendamento?\n"
+            "Confirmacao:\n1) Sim\n2) Nao\n3) Trocar horario"
+        ),
+        message_type="text",
+        payload={
+            "mode": "booking_wizard_confirm",
+            "scheduling": {
+                "procedure_type": "Avaliacao inicial",
+                "unit_id": str(unit.id),
+                "unit_name": unit.name,
+                "requested_date": selected_day.isoformat(),
+                "selected_slot": {
+                    "id": "time_0900",
+                    "label": "terca-feira, 26/05 as 09:00",
+                    "starts_at_utc": starts_at_utc.isoformat(),
+                    "ends_at_utc": ends_at_utc.isoformat(),
+                    "starts_at_local": starts_at_utc.isoformat(),
+                    "professional_id": str(professional.id),
+                    "professional_name": professional.full_name,
+                    "time": "09:00",
+                },
+            },
+        },
+        status="sent",
+    )
+    db_session.add(confirm_prompt)
+    db_session.commit()
+
+    inbound = _append_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_text="1",
+        channel="webchat",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    appointment = db_session.scalar(
+        select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.patient_id == conversation.patient_id,
+            Appointment.origin == "ai_autoresponder",
+        )
+    )
+
+    assert result["status"] == "responded"
+    assert result.get("scheduling_mode") in {"appointment_created", "appointment_already_created"}
+    assert appointment is not None
+    assert appointment.confirmation_status == "confirmada"
 
 
 def test_webchat_post_booking_phone_lookup_rebinds_existing_patient_and_linked_appointment(seeded_db, db_session):

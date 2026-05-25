@@ -25,6 +25,7 @@ from app.utils.hash import sha256_text
 WEBCHAT_MAX_MESSAGE_LENGTH = 1200
 WEBCHAT_RATE_LIMIT_WINDOW_SECONDS = 60
 WEBCHAT_RATE_LIMIT_MAX_MESSAGES = 8
+WEBCHAT_FALLBACK_REPLY = "Nao entendi completamente sua mensagem. Pode me explicar melhor?"
 
 
 @dataclass
@@ -392,6 +393,69 @@ def serialize_public_webchat_message(message: Message) -> dict[str, Any]:
     }
 
 
+def _latest_webchat_assistant_reply_for_inbound(
+    db: Session,
+    *,
+    conversation: Conversation,
+    inbound_message_id: UUID,
+) -> Message | None:
+    rows = db.execute(
+        select(Message)
+        .where(
+            Message.tenant_id == conversation.tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.OUTBOUND.value,
+            Message.channel == "webchat",
+        )
+        .order_by(Message.created_at.desc())
+        .limit(20)
+    ).scalars().all()
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if str(payload.get("reply_to_message_id") or "") == str(inbound_message_id):
+            return row
+    return None
+
+
+def _create_webchat_fallback_reply(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    conversation: Conversation,
+    inbound_message: Message,
+) -> Message:
+    now = _now()
+    outbound = Message(
+        tenant_id=conversation.tenant_id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.OUTBOUND.value,
+        channel="webchat",
+        sender_type="ai",
+        body=WEBCHAT_FALLBACK_REPLY,
+        message_type="text",
+        payload={
+            "source": "webchat_fallback",
+            "mode": "fallback_clarification",
+            "reply_to_message_id": str(inbound_message.id),
+        },
+        status=MessageStatus.SENT.value,
+    )
+    db.add(outbound)
+    conversation.last_message_at = now
+    session.last_assistant_message_at = now
+    db.add(conversation)
+    db.add(session)
+    register_link_flow_event(
+        db,
+        session=session,
+        event_name="webchat_fallback_reply_sent",
+        payload={"source": "public_webchat", "inbound_message_id": str(inbound_message.id)},
+    )
+    db.commit()
+    db.refresh(outbound)
+    return outbound
+
+
 def list_public_webchat_messages(
     db: Session,
     *,
@@ -630,18 +694,27 @@ def _public_summary_schedule_options(
 
 def _build_manual_summary_followup_text(
     *,
+    patient_name: str | None = None,
+    patient_email: str | None = None,
+    birth_date_value: date | None = None,
     unit_name: str | None,
     procedure_value: str | None,
     preferred_date: str | None,
     preferred_time: str | None,
 ) -> str | None:
     details: list[str] = []
+    if patient_name:
+        details.append(f"Paciente: {patient_name}")
+    if patient_email:
+        details.append(f"E-mail: {patient_email}")
+    if birth_date_value:
+        details.append(f"Data de nascimento: {birth_date_value.strftime('%d/%m/%Y')}")
     if unit_name:
         details.append(f"Unidade: {unit_name}")
     if procedure_value:
         details.append(f"Servico: {procedure_value}")
     if preferred_date:
-        details.append(f"Data desejada: {format(date.fromisoformat(preferred_date), '%d/%m/%Y')}")
+        details.append(f"Data desejada: {date.fromisoformat(preferred_date).strftime('%d/%m/%Y')}")
     if preferred_time:
         details.append(f"Horario desejado: {preferred_time}")
     if not details:
@@ -651,6 +724,64 @@ def _build_manual_summary_followup_text(
         + "\n".join(f"- {item}" for item in details)
         + "\nConsidere essas informacoes e continue meu atendimento."
     )
+
+
+def _summary_context(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+) -> dict[str, Any]:
+    patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
+    conversation = db.get(Conversation, session.linked_conversation_id) if session.linked_conversation_id else None
+    appointment = db.get(Appointment, session.linked_appointment_id) if session.linked_appointment_id else None
+    draft = _latest_public_summary_draft(db, session=session)
+    progress_state = _latest_public_booking_progress(db, conversation=conversation)
+
+    draft_unit_id: UUID | None = None
+    raw_draft_unit_id = draft.get("unit_id")
+    if raw_draft_unit_id:
+        try:
+            draft_unit_id = UUID(str(raw_draft_unit_id))
+        except (TypeError, ValueError):
+            draft_unit_id = None
+
+    progress_unit_id: UUID | None = None
+    raw_progress_unit_id = progress_state.get("clinic_id")
+    if raw_progress_unit_id:
+        try:
+            progress_unit_id = UUID(str(raw_progress_unit_id))
+        except (TypeError, ValueError):
+            progress_unit_id = None
+
+    current_unit_id = (
+        appointment.unit_id
+        if appointment
+        else conversation.unit_id if conversation and conversation.unit_id else patient.unit_id if patient and patient.unit_id else session.unit_id or draft_unit_id or progress_unit_id
+    )
+    unit = db.scalar(
+        select(Unit).where(
+            Unit.id == current_unit_id,
+            Unit.tenant_id == tenant.id,
+            Unit.is_active.is_(True),
+        )
+    ) if current_unit_id else None
+
+    progress_selected_slot = (
+        progress_state.get("selected_slot")
+        if isinstance(progress_state.get("selected_slot"), dict)
+        else {}
+    )
+    return {
+        "patient": patient,
+        "conversation": conversation,
+        "appointment": appointment,
+        "draft": draft,
+        "progress_state": progress_state,
+        "progress_selected_slot": progress_selected_slot,
+        "current_unit_id": current_unit_id,
+        "unit": unit,
+    }
 
 
 def _dispatch_manual_summary_followup(
@@ -702,44 +833,103 @@ def _dispatch_manual_summary_followup(
     )
 
 
+def send_public_webchat_summary_followup(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+) -> dict[str, Any]:
+    context = _summary_context(db, session=session, tenant=tenant)
+    patient = context["patient"]
+    draft = context["draft"]
+    unit = context["unit"]
+    progress_state = context["progress_state"]
+    progress_selected_slot = context["progress_selected_slot"]
+
+    patient_name = None if _placeholder_patient_name(patient.full_name if patient else None) else _clean_summary_text(patient.full_name if patient else None, max_length=180)
+    patient_email = _clean_summary_text(patient.email if patient else None, max_length=180)
+    birth_date_value = patient.birth_date if patient and patient.birth_date else None
+    procedure_value = _clean_summary_text(
+        progress_state.get("service") or draft.get("procedure_type"),
+        max_length=120,
+    )
+    progress_requested_date = (
+        _parse_summary_preferred_date(progress_state.get("requested_date"))
+        if progress_state.get("requested_date")
+        else None
+    )
+    appointment_date = appointment.starts_at.date().isoformat() if appointment and appointment.starts_at else None
+    preferred_date = (
+        _parse_summary_preferred_date(draft.get("preferred_date"))
+        if draft.get("preferred_date")
+        else _parse_summary_preferred_date(progress_state.get("date")) if progress_state.get("date")
+        else progress_requested_date
+        or appointment_date
+    )
+    preferred_time = _clean_summary_text(
+        draft.get("preferred_time")
+        or progress_selected_slot.get("label")
+        or progress_selected_slot.get("time")
+        or progress_state.get("time"),
+        max_length=80,
+    )
+    followup_text = _build_manual_summary_followup_text(
+        patient_name=patient_name,
+        patient_email=patient_email,
+        birth_date_value=birth_date_value,
+        unit_name=unit.name if unit else _clean_summary_text(progress_state.get("clinic_name"), max_length=120),
+        procedure_value=procedure_value,
+        preferred_date=preferred_date,
+        preferred_time=preferred_time,
+    )
+    if not followup_text:
+        raise ApiError(
+            status_code=422,
+            code="WEBCHAT_SUMMARY_FOLLOWUP_EMPTY",
+            message="Ainda nao ha informacoes suficientes no painel para continuar o atendimento.",
+        )
+    _dispatch_manual_summary_followup(
+        db,
+        session=session,
+        tenant=tenant,
+        text=followup_text,
+        changed_fields=["panel_resume"],
+    )
+    return public_webchat_booking_summary(db, session=session, tenant=tenant)
+
+
 def public_webchat_booking_summary(
     db: Session,
     *,
     session: LinkFlowSession,
     tenant: Tenant,
 ) -> dict[str, Any]:
-    patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
-    conversation = db.get(Conversation, session.linked_conversation_id) if session.linked_conversation_id else None
-    appointment = db.get(Appointment, session.linked_appointment_id) if session.linked_appointment_id else None
-    draft = _latest_public_summary_draft(db, session=session)
-    progress_state = _latest_public_booking_progress(db, conversation=conversation)
+    context = _summary_context(db, session=session, tenant=tenant)
+    patient = context["patient"]
+    conversation = context["conversation"]
+    appointment = context["appointment"]
+    draft = context["draft"]
+    progress_state = context["progress_state"]
+    progress_selected_slot = context["progress_selected_slot"]
+    current_unit_id = context["current_unit_id"]
+    unit = context["unit"]
 
     patient_name = None if _placeholder_patient_name(patient.full_name if patient else None) else _clean_summary_text(patient.full_name if patient else None, max_length=180)
     patient_email = _clean_summary_text(patient.email if patient else None, max_length=180)
     birth_date_value = patient.birth_date.isoformat() if patient and patient.birth_date else None
-
-    draft_unit_id: UUID | None = None
-    raw_draft_unit_id = draft.get("unit_id")
-    if raw_draft_unit_id:
-        try:
-            draft_unit_id = UUID(str(raw_draft_unit_id))
-        except (TypeError, ValueError):
-            draft_unit_id = None
-
-    progress_unit_id: UUID | None = None
+    progress_unit_id = None
     raw_progress_unit_id = progress_state.get("clinic_id")
     if raw_progress_unit_id:
         try:
             progress_unit_id = UUID(str(raw_progress_unit_id))
         except (TypeError, ValueError):
             progress_unit_id = None
+    unit_name = unit.name if unit else _clean_summary_text(progress_state.get("clinic_name"), max_length=120)
+    unit_address = None
+    if unit:
+        from app.services.ai_autoresponder_service import _format_unit_address
 
-    current_unit_id = (
-        appointment.unit_id
-        if appointment
-        else conversation.unit_id if conversation and conversation.unit_id else patient.unit_id if patient and patient.unit_id else session.unit_id or draft_unit_id or progress_unit_id
-    )
-    unit_name = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=current_unit_id) or _clean_summary_text(progress_state.get("clinic_name"), max_length=120)
+        unit_address = _clean_summary_text(_format_unit_address(unit.address), max_length=240)
 
     procedure_value = _clean_summary_text(
         appointment.procedure_type
@@ -753,11 +943,6 @@ def public_webchat_booking_summary(
         else _parse_summary_preferred_date(progress_state.get("date")) if progress_state.get("date") else None
     )
     preferred_time = _clean_summary_text(draft.get("preferred_time"), max_length=80)
-    progress_selected_slot = (
-        progress_state.get("selected_slot")
-        if isinstance(progress_state.get("selected_slot"), dict)
-        else {}
-    )
     progress_slot_starts_at = _clean_summary_text(progress_selected_slot.get("starts_at_utc"), max_length=80)
     progress_slot_time = _clean_summary_text(
         progress_selected_slot.get("time") or progress_state.get("time"),
@@ -849,6 +1034,12 @@ def public_webchat_booking_summary(
             "id": str(appointment.id) if appointment else None,
             "starts_at": confirmed_slot,
             "confirmation_status": appointment.confirmation_status if appointment else None,
+            "unit_name": unit_name,
+            "unit_address": unit_address,
+            "patient_name": patient_name,
+            "patient_email": patient_email,
+            "birth_date": birth_date_value,
+            "procedure_type": procedure_value,
         },
         "options": {
             "units": [{"id": str(unit.id), "name": unit.name} for unit in units],
@@ -871,6 +1062,7 @@ def update_public_webchat_booking_summary(
     unit_id: UUID | None = None,
     preferred_date: str | None = None,
     preferred_time: str | None = None,
+    dispatch_followup: bool = False,
 ) -> dict[str, Any]:
     patient = _ensure_webchat_patient(db, session=session, tenant=tenant)
     draft = _latest_public_summary_draft(db, session=session)
@@ -880,18 +1072,27 @@ def update_public_webchat_booking_summary(
     previous_unit_id = str(session.unit_id or patient.unit_id or draft.get("unit_id") or "").strip() or None
     unit_name_for_followup = _unit_name_by_id(db, tenant_id=tenant.id, unit_id=session.unit_id or patient.unit_id)
     changed_fields: list[str] = []
+    previous_name = _clean_summary_text(patient.full_name, max_length=180)
+    previous_email = _clean_summary_text(patient.email, max_length=180)
+    previous_birth_date = patient.birth_date
 
     normalized_name = _clean_summary_text(full_name, max_length=180)
     if normalized_name:
         patient.full_name = normalized_name
+    if normalized_name != previous_name:
+        changed_fields.append("patient_name")
 
     normalized_email = _clean_summary_text(email, max_length=180)
     if normalized_email:
         patient.email = normalized_email
+    if normalized_email != previous_email:
+        changed_fields.append("email")
 
     parsed_birth_date = _parse_summary_birth_date(birth_date_value)
     if parsed_birth_date:
         patient.birth_date = parsed_birth_date
+    if parsed_birth_date != previous_birth_date:
+        changed_fields.append("birth_date")
 
     if procedure_type is not None:
         normalized_procedure = _clean_summary_text(procedure_type, max_length=120)
@@ -968,8 +1169,11 @@ def update_public_webchat_booking_summary(
     db.commit()
     db.refresh(session)
     followup_text = None
-    if changed_fields:
+    if dispatch_followup and changed_fields:
         followup_text = _build_manual_summary_followup_text(
+            patient_name=_clean_summary_text(patient.full_name, max_length=180),
+            patient_email=_clean_summary_text(patient.email, max_length=180),
+            birth_date_value=patient.birth_date,
             unit_name=unit_name_for_followup or _unit_name_by_id(db, tenant_id=tenant.id, unit_id=session.unit_id),
             procedure_value=_clean_summary_text(draft.get("procedure_type"), max_length=120),
             preferred_date=_parse_summary_preferred_date(draft.get("preferred_date")) if draft.get("preferred_date") else None,
@@ -984,6 +1188,154 @@ def update_public_webchat_booking_summary(
             changed_fields=changed_fields,
         )
     return public_webchat_booking_summary(db, session=session, tenant=tenant)
+
+
+def confirm_public_webchat_booking_summary(
+    db: Session,
+    *,
+    session: LinkFlowSession,
+    tenant: Tenant,
+) -> dict[str, Any]:
+    context = _summary_context(db, session=session, tenant=tenant)
+    patient = context["patient"]
+    conversation = context["conversation"]
+    appointment = context["appointment"]
+    draft = context["draft"]
+    progress_state = context["progress_state"]
+    progress_selected_slot = context["progress_selected_slot"]
+    unit = context["unit"]
+    from app.services.ai_autoresponder_service import _wizard_slot_from_choice
+
+    if appointment:
+        unit_address = None
+        appointment_unit = db.scalar(
+            select(Unit).where(
+                Unit.id == appointment.unit_id,
+                Unit.tenant_id == tenant.id,
+                Unit.is_active.is_(True),
+            )
+        )
+        if appointment_unit:
+            from app.services.ai_autoresponder_service import _format_unit_address
+
+            unit_address = _clean_summary_text(_format_unit_address(appointment_unit.address), max_length=240)
+        return {
+            "summary": public_webchat_booking_summary(db, session=session, tenant=tenant),
+            "result": {
+                "status": "already_created",
+                "appointment_id": str(appointment.id),
+                "unit_name": _unit_name_by_id(db, tenant_id=tenant.id, unit_id=appointment.unit_id),
+                "unit_address": unit_address,
+                "procedure_type": appointment.procedure_type,
+                "starts_at": appointment.starts_at.isoformat() if appointment.starts_at else None,
+                "patient_name": None if _placeholder_patient_name(patient.full_name if patient else None) else _clean_summary_text(patient.full_name if patient else None, max_length=180),
+                "patient_email": _clean_summary_text(patient.email if patient else None, max_length=180),
+                "birth_date": patient.birth_date.isoformat() if patient and patient.birth_date else None,
+            },
+        }
+
+    if not patient or _placeholder_patient_name(patient.full_name):
+        raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_NAME_REQUIRED", message="Informe o nome do paciente antes de agendar.")
+    if not patient.birth_date:
+        raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_BIRTH_DATE_REQUIRED", message="Informe a data de nascimento antes de agendar.")
+    if not unit:
+        raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_UNIT_REQUIRED", message="Escolha a unidade antes de agendar.")
+
+    procedure_type = _clean_summary_text(
+        appointment.procedure_type if appointment and appointment.procedure_type else progress_state.get("service") or draft.get("procedure_type"),
+        max_length=120,
+    )
+    if not procedure_type:
+        raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_SERVICE_REQUIRED", message="Escolha o servico antes de agendar.")
+
+    preferred_date_iso = (
+        _parse_summary_preferred_date(draft.get("preferred_date"))
+        if draft.get("preferred_date")
+        else _parse_summary_preferred_date(progress_state.get("date")) if progress_state.get("date") else None
+    )
+    if not preferred_date_iso:
+        raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_DATE_REQUIRED", message="Escolha a data antes de agendar.")
+
+    selected_slot: dict[str, Any] | None = None
+    if progress_selected_slot:
+        selected_slot = _wizard_slot_from_choice(progress_selected_slot)
+    else:
+        preferred_time = _clean_summary_text(draft.get("preferred_time"), max_length=80)
+        if not preferred_time:
+            raise ApiError(status_code=422, code="WEBCHAT_SUMMARY_TIME_REQUIRED", message="Escolha o horario antes de agendar.")
+        if not conversation:
+            conversation = ensure_webchat_conversation(db, session=session, tenant=tenant)
+        config = get_intake_config(db, tenant_id=tenant.id)
+        from app.services.ai_autoresponder_service import _wizard_collect_time_choices
+
+        slot_choices = _wizard_collect_time_choices(
+            db,
+            conversation=conversation,
+            unit=unit,
+            procedure_type=procedure_type,
+            period=None,
+            selected_date=date.fromisoformat(preferred_date_iso),
+            config=config,
+        )
+        matched_choice = next(
+            (
+                choice for choice in slot_choices
+                if _clean_summary_text(choice.get("label"), max_length=80) == preferred_time
+                or _clean_summary_text(choice.get("time"), max_length=80) == preferred_time
+            ),
+            None,
+        )
+        if not matched_choice:
+            raise ApiError(
+                status_code=409,
+                code="WEBCHAT_SUMMARY_TIME_UNAVAILABLE",
+                message="Esse horario nao esta mais disponivel. Escolha outra opcao no painel ou continue pelo chat.",
+            )
+        selected_slot = _wizard_slot_from_choice(matched_choice)
+
+    if not selected_slot:
+        raise ApiError(
+            status_code=409,
+            code="WEBCHAT_SUMMARY_SLOT_INVALID",
+            message="Nao consegui validar o horario escolhido. Selecione outro horario e tente novamente.",
+        )
+
+    if not conversation:
+        conversation = ensure_webchat_conversation(db, session=session, tenant=tenant)
+    from app.services.ai_autoresponder_service import _appointment_response_from_selected_slot, _format_unit_address
+
+    result = _appointment_response_from_selected_slot(
+        db,
+        conversation=conversation,
+        unit=unit,
+        selected_slot=selected_slot,
+        procedure_type=procedure_type,
+        period=str(progress_state.get("period") or "").strip() or None,
+        requested_date=date.fromisoformat(preferred_date_iso),
+    )
+    if result.get("mode") not in {"appointment_created", "appointment_already_created"}:
+        raise ApiError(
+            status_code=409,
+            code="WEBCHAT_SUMMARY_CONFIRMATION_FAILED",
+            message=str(result.get("response_text") or "Nao foi possivel concluir o agendamento agora."),
+        )
+
+    db.commit()
+    updated_summary = public_webchat_booking_summary(db, session=session, tenant=tenant)
+    return {
+        "summary": updated_summary,
+        "result": {
+            "status": "created" if result.get("mode") == "appointment_created" else "already_created",
+            "appointment_id": str(result.get("metadata", {}).get("appointment_id") or ""),
+            "unit_name": str(result.get("metadata", {}).get("unit_name") or unit.name),
+            "unit_address": str(result.get("metadata", {}).get("unit_address") or _format_unit_address(unit.address) or ""),
+            "procedure_type": str(result.get("metadata", {}).get("procedure_type") or procedure_type),
+            "starts_at": str(result.get("metadata", {}).get("starts_at_utc") or ""),
+            "patient_name": _clean_summary_text(patient.full_name, max_length=180),
+            "patient_email": _clean_summary_text(patient.email, max_length=180),
+            "birth_date": patient.birth_date.isoformat() if patient.birth_date else None,
+        },
+    }
 
 
 def post_public_webchat_message(
@@ -1077,6 +1429,28 @@ def post_public_webchat_message(
             code="WEBCHAT_PROCESSING_FAILED",
             message="Nao consegui processar sua mensagem agora. Tente novamente em instantes.",
         ) from exc
+
+    refreshed_conversation = db.get(Conversation, conversation.id)
+    refreshed_session = db.get(LinkFlowSession, session.id)
+    if refreshed_conversation and refreshed_session:
+        assistant_reply = _latest_webchat_assistant_reply_for_inbound(
+            db,
+            conversation=refreshed_conversation,
+            inbound_message_id=inbound.id,
+        )
+        if not assistant_reply:
+            assistant_reply = _create_webchat_fallback_reply(
+                db,
+                session=refreshed_session,
+                conversation=refreshed_conversation,
+                inbound_message=inbound,
+            )
+            if isinstance(ai_result, dict):
+                ai_result = {
+                    **ai_result,
+                    "fallback_reply_used": True,
+                    "fallback_outbound_message_id": str(assistant_reply.id),
+                }
 
     return {
         "status": "accepted",

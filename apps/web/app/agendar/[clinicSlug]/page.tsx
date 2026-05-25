@@ -8,6 +8,7 @@ import {
   CalendarDays,
   ChevronRight,
   CheckCircle2,
+  CheckCheck,
   ClipboardList,
   Info,
   Mail,
@@ -98,6 +99,8 @@ type PublicWebchatMessage = {
   status: string;
 };
 
+type PublicWebchatMessageVisualState = "pending" | "received";
+
 type PublicBookingSummaryField = {
   value: string | null;
   complete: boolean;
@@ -129,12 +132,33 @@ type PublicBookingSummary = {
     id: string | null;
     starts_at: string | null;
     confirmation_status: string | null;
+    unit_name?: string | null;
+    unit_address?: string | null;
+    patient_name?: string | null;
+    patient_email?: string | null;
+    birth_date?: string | null;
+    procedure_type?: string | null;
   };
   options: {
     units: Array<{ id: string; name: string }>;
     services?: Array<{ id: string; name: string }>;
     preferred_dates?: Array<{ id: string; date: string; label: string; description?: string | null }>;
     preferred_times?: Array<{ id: string; label: string; time?: string | null }>;
+  };
+};
+
+type PublicBookingConfirmationResult = {
+  summary: PublicBookingSummary;
+  result: {
+    status: "created" | "already_created";
+    appointment_id: string;
+    unit_name: string | null;
+    unit_address: string | null;
+    procedure_type: string | null;
+    starts_at: string | null;
+    patient_name: string | null;
+    patient_email: string | null;
+    birth_date: string | null;
   };
 };
 
@@ -156,6 +180,46 @@ function formatPublicMessageTime(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function estimateAssistantTypingDelay(messages: PublicWebchatMessage[]): number {
+  const totalCharacters = messages.reduce((count, message) => count + message.text.trim().length, 0);
+  if (totalCharacters <= 0) return 1200;
+  return Math.min(7000, Math.max(1200, 900 + totalCharacters * 45));
+}
+
+function getPatientMessageVisualState(status: string): PublicWebchatMessageVisualState {
+  return status === "received" ? "received" : "pending";
+}
+
+function reconcileIncomingPatientMessages(
+  current: PublicWebchatMessage[],
+  incoming: PublicWebchatMessage[],
+): PublicWebchatMessage[] {
+  if (!incoming.length) return current;
+  const next = [...current];
+
+  for (const incomingMessage of incoming) {
+    if (next.some((message) => message.id === incomingMessage.id)) {
+      continue;
+    }
+
+    const optimisticIndex = next.findIndex(
+      (message) =>
+        message.role === "patient"
+        && message.status === "pending"
+        && message.text.trim() === incomingMessage.text.trim(),
+    );
+
+    if (optimisticIndex >= 0) {
+      next[optimisticIndex] = incomingMessage;
+      continue;
+    }
+
+    next.push(incomingMessage);
+  }
+
+  return next;
 }
 
 function formatPublicDate(value: string | null): string {
@@ -224,6 +288,10 @@ function publicSessionUnavailableMessage(message: string): string {
     return "Esta conversa foi encerrada. Recarregue a pagina para iniciar um novo atendimento.";
   }
   return "Sua sessao expirou. Recarregue a pagina para iniciar um novo atendimento.";
+}
+
+function isTransientPublicSummaryError(message: string): boolean {
+  return /carregar o atendimento agora/i.test(message) || /internal server error/i.test(message) || /failed to fetch/i.test(message);
 }
 
 function readStoredWebchatSession(clinicSlug: string): PublicBookingSession | null {
@@ -303,6 +371,7 @@ function PublicWebchat({
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [assistantTyping, setAssistantTyping] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [chatError, setChatError] = useState<string | null>(null);
   const [contactOptionsOpen, setContactOptionsOpen] = useState(false);
@@ -311,9 +380,20 @@ function PublicWebchat({
   const openedRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const lastMessageId = messages.length ? messages[messages.length - 1]?.id : undefined;
+  const messagesRef = useRef<PublicWebchatMessage[]>([]);
+  const assistantTypingTimeoutRef = useRef<number | null>(null);
+  const patientReceiptTimeoutRef = useRef<number | null>(null);
+  const pendingAssistantMessageIdsRef = useRef<Set<string>>(new Set());
+  const nextAssistantTypingAtRef = useRef<number>(0);
+  const lastConfirmedMessageId = [...messages]
+    .reverse()
+    .find((message) => !(message.role === "patient" && message.status === "pending"))?.id;
   const token = session.public_access_token || "";
   const normalizedPatientName = String(patientName || "").trim();
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const loadMessages = useCallback(async (afterMessageId?: string) => {
     try {
@@ -323,13 +403,53 @@ function PublicWebchat({
         undefined,
         { publicAccessToken: token },
       );
-      setMessages((current) => {
-        const seen = new Set(current.map((message) => message.id));
-        const next = afterMessageId
-          ? [...current, ...response.data.filter((message) => !seen.has(message.id))]
-          : response.data;
-        return next;
-      });
+      const seen = new Set(messagesRef.current.map((message) => message.id));
+      const incoming = afterMessageId
+        ? response.data.filter(
+            (message) => !seen.has(message.id) && !pendingAssistantMessageIdsRef.current.has(message.id),
+          )
+        : response.data;
+      if (!afterMessageId) {
+        pendingAssistantMessageIdsRef.current.clear();
+        if (assistantTypingTimeoutRef.current) {
+          window.clearTimeout(assistantTypingTimeoutRef.current);
+          assistantTypingTimeoutRef.current = null;
+        }
+        setAssistantTyping(false);
+        setMessages(incoming);
+        setChatError(null);
+        return;
+      }
+
+      const immediateMessages = incoming.filter((message) => message.role !== "assistant");
+      const delayedAssistantMessages = incoming.filter((message) => message.role === "assistant");
+
+      if (immediateMessages.length) {
+        setMessages((current) => reconcileIncomingPatientMessages(current, immediateMessages));
+      }
+
+      if (delayedAssistantMessages.length) {
+        delayedAssistantMessages.forEach((message) => pendingAssistantMessageIdsRef.current.add(message.id));
+        if (assistantTypingTimeoutRef.current) {
+          window.clearTimeout(assistantTypingTimeoutRef.current);
+        }
+        const typingStartDelay = Math.max(0, nextAssistantTypingAtRef.current - Date.now());
+        const typingDelay = estimateAssistantTypingDelay(delayedAssistantMessages);
+        assistantTypingTimeoutRef.current = window.setTimeout(() => {
+          setAssistantTyping(true);
+          assistantTypingTimeoutRef.current = window.setTimeout(() => {
+            setMessages((latest) => {
+              const latestSeen = new Set(latest.map((message) => message.id));
+              const nextAssistantMessages = delayedAssistantMessages.filter((message) => !latestSeen.has(message.id));
+              return nextAssistantMessages.length ? [...latest, ...nextAssistantMessages] : latest;
+            });
+            delayedAssistantMessages.forEach((message) => pendingAssistantMessageIdsRef.current.delete(message.id));
+            assistantTypingTimeoutRef.current = null;
+            setAssistantTyping(false);
+          }, typingDelay);
+        }, typingStartDelay);
+      }
+
       setChatError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel atualizar o chat.";
@@ -341,6 +461,17 @@ function PublicWebchat({
       setLoadingMessages(false);
     }
   }, [onExpired, session.session_id, token]);
+
+  useEffect(() => {
+    return () => {
+      if (assistantTypingTimeoutRef.current) {
+        window.clearTimeout(assistantTypingTimeoutRef.current);
+      }
+      if (patientReceiptTimeoutRef.current) {
+        window.clearTimeout(patientReceiptTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!token || openedRef.current) return;
@@ -363,10 +494,11 @@ function PublicWebchat({
   useEffect(() => {
     if (!token) return;
     const interval = window.setInterval(() => {
-      void loadMessages(lastMessageId);
-    }, sending ? 1500 : 4000);
+      if (sending) return;
+      void loadMessages(lastConfirmedMessageId);
+    }, assistantTyping ? 1500 : 4000);
     return () => window.clearInterval(interval);
-  }, [lastMessageId, loadMessages, sending, token]);
+  }, [assistantTyping, lastConfirmedMessageId, loadMessages, sending, token]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -426,12 +558,23 @@ function PublicWebchat({
       role: "patient",
       text,
       created_at: optimisticCreatedAt,
-      status: "sending",
+      status: "pending",
     };
     setDraft("");
     setMessages((current) => [...current, optimisticMessage]);
     setSending(true);
+    setAssistantTyping(false);
     setChatError(null);
+    nextAssistantTypingAtRef.current = Date.now() + 5000;
+    if (patientReceiptTimeoutRef.current) {
+      window.clearTimeout(patientReceiptTimeoutRef.current);
+    }
+    patientReceiptTimeoutRef.current = window.setTimeout(() => {
+      setMessages((current) =>
+        current.map((message) => (message.id === clientMessageId ? { ...message, status: "received" } : message)),
+      );
+      patientReceiptTimeoutRef.current = null;
+    }, 3000);
     try {
       const response = await publicApiFetch<{ message: PublicWebchatMessage }>(
         `/public/booking/sessions/${session.session_id}/chat/messages`,
@@ -443,9 +586,7 @@ function PublicWebchat({
       );
       setMessages((current) => {
         const withoutOptimistic = current.filter((message) => message.id !== clientMessageId);
-        return withoutOptimistic.some((message) => message.id === response.message.id)
-          ? withoutOptimistic
-          : [...withoutOptimistic, response.message];
+        return reconcileIncomingPatientMessages(withoutOptimistic, [{ ...response.message, status: "received" }]);
       });
       await loadMessages(response.message.id);
       notifyDemoWebchatParent({
@@ -566,6 +707,7 @@ function PublicWebchat({
         ) : null}
         {messages.map((message) => {
           const isPatient = message.role === "patient";
+          const patientVisualState = isPatient ? getPatientMessageVisualState(message.status) : null;
           return (
             <div key={message.id} className={`flex ${isPatient ? "justify-end" : "justify-start"}`}>
               <div
@@ -581,13 +723,24 @@ function PublicWebchat({
                 <div
                   className={`mt-0.5 flex justify-end text-[11px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
                 >
-                  {formatPublicMessageTime(message.created_at)}
+                  <span>{formatPublicMessageTime(message.created_at)}</span>
+                  {isPatient ? (
+                    <CheckCheck
+                      className={cn(
+                        "ml-1.5 h-3.5 w-3.5",
+                        patientVisualState === "received"
+                          ? "text-[#53bdeb] sm:text-[#8fd3ff]"
+                          : "text-[#6b7c85] sm:text-white/55",
+                      )}
+                      aria-hidden="true"
+                    />
+                  ) : null}
                 </div>
               </div>
             </div>
           );
         })}
-        {sending ? (
+        {assistantTyping ? (
           <div className="flex justify-start">
             <div className="flex w-fit items-center gap-2 rounded-lg bg-[#202c33] px-2.5 py-2 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2.5 sm:text-xs sm:text-[var(--booking-muted)]">
               <span>Digitando</span>
@@ -700,12 +853,16 @@ function BookingSummaryPanel({
   loading,
   saving,
   onSave,
+  onConfirmBooking,
+  confirmingBooking,
   className,
 }: {
   summary: PublicBookingSummary | null;
   loading: boolean;
   saving: boolean;
   onSave: (draft: Partial<PublicBookingSummaryDraft>) => Promise<void>;
+  onConfirmBooking: () => Promise<void>;
+  confirmingBooking: boolean;
   className?: string;
 }) {
   const [activeEditor, setActiveEditor] = useState<string | null>(null);
@@ -742,7 +899,7 @@ function BookingSummaryPanel({
       value: summary?.fields.birth_date.value ? formatPublicDate(summary.fields.birth_date.value) : "Ainda nao informado",
       complete: summary?.fields.birth_date.complete || false,
       icon: CalendarDays,
-      action: null,
+      action: "edit" as const,
     },
     {
       key: "unit",
@@ -791,6 +948,14 @@ function BookingSummaryPanel({
     "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
   const inlineSelectClassName =
     "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+  const canConfirmBooking = Boolean(
+    summary?.fields.patient_name.complete
+    && summary?.fields.birth_date.complete
+    && summary?.fields.unit.complete
+    && summary?.fields.procedure.complete
+    && summary?.fields.preferred_date.complete
+    && summary?.fields.confirmed_slot.complete,
+  );
 
   return (
     <aside
@@ -909,6 +1074,30 @@ function BookingSummaryPanel({
                   </form>
                 ) : null}
 
+                {isEditing && card.key === "birth_date" ? (
+                  <form
+                    className="mt-2 flex gap-2"
+                    onSubmit={async (event) => {
+                      event.preventDefault();
+                      await handleQuickSave({ birth_date: draft.birth_date }, null);
+                    }}
+                  >
+                    <input
+                      type="date"
+                      value={draft.birth_date}
+                      onChange={(event) => setDraft((current) => ({ ...current, birth_date: event.target.value }))}
+                      className={inlineInputClassName}
+                    />
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-xs font-semibold text-white disabled:opacity-60"
+                    >
+                      Salvar
+                    </button>
+                  </form>
+                ) : null}
+
                 {isEditing && card.key === "unit" ? (
                   <select
                     value={draft.unit_id}
@@ -1000,6 +1189,19 @@ function BookingSummaryPanel({
         {loading && !summary ? (
           <p className="mt-3 text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
         ) : null}
+      </div>
+      <div className="mt-3 rounded-[18px] border border-white/65 bg-white/92 p-3 shadow-sm">
+        <p className="text-[11px] font-medium text-stone-500">
+          Nome, nascimento, unidade, servico, data e horario sao obrigatorios. E-mail continua opcional.
+        </p>
+        <button
+          type="button"
+          onClick={() => void onConfirmBooking()}
+          disabled={!canConfirmBooking || saving || confirmingBooking}
+          className="mt-3 inline-flex w-full items-center justify-center rounded-2xl bg-[var(--booking-primary)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {confirmingBooking ? "Agendando..." : "Agendar agora"}
+        </button>
       </div>
     </aside>
   );
@@ -1200,12 +1402,16 @@ export default function PublicBookingPage() {
   const [summary, setSummary] = useState<PublicBookingSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [savingSummary, setSavingSummary] = useState(false);
+  const [confirmingSummaryBooking, setConfirmingSummaryBooking] = useState(false);
+  const [bookingCompletedModal, setBookingCompletedModal] = useState<PublicBookingConfirmationResult["result"] | null>(null);
   const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
   const [contactPhoneDraft, setContactPhoneDraft] = useState("");
   const [savingContactPhone, setSavingContactPhone] = useState(false);
   const [contactPhoneError, setContactPhoneError] = useState<string | null>(null);
   const [bootstrapRetryTick, setBootstrapRetryTick] = useState(0);
   const mobileSummaryGestureRef = useRef<{ startX: number; action: "open" | "close" } | null>(null);
+  const summaryFailureCountRef = useRef(0);
+  const summaryManualChangesPendingRef = useRef(false);
 
   const scheduleBootstrapRetry = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -1360,10 +1566,16 @@ export default function PublicBookingPage() {
         undefined,
         { publicAccessToken: webchatToken },
       );
+      summaryFailureCountRef.current = 0;
       setSummary(response);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Nao foi possivel atualizar o resumo do agendamento.";
+      summaryFailureCountRef.current += 1;
+      const shouldInvalidate = shouldInvalidatePublicSession(message) && summaryFailureCountRef.current >= 3;
       if (shouldInvalidatePublicSession(message)) {
+        if (!shouldInvalidate || isTransientPublicSummaryError(message)) {
+          return;
+        }
         storeWebchatSession(clinicSlug, null);
         setSession(null);
         setError(publicSessionUnavailableMessage(message));
@@ -1385,7 +1597,9 @@ export default function PublicBookingPage() {
   useEffect(() => {
     setContactPhoneDraft(session?.contact_phone || "");
     setContactPhoneError(null);
-  }, [session?.contact_phone]);
+    summaryFailureCountRef.current = 0;
+    summaryManualChangesPendingRef.current = false;
+  }, [session?.contact_phone, session?.session_id]);
 
   useEffect(() => {
     if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
@@ -1465,7 +1679,7 @@ export default function PublicBookingPage() {
         setMobileSummaryOpen(true);
       }
       if (gesture.action === "close" && deltaX < -48) {
-        setMobileSummaryOpen(false);
+        handleCloseSummaryPanel();
       }
 
       mobileSummaryGestureRef.current = null;
@@ -1473,7 +1687,7 @@ export default function PublicBookingPage() {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
     },
-    [],
+    [handleCloseSummaryPanel],
   );
 
   const handleMobileSummaryGestureCancel = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -1482,6 +1696,25 @@ export default function PublicBookingPage() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }, []);
+
+  function handleCloseSummaryPanel() {
+    if (!mobileSummaryOpen) return;
+    setMobileSummaryOpen(false);
+    if (!summaryManualChangesPendingRef.current || !session || session.cta_mode !== "webchat" || !webchatToken) return;
+    summaryManualChangesPendingRef.current = false;
+    void publicApiFetch<PublicBookingSummary>(
+      `/public/booking/sessions/${session.session_id}/summary/followup`,
+      { method: "POST" },
+      { publicAccessToken: webchatToken },
+    )
+      .then((response) => {
+        setSummary(response);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Nao foi possivel continuar o atendimento pelo resumo.");
+      });
+  }
 
   useEffect(() => {
     if (!isWebchat) {
@@ -1505,16 +1738,38 @@ export default function PublicBookingPage() {
         `/public/booking/sessions/${session.session_id}/summary`,
         {
           method: "PATCH",
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ ...payload, dispatch_followup: false }),
         },
         { publicAccessToken: webchatToken },
       );
       setSummary(response);
+      summaryManualChangesPendingRef.current = true;
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nao foi possivel salvar os dados do agendamento.");
     } finally {
       setSavingSummary(false);
+    }
+  }
+
+  async function handleConfirmSummaryBooking() {
+    if (!session || session.cta_mode !== "webchat" || !webchatToken) return;
+    setConfirmingSummaryBooking(true);
+    try {
+      const response = await publicApiFetch<PublicBookingConfirmationResult>(
+        `/public/booking/sessions/${session.session_id}/summary/confirm`,
+        { method: "POST" },
+        { publicAccessToken: webchatToken },
+      );
+      setSummary(response.summary);
+      setBookingCompletedModal(response.result);
+      summaryManualChangesPendingRef.current = false;
+      setMobileSummaryOpen(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nao foi possivel concluir o agendamento agora.");
+    } finally {
+      setConfirmingSummaryBooking(false);
     }
   }
 
@@ -1626,7 +1881,7 @@ export default function PublicBookingPage() {
                   mobileSummaryOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
                 )}
                 aria-hidden="true"
-                onClick={() => setMobileSummaryOpen(false)}
+                onClick={handleCloseSummaryPanel}
               />
 
               <div className="pointer-events-none absolute inset-y-4 left-4 z-30 flex lg:hidden">
@@ -1640,7 +1895,7 @@ export default function PublicBookingPage() {
                 >
                   <button
                     type="button"
-                    onClick={() => setMobileSummaryOpen(false)}
+                    onClick={handleCloseSummaryPanel}
                     aria-label={sidePanelCloseLabel}
                     className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
                   >
@@ -1662,6 +1917,8 @@ export default function PublicBookingPage() {
                       loading={loadingSummary}
                       saving={savingSummary}
                       onSave={handleSaveSummary}
+                      onConfirmBooking={handleConfirmSummaryBooking}
+                      confirmingBooking={confirmingSummaryBooking}
                       className="h-full pt-14"
                     />
                   )}
@@ -1703,6 +1960,8 @@ export default function PublicBookingPage() {
                 loading={loadingSummary}
                 saving={savingSummary}
                 onSave={handleSaveSummary}
+                onConfirmBooking={handleConfirmSummaryBooking}
+                confirmingBooking={confirmingSummaryBooking}
                 className="h-full"
               />
             )}
@@ -1782,6 +2041,53 @@ export default function PublicBookingPage() {
               onPhoneChange={(value) => setContactPhoneDraft(normalizePhoneDraft(value))}
               onSubmit={handleCaptureContactPhone}
             />
+          ) : null}
+          {bookingCompletedModal ? (
+            <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#0b141a]/72 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-md rounded-[28px] border border-white/70 bg-white p-6 shadow-[0_30px_80px_rgba(15,23,42,0.28)]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700">Agendamento concluido</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-stone-950">Seu horario foi confirmado.</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBookingCompletedModal(null)}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 text-stone-500 transition hover:text-stone-800"
+                    aria-label="Fechar confirmacao"
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="mt-5 space-y-2 rounded-[22px] border border-emerald-100 bg-emerald-50/80 p-4 text-sm text-stone-800">
+                  <p><span className="font-semibold">Paciente:</span> {bookingCompletedModal.patient_name || "Paciente"}</p>
+                  <p><span className="font-semibold">Servico:</span> {bookingCompletedModal.procedure_type || "Agendamento confirmado"}</p>
+                  <p><span className="font-semibold">Horario:</span> {formatPublicDateTime(bookingCompletedModal.starts_at)}</p>
+                  <p><span className="font-semibold">Unidade:</span> {bookingCompletedModal.unit_name || clinicName}</p>
+                  {bookingCompletedModal.unit_address ? (
+                    <p><span className="font-semibold">Localizacao:</span> {bookingCompletedModal.unit_address}</p>
+                  ) : null}
+                  {bookingCompletedModal.patient_email ? (
+                    <p><span className="font-semibold">E-mail:</span> {bookingCompletedModal.patient_email}</p>
+                  ) : null}
+                </div>
+                <p className="mt-4 text-sm leading-6 text-[var(--booking-muted)]">
+                  Guarde essas informacoes para comparecer no horario combinado. Se precisar de ajuda, fale com a clinica pelo canal oficial.
+                </p>
+                {profile?.clinic.contact_phone ? (
+                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+                    Contato da clinica: {profile.clinic.contact_phone}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setBookingCompletedModal(null)}
+                  className="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-[var(--booking-primary)] px-4 py-3 text-sm font-semibold text-white"
+                >
+                  Entendi
+                </button>
+              </div>
+            </div>
           ) : null}
         </section>
 

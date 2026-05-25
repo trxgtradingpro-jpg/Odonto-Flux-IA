@@ -23,11 +23,13 @@ from app.services.link_flow_service import (
     register_link_flow_event,
 )
 from app.services.webchat_service import (
+    confirm_public_webchat_booking_summary,
     create_webchat_link_flow_session,
     list_public_webchat_messages,
     post_public_webchat_message,
     public_webchat_booking_summary,
     public_webchat_session_state,
+    send_public_webchat_summary_followup,
     update_public_webchat_booking_summary,
     validate_public_webchat_session,
 )
@@ -63,6 +65,7 @@ class PublicWebchatSummaryUpdateInput(BaseModel):
     unit_id: UUID | None = None
     preferred_date: str | None = Field(default=None, max_length=10)
     preferred_time: str | None = Field(default=None, max_length=80)
+    dispatch_followup: bool = False
 
 
 class PublicBookingContactInput(BaseModel):
@@ -499,6 +502,43 @@ def patch_public_webchat_summary(
         unit_id=payload.unit_id,
         preferred_date=payload.preferred_date,
         preferred_time=payload.preferred_time,
+        dispatch_followup=payload.dispatch_followup,
+    )
+
+
+@router.post("/sessions/{session_id}/summary/followup")
+def create_public_webchat_summary_followup(
+    session_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    session, tenant = validate_public_webchat_session(
+        db,
+        session_id=session_id,
+        public_access_token=_public_access_token(request),
+    )
+    return send_public_webchat_summary_followup(
+        db,
+        session=session,
+        tenant=tenant,
+    )
+
+
+@router.post("/sessions/{session_id}/summary/confirm")
+def confirm_public_webchat_summary(
+    session_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    session, tenant = validate_public_webchat_session(
+        db,
+        session_id=session_id,
+        public_access_token=_public_access_token(request),
+    )
+    return confirm_public_webchat_booking_summary(
+        db,
+        session=session,
+        tenant=tenant,
     )
 
 
