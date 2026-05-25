@@ -274,12 +274,14 @@ function PublicWebchat({
   session,
   onExpired,
   embedded = false,
+  forceDesktopLayout = false,
 }: {
   clinicSlug: string;
   clinicName: string;
   session: PublicBookingSession;
   onExpired: (message?: string) => void;
   embedded?: boolean;
+  forceDesktopLayout?: boolean;
 }) {
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -437,30 +439,41 @@ function PublicWebchat({
     <div
       data-public-webchat-shell="true"
       className={cn(
-        "relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#0b141a] font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
+        "relative flex h-full min-h-0 flex-1 flex-col overflow-hidden font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
         embedded
-          ? "sm:bg-white"
-          : "sm:rounded-[30px] sm:border sm:border-white/60 sm:bg-white/82 sm:text-[var(--booking-text)] sm:shadow-[0_22px_70px_rgba(15,23,42,0.12)] sm:backdrop-blur",
+          ? "bg-white text-[var(--booking-text)]"
+          : forceDesktopLayout
+            ? "rounded-[30px] border border-white/60 bg-white/82 text-[var(--booking-text)] shadow-[0_22px_70px_rgba(15,23,42,0.12)] backdrop-blur"
+            : "bg-[#0b141a] sm:rounded-[30px] sm:border sm:border-white/60 sm:bg-white/82 sm:text-[var(--booking-text)] sm:shadow-[0_22px_70px_rgba(15,23,42,0.12)] sm:backdrop-blur",
       )}
     >
-      {!embedded ? <div data-public-webchat-header="true" className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#1f2c33] bg-[#111b21] px-2.5 py-2 text-[#e9edef] sm:h-auto sm:border-stone-200 sm:bg-white/92 sm:px-5 sm:py-3 sm:text-stone-900">
-        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#202c33] text-[#00a884] shadow-sm sm:h-11 sm:w-11 sm:bg-[var(--booking-primary)] sm:text-white">
+      {!embedded ? <div data-public-webchat-header="true" className={cn(
+        "flex shrink-0 items-center justify-between gap-2 border-b px-5 py-3 text-stone-900",
+        forceDesktopLayout ? "h-auto border-stone-200 bg-white/92" : "h-16 border-[#1f2c33] bg-[#111b21] px-2.5 py-2 text-[#e9edef] sm:h-auto sm:border-stone-200 sm:bg-white/92 sm:px-5 sm:py-3 sm:text-stone-900",
+      )}>
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={cn(
+            "flex shrink-0 items-center justify-center rounded-full shadow-sm",
+            forceDesktopLayout ? "h-11 w-11 bg-[var(--booking-primary)] text-white" : "h-10 w-10 bg-[#202c33] text-[#00a884] sm:h-11 sm:w-11 sm:bg-[var(--booking-primary)] sm:text-white",
+          )}>
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
-          <div className="min-w-0 leading-tight [&>p:nth-child(4)]:hidden sm:[&>p:nth-child(4)]:block">
-            <p data-testid="public-webchat-mobile-title" data-public-webchat-mobile-title="true" className="truncate text-[40px] font-normal leading-[2.75rem] text-[#e9edef] sm:hidden">{clinicName}</p>
-            <p data-public-webchat-desktop-title="true" className="hidden truncate text-[28px] font-semibold text-stone-900 sm:block">Atendimento online</p>
-            <p data-public-webchat-mobile-subtitle="true" className="truncate text-[24px] leading-8 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
-            <p data-public-webchat-desktop-subtitle="true" className="truncate text-[24px] text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
+          <div className="min-w-0 leading-tight">
+            {!forceDesktopLayout ? <p data-testid="public-webchat-mobile-title" data-public-webchat-mobile-title="true" className="truncate text-[40px] font-normal leading-[2.75rem] text-[#e9edef] sm:hidden">{clinicName}</p> : null}
+            <p data-public-webchat-desktop-title="true" className={cn("truncate font-semibold text-stone-900", forceDesktopLayout ? "block text-sm" : "hidden text-sm sm:block")}>Atendimento online</p>
+            {!forceDesktopLayout ? <p data-public-webchat-mobile-subtitle="true" className="truncate text-[24px] leading-8 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p> : null}
+            <p data-public-webchat-desktop-subtitle="true" className={cn("truncate text-[var(--booking-muted)]", forceDesktopLayout ? "text-xs" : "text-[24px] sm:text-xs")}>{clinicName} · canal oficial da clinica</p>
           </div>
         </div>
-        <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
+        {!forceDesktopLayout ? <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
           <Video className="h-6 w-6" />
           <Phone className="h-6 w-6" />
           <MoreVertical className="h-6 w-6" />
-        </div>
-        <div data-public-webchat-online-badge="true" className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
+        </div> : null}
+        <div data-public-webchat-online-badge="true" className={cn(
+          "rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold uppercase tracking-[0.18em] text-emerald-700",
+          forceDesktopLayout ? "block text-[11px]" : "hidden text-[22px] sm:block sm:text-[11px]",
+        )}>
           Online
         </div>
       </div> : null}
@@ -469,23 +482,23 @@ function PublicWebchat({
         ref={viewportRef}
         data-public-webchat-thread="true"
         className={cn(
-          "whatsapp-chat-thread-surface-dark min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-2",
-          embedded
+          forceDesktopLayout ? "whatsapp-chat-thread-surface min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5" : "whatsapp-chat-thread-surface-dark min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-2",
+          !forceDesktopLayout && (embedded
             ? "sm:space-y-4 sm:px-5 sm:py-4"
-            : "sm:space-y-4 sm:px-5 sm:py-5",
+            : "sm:space-y-4 sm:px-5 sm:py-5"),
         )}
         style={{
           paddingBottom: keyboardInset ? `${keyboardInset + 72}px` : undefined,
         }}
       >
         {loadingMessages ? (
-          <div className="w-fit max-w-[80%] rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[28px] sm:text-[var(--booking-muted)]">
+          <div className="w-fit max-w-[80%] rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:text-[var(--booking-muted)]">
             Carregando conversa...
           </div>
         ) : null}
         {!loadingMessages && messages.length === 0 ? (
           <div className="flex justify-start">
-            <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[28px] sm:leading-[48px] sm:text-[var(--booking-text)]">
+            <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:leading-6 sm:text-[var(--booking-text)]">
               <p className="font-medium text-[#e9edef] sm:text-stone-900">Oi, eu sou a assistente de agendamento.</p>
               <p className="mt-1 text-[#8696a0] sm:text-[var(--booking-muted)]">
                 Me conte o que voce precisa e eu vou te ajudar por aqui. Exemplo: Quero agendar uma avaliacao esta semana.
@@ -500,7 +513,7 @@ function PublicWebchat({
               <div
                 data-testid="public-webchat-message-bubble"
                 className={[
-                  "w-fit max-w-[80%] rounded-lg px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[78%] sm:rounded-[24px] sm:px-4 sm:py-3 sm:text-[28px] sm:leading-[48px]",
+                  "w-fit max-w-[80%] rounded-lg px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[78%] sm:rounded-[24px] sm:px-4 sm:py-3 sm:text-sm sm:leading-6",
                   isPatient
                     ? "rounded-br-[3px] bg-[#005c4b] sm:rounded-br-[10px] sm:bg-[var(--booking-primary)] sm:text-white"
                     : "rounded-bl-[3px] bg-[#202c33] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:text-[var(--booking-text)]",
@@ -508,7 +521,7 @@ function PublicWebchat({
               >
                 <p className="whitespace-pre-wrap break-words">{message.text}</p>
                 <div
-                  className={`mt-0.5 flex justify-end text-[22px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
+                  className={`mt-0.5 flex justify-end text-[22px] sm:text-[11px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
                 >
                   {formatPublicMessageTime(message.created_at)}
                 </div>
@@ -518,7 +531,7 @@ function PublicWebchat({
         })}
         {sending ? (
           <div className="flex justify-start">
-            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-[24px] sm:text-[var(--booking-muted)]">
+            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-xs sm:text-[var(--booking-muted)]">
               Recebi sua mensagem. Estou preparando a resposta...
             </div>
           </div>
@@ -536,7 +549,7 @@ function PublicWebchat({
         }}
       >
         {chatError ? (
-          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[26px] leading-10 text-amber-100 sm:mb-3 sm:rounded-2xl sm:border-amber-200 sm:bg-amber-50 sm:px-4 sm:py-3 sm:text-[28px] sm:text-amber-900">
+          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[26px] leading-10 text-amber-100 sm:mb-3 sm:rounded-2xl sm:border-amber-200 sm:bg-amber-50 sm:px-4 sm:py-3 sm:text-sm sm:text-amber-900">
             {chatError}
           </p>
         ) : null}
@@ -553,9 +566,9 @@ function PublicWebchat({
               maxLength={1200}
               placeholder="Digite sua mensagem..."
               style={{ fontSize: "32px" }}
-              className="h-full min-w-0 flex-1 border-none bg-transparent text-[32px] leading-10 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-[28px] sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
+              className="h-full min-w-0 flex-1 border-none bg-transparent text-[32px] leading-10 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-sm sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
             />
-            <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" />
+            {!forceDesktopLayout ? <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" /> : null}
           </div>
           <button
             type="submit"
@@ -676,9 +689,9 @@ function BookingSummaryPanel({
   }
 
   const inlineInputClassName =
-    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] sm:text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
   const inlineSelectClassName =
-    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] sm:text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
 
   return (
     <aside
@@ -717,7 +730,7 @@ function BookingSummaryPanel({
                         {card.label}
                       </p>
                       <p
-                        className={`mt-1 break-words text-[22px] font-medium leading-8 sm:text-[24px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                        className={`mt-1 break-words text-[22px] font-medium leading-8 sm:text-[12px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
                       >
                         {card.value}
                       </p>
@@ -765,7 +778,7 @@ function BookingSummaryPanel({
                     <button
                       type="submit"
                       disabled={saving}
-                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] font-semibold text-white disabled:opacity-60"
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] sm:text-xs font-semibold text-white disabled:opacity-60"
                     >
                       Salvar
                     </button>
@@ -790,7 +803,7 @@ function BookingSummaryPanel({
                     <button
                       type="submit"
                       disabled={saving}
-                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] font-semibold text-white disabled:opacity-60"
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] sm:text-xs font-semibold text-white disabled:opacity-60"
                     >
                       Salvar
                     </button>
@@ -886,7 +899,7 @@ function BookingSummaryPanel({
         </div>
 
         {loading && !summary ? (
-          <p className="mt-3 text-[24px] text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
+          <p className="mt-3 text-[24px] sm:text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
         ) : null}
       </div>
     </aside>
@@ -907,19 +920,19 @@ function WhatsAppOverviewPanel({ className }: { className?: string }) {
         className,
       )}
     >
-      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
+      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[22px] sm:text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
         <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
         Canal protegido
       </div>
-      <h2 className="mt-4 text-[48px] font-semibold leading-tight text-stone-950">Agendamento oficial da clinica</h2>
-      <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">
+      <h2 className="mt-4 text-[48px] sm:text-2xl font-semibold leading-tight text-stone-950">Agendamento oficial da clinica</h2>
+      <p className="mt-2 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">
         Essa entrada continua pelo WhatsApp do sistema, com o mesmo padrao operacional usado pela clinica.
       </p>
       <div className="mt-4 space-y-3">
         {items.map((item) => (
           <div key={item} className="flex gap-3">
             <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-[var(--booking-primary)]" aria-hidden="true" />
-            <p className="text-[28px] leading-[48px] text-[var(--booking-muted)]">{item}</p>
+            <p className="text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">{item}</p>
           </div>
         ))}
       </div>
@@ -946,11 +959,11 @@ function WhatsAppCtaPanel({
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-[28px] font-semibold text-stone-900">WhatsApp oficial do sistema</p>
-            <p className="truncate text-[24px] text-[var(--booking-muted)]">A conversa continua no mesmo canal da operacao da clinica</p>
+            <p className="truncate text-[28px] sm:text-sm font-semibold text-stone-900">WhatsApp oficial do sistema</p>
+            <p className="truncate text-[24px] sm:text-xs text-[var(--booking-muted)]">A conversa continua no mesmo canal da operacao da clinica</p>
           </div>
         </div>
-        <div className="rounded-full border border-stone-200 bg-white px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-stone-600">
+        <div className="rounded-full border border-stone-200 bg-white px-3 py-1 text-[22px] sm:text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-600">
           Direcionamento oficial
         </div>
       </div>
@@ -958,19 +971,19 @@ function WhatsAppCtaPanel({
       <div className="whatsapp-chat-thread-surface flex flex-1 flex-col justify-between p-5">
         <div className="space-y-4">
           <div className="max-w-[86%] rounded-[24px] rounded-bl-[10px] border border-stone-200 bg-white px-4 py-3 shadow-sm">
-            <p className="text-[28px] font-medium text-stone-900">Seu atendimento esta pronto.</p>
-            <p className="mt-1 text-[28px] leading-[48px] text-[var(--booking-muted)]">
+            <p className="text-[28px] sm:text-sm font-medium text-stone-900">Seu atendimento esta pronto.</p>
+            <p className="mt-1 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">
               Ao tocar no botao abaixo, voce continua no WhatsApp oficial e a clinica recebe sua conversa no mesmo inbox do sistema.
             </p>
           </div>
 
           <div className="flex justify-end">
-            <div className="max-w-[78%] rounded-[24px] rounded-br-[10px] bg-[var(--booking-primary)] px-4 py-3 text-[28px] text-white shadow-sm">
+            <div className="max-w-[78%] rounded-[24px] rounded-br-[10px] bg-[var(--booking-primary)] px-4 py-3 text-[28px] sm:text-sm text-white shadow-sm">
               Quero falar com a assistente da clinica.
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-dashed border-stone-200 bg-white/78 px-4 py-4 text-[28px] leading-[48px] text-[var(--booking-muted)]">
+          <div className="rounded-[24px] border border-dashed border-stone-200 bg-white/78 px-4 py-4 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">
             Essa experiencia espelha o fluxo oficial da clinica: link verificado, conversa rastreada e continuidade da jornada de agendamento.
           </div>
         </div>
@@ -979,7 +992,7 @@ function WhatsAppCtaPanel({
           type="button"
           onClick={handleOpenWhatsApp}
           disabled={loading || opening}
-          className="mt-6 inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-6 inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] sm:text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {opening ? "Abrindo WhatsApp..." : buttonLabel}
           <MessageCircle className="h-5 w-5" aria-hidden="true" />
@@ -1030,17 +1043,17 @@ function PublicPhoneGate({
         data-testid="public-phone-gate-card"
         className="w-full max-w-md rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
       >
-        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[22px] sm:text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {badgeLabel}
         </div>
-        <h2 className="mt-4 text-[48px] font-semibold leading-tight text-stone-950">{heading}</h2>
-        <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{descriptionPrimary}</p>
-        <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{descriptionSecondary}</p>
+        <h2 className="mt-4 text-[48px] sm:text-2xl font-semibold leading-tight text-stone-950">{heading}</h2>
+        <p className="mt-2 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">{descriptionPrimary}</p>
+        <p className="mt-2 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">{descriptionSecondary}</p>
 
         <form onSubmit={onSubmit} className="mt-5 space-y-4">
           <label className="block">
-            <span className="mb-2 block text-[28px] font-medium text-stone-800">{phoneLabel}</span>
+            <span className="mb-2 block text-[28px] sm:text-sm font-medium text-stone-800">{phoneLabel}</span>
             <input
               autoFocus
               type="tel"
@@ -1049,18 +1062,18 @@ function PublicPhoneGate({
               value={phone}
               onChange={(event) => onPhoneChange(event.target.value)}
               placeholder="Ex.: (11) 99999-1111"
-              className="h-14 w-full rounded-2xl border border-stone-200 bg-white px-4 text-[28px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--booking-primary)_18%,transparent)]"
+              className="h-14 w-full rounded-2xl border border-stone-200 bg-white px-4 text-[28px] sm:text-sm text-stone-900 outline-none transition focus:border-[var(--booking-primary)] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--booking-primary)_18%,transparent)]"
             />
           </label>
 
           {error ? (
-            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[28px] text-amber-900">{error}</p>
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[28px] sm:text-sm text-amber-900">{error}</p>
           ) : null}
 
           <button
             type="submit"
             disabled={!phone.trim() || saving}
-            className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] sm:text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitLabel}
             <ArrowRight className="h-5 w-5" aria-hidden="true" />
@@ -1317,6 +1330,7 @@ export default function PublicBookingPage() {
 
   const clinicName = profile?.clinic.name || session?.clinic.name || "clinica";
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
+  const forceDesktopLayout = true;
   const isDemoEmbeddedWebchat = isWebchat && isDemoEmbeddedRequest;
   const useOverviewSidePanel = !isWebchat || isDemoEmbeddedWebchat;
   const sidePanelHandleText = useOverviewSidePanel ? "Canal" : "Resumo";
@@ -1451,8 +1465,10 @@ export default function PublicBookingPage() {
       className={cn(
         "box-border overflow-hidden text-[var(--booking-text)]",
         isWebchat
-          ? "h-[100dvh] bg-[#0b141a] p-0 sm:bg-[var(--booking-background)] sm:px-6 sm:py-5 lg:px-10"
-          : "h-[100dvh] bg-[var(--booking-background)] px-4 py-4 sm:px-6 sm:py-5 lg:px-10",
+          ? forceDesktopLayout
+            ? "h-[100dvh] overflow-auto bg-[var(--booking-background)] px-6 py-5 lg:px-10"
+            : "h-[100dvh] bg-[#0b141a] p-0 sm:bg-[var(--booking-background)] sm:px-6 sm:py-5 lg:px-10"
+          : "h-[100dvh] overflow-auto bg-[var(--booking-background)] px-6 py-5 lg:px-10",
       )}
       style={pageStyle}
     >
@@ -1461,11 +1477,13 @@ export default function PublicBookingPage() {
         className={cn(
           "box-border flex h-full w-full flex-col overflow-hidden",
           isWebchat
-            ? "bg-[#0b141a] sm:mx-auto sm:max-w-7xl sm:rounded-[34px] sm:border sm:border-white/70 sm:bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] sm:shadow-[0_28px_90px_rgba(15,23,42,0.12)] sm:backdrop-blur"
+            ? forceDesktopLayout
+              ? "mx-auto min-w-[1100px] max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur"
+              : "bg-[#0b141a] sm:mx-auto sm:max-w-7xl sm:rounded-[34px] sm:border sm:border-white/70 sm:bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] sm:shadow-[0_28px_90px_rgba(15,23,42,0.12)] sm:backdrop-blur"
             : "mx-auto max-w-7xl rounded-[34px] border border-white/70 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.96),_rgba(242,247,245,0.94)_42%,_rgba(233,238,236,0.97))] shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur",
         )}
       >
-        <header data-public-webchat-page-header={isWebchat ? "true" : undefined} className={cn("border-b border-white/60 px-5 py-5 sm:px-7", isWebchat && "hidden sm:block")}>
+        <header data-public-webchat-page-header={isWebchat ? "true" : undefined} className={cn("border-b border-white/60 px-5 py-5 sm:px-7", isWebchat && !forceDesktopLayout && "hidden sm:block")}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-3">
@@ -1484,12 +1502,12 @@ export default function PublicBookingPage() {
                   )}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[22px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
-                  <h1 className="truncate text-[48px] font-semibold leading-tight sm:text-[60px]">{clinicName}</h1>
+                  <p className="text-[22px] sm:text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
+                  <h1 className="truncate text-[48px] font-semibold leading-tight sm:text-3xl">{clinicName}</h1>
                 </div>
               </div>
             </div>
-            <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-[28px] font-medium text-[var(--booking-muted)] shadow-sm">
+            <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-[28px] sm:text-sm font-medium text-[var(--booking-muted)] shadow-sm">
               Link verificado da clinica
             </div>
           </div>
@@ -1499,10 +1517,14 @@ export default function PublicBookingPage() {
           data-public-webchat-section={isWebchat ? "true" : undefined}
           className={cn(
             "relative flex min-h-0 flex-1 overflow-hidden",
-            isWebchat ? "p-0 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6" : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
+            isWebchat
+              ? forceDesktopLayout
+                ? "grid grid-cols-[360px_minmax(0,1fr)] gap-4 p-6"
+                : "p-0 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6"
+              : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
           )}
         >
-          {isWebchat ? (
+          {isWebchat && !forceDesktopLayout ? (
             <>
               <div
                 className={cn(
@@ -1526,7 +1548,7 @@ export default function PublicBookingPage() {
                     type="button"
                     onClick={() => setMobileSummaryOpen(false)}
                     aria-label={sidePanelCloseLabel}
-                    className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-[24px] font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
+                    className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-[24px] sm:text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
                   </button>
@@ -1568,7 +1590,7 @@ export default function PublicBookingPage() {
                 <span className="flex items-center gap-2">
                   <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span
-                    className="text-[20px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
+                    className="text-[20px] sm:text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
                     style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
                   >
                     {sidePanelHandleText}
@@ -1586,7 +1608,7 @@ export default function PublicBookingPage() {
             </>
           ) : null}
 
-          <div className="hidden min-h-0 lg:flex">
+          <div className={cn("min-h-0", forceDesktopLayout ? "flex" : "hidden lg:flex")}>
             {useOverviewSidePanel ? (
               <WhatsAppOverviewPanel className="h-full" />
             ) : (
@@ -1606,6 +1628,7 @@ export default function PublicBookingPage() {
                 clinicSlug={clinicSlug}
                 clinicName={clinicName}
                 session={session}
+                forceDesktopLayout={forceDesktopLayout}
                 onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);
@@ -1627,10 +1650,10 @@ export default function PublicBookingPage() {
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--booking-border)] bg-white shadow-sm">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--booking-primary)] border-r-transparent" />
                   </div>
-                  <p className="mt-4 text-[36px] font-semibold text-stone-900">
+                  <p className="mt-4 text-[36px] sm:text-lg font-semibold text-stone-900">
                     {error ? "Reconectando atendimento..." : "Carregando atendimento..."}
                   </p>
-                  <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">
+                  <p className="mt-2 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">
                     {error
                       ? "A conexao oscilou, mas a demo continua tentando abrir o chat automaticamente."
                       : "Preparando a conversa oficial da clinica para voce e tentando novamente automaticamente ate conectar."}
@@ -1644,8 +1667,8 @@ export default function PublicBookingPage() {
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm">
                     <Info size={20} />
                   </div>
-                  <p className="mt-4 text-[36px] font-semibold text-stone-900">Chat do site indisponível agora</p>
-                  <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{publicBookingBlockingMessage}</p>
+                  <p className="mt-4 text-[36px] sm:text-lg font-semibold text-stone-900">Chat do site indisponível agora</p>
+                  <p className="mt-2 text-[28px] leading-[48px] sm:text-sm sm:leading-6 text-[var(--booking-muted)]">{publicBookingBlockingMessage}</p>
                 </div>
               </div>
             ) : null}
