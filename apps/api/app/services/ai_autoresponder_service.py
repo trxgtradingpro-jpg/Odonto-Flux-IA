@@ -5064,6 +5064,56 @@ def _build_services_overview_menu_response(
     }
 
 
+def _is_service_price_question(text: str) -> bool:
+    normalized = _normalize_for_match(text or "")
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in ("preco", "precos", "valor", "valores", "custa", "custam"))
+
+
+def _build_service_price_detail_response(
+    db: Session,
+    *,
+    conversation: Conversation,
+    service_name: str,
+    session_token: str | None = None,
+) -> dict[str, Any] | None:
+    knowledge_base = get_knowledge_base_global_config(db, tenant_id=conversation.tenant_id)
+    services = _normalize_services((knowledge_base or {}).get("services"))
+    service_name_normalized = _normalize_for_match(service_name)
+    selected_service = next(
+        (
+            service
+            for service in services
+            if _normalize_for_match(service.get("name")) == service_name_normalized
+        ),
+        None,
+    )
+    if not selected_service:
+        return None
+
+    details = [f"Sobre {selected_service['name']}:"]
+    if selected_service.get("description"):
+        details.append(str(selected_service["description"]))
+    if selected_service.get("price_note"):
+        details.append(f"Valor: {selected_service['price_note']}")
+    else:
+        details.append("No momento eu nao encontrei um valor cadastrado para esse servico.")
+    if selected_service.get("duration_note"):
+        details.append(f"Duracao: {selected_service['duration_note']}")
+    details.append("Se quiser, eu tambem posso continuar seu agendamento por aqui.")
+
+    return {
+        "mode": "services_menu_service_price_detail",
+        "response_text": "\n".join(details),
+        "metadata": {
+            "reason": "service_price_detail_requested",
+            "service_selected": selected_service["name"],
+            "session_token": session_token,
+        },
+    }
+
+
 def _build_post_booking_options_payload() -> tuple[str, dict[str, Any]]:
     text_body = (
         "Seu agendamento já está confirmado. Se quiser, posso te passar mais detalhes "
@@ -6657,7 +6707,7 @@ def _wizard_select_service(token: str, services: list[str]) -> str | None:
         return None
     for service in services:
         service_norm = _normalize_for_match(service)
-        if normalized == service_norm or normalized in service_norm:
+        if normalized == service_norm or normalized in service_norm or service_norm in normalized:
             return service
     return None
 
@@ -7531,6 +7581,15 @@ def _try_booking_wizard_response(
             services = latest_scheduling.get("services") if isinstance(latest_scheduling.get("services"), list) else []
             services = [str(item).strip() for item in services if str(item or "").strip()]
             selected_service = _wizard_select_service(selection_token, services)
+            if selected_service and _is_service_price_question(inbound_text):
+                price_response = _build_service_price_detail_response(
+                    db,
+                    conversation=conversation,
+                    service_name=selected_service,
+                    session_token=latest_session_token,
+                )
+                if price_response:
+                    return price_response
             if not selected_service:
                 return _wizard_build_service_step_response(
                     db,
