@@ -449,10 +449,10 @@ function PublicWebchat({
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0 leading-tight [&>p:nth-child(4)]:hidden sm:[&>p:nth-child(4)]:block">
-            <p data-testid="public-webchat-mobile-title" data-public-webchat-mobile-title="true" className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
-            <p data-public-webchat-desktop-title="true" className="hidden truncate text-sm font-semibold text-stone-900 sm:block">Atendimento online</p>
-            <p data-public-webchat-mobile-subtitle="true" className="truncate text-[12px] leading-4 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
-            <p data-public-webchat-desktop-subtitle="true" className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
+            <p data-testid="public-webchat-mobile-title" data-public-webchat-mobile-title="true" className="truncate text-[40px] font-normal leading-[2.75rem] text-[#e9edef] sm:hidden">{clinicName}</p>
+            <p data-public-webchat-desktop-title="true" className="hidden truncate text-[28px] font-semibold text-stone-900 sm:block">Atendimento online</p>
+            <p data-public-webchat-mobile-subtitle="true" className="truncate text-[24px] leading-8 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
+            <p data-public-webchat-desktop-subtitle="true" className="truncate text-[24px] text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
           </div>
         </div>
         <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
@@ -460,7 +460,7 @@ function PublicWebchat({
           <Phone className="h-6 w-6" />
           <MoreVertical className="h-6 w-6" />
         </div>
-        <div data-public-webchat-online-badge="true" className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
+        <div data-public-webchat-online-badge="true" className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
           Online
         </div>
       </div> : null}
@@ -479,13 +479,13 @@ function PublicWebchat({
         }}
       >
         {loadingMessages ? (
-          <div className="w-fit max-w-[80%] rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:text-[var(--booking-muted)]">
+          <div className="w-fit max-w-[80%] rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[28px] sm:text-[var(--booking-muted)]">
             Carregando conversa...
           </div>
         ) : null}
         {!loadingMessages && messages.length === 0 ? (
           <div className="flex justify-start">
-            <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[16px] leading-[21px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:leading-6 sm:text-[var(--booking-text)]">
+            <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-[28px] sm:leading-[48px] sm:text-[var(--booking-text)]">
               <p className="font-medium text-[#e9edef] sm:text-stone-900">Oi, eu sou a assistente de agendamento.</p>
               <p className="mt-1 text-[#8696a0] sm:text-[var(--booking-muted)]">
                 Me conte o que voce precisa e eu vou te ajudar por aqui. Exemplo: Quero agendar uma avaliacao esta semana.
@@ -500,7 +500,7 @@ function PublicWebchat({
               <div
                 data-testid="public-webchat-message-bubble"
                 className={[
-                  "w-fit max-w-[80%] rounded-lg px-2.5 py-1.5 text-[16px] leading-[21px] text-[#e9edef] shadow-sm sm:max-w-[78%] sm:rounded-[24px] sm:px-4 sm:py-3 sm:text-sm sm:leading-6",
+                  "w-fit max-w-[80%] rounded-lg px-2.5 py-1.5 text-[32px] leading-[42px] text-[#e9edef] shadow-sm sm:max-w-[78%] sm:rounded-[24px] sm:px-4 sm:py-3 sm:text-[28px] sm:leading-[48px]",
                   isPatient
                     ? "rounded-br-[3px] bg-[#005c4b] sm:rounded-br-[10px] sm:bg-[var(--booking-primary)] sm:text-white"
                     : "rounded-bl-[3px] bg-[#202c33] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:text-[var(--booking-text)]",
@@ -508,7 +508,7 @@ function PublicWebchat({
               >
                 <p className="whitespace-pre-wrap break-words">{message.text}</p>
                 <div
-                  className={`mt-0.5 flex justify-end text-[11px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
+                  className={`mt-0.5 flex justify-end text-[22px] leading-none sm:mt-2 ${isPatient ? "text-[#aebac1] sm:text-white/80" : "text-[#8696a0] sm:text-[var(--booking-muted)]"}`}
                 >
                   {formatPublicMessageTime(message.created_at)}
                 </div>
@@ -518,7 +518,7 @@ function PublicWebchat({
         })}
         {sending ? (
           <div className="flex justify-start">
-            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-xs sm:text-[var(--booking-muted)]">
+            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[26px] leading-10 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-[24px] sm:text-[var(--booking-muted)]">
               Recebi sua mensagem. Estou preparando a resposta...
             </div>
           </div>
@@ -536,7 +536,7 @@ function PublicWebchat({
         }}
       >
         {chatError ? (
-          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] leading-5 text-amber-100 sm:mb-3 sm:rounded-2xl sm:border-amber-200 sm:bg-amber-50 sm:px-4 sm:py-3 sm:text-sm sm:text-amber-900">
+          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[26px] leading-10 text-amber-100 sm:mb-3 sm:rounded-2xl sm:border-amber-200 sm:bg-amber-50 sm:px-4 sm:py-3 sm:text-[28px] sm:text-amber-900">
             {chatError}
           </p>
         ) : null}
@@ -552,8 +552,8 @@ function PublicWebchat({
               onBlur={() => setComposerFocused(false)}
               maxLength={1200}
               placeholder="Digite sua mensagem..."
-              style={{ fontSize: "16px" }}
-              className="h-full min-w-0 flex-1 border-none bg-transparent text-[16px] leading-5 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-sm sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
+              style={{ fontSize: "32px" }}
+              className="h-full min-w-0 flex-1 border-none bg-transparent text-[32px] leading-10 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-[28px] sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
             />
             <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" />
           </div>
@@ -676,9 +676,9 @@ function BookingSummaryPanel({
   }
 
   const inlineInputClassName =
-    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
   const inlineSelectClassName =
-    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-xs text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
+    "h-9 w-full rounded-xl border border-stone-200 bg-white px-3 text-[24px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)]";
 
   return (
     <aside
@@ -713,11 +713,11 @@ function BookingSummaryPanel({
                       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--booking-muted)]">
+                      <p className="text-[20px] font-semibold uppercase tracking-[0.16em] text-[var(--booking-muted)]">
                         {card.label}
                       </p>
                       <p
-                        className={`mt-1 break-words text-[11px] font-medium leading-4 sm:text-[12px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                        className={`mt-1 break-words text-[22px] font-medium leading-8 sm:text-[24px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
                       >
                         {card.value}
                       </p>
@@ -765,7 +765,7 @@ function BookingSummaryPanel({
                     <button
                       type="submit"
                       disabled={saving}
-                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-xs font-semibold text-white disabled:opacity-60"
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] font-semibold text-white disabled:opacity-60"
                     >
                       Salvar
                     </button>
@@ -790,7 +790,7 @@ function BookingSummaryPanel({
                     <button
                       type="submit"
                       disabled={saving}
-                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-xs font-semibold text-white disabled:opacity-60"
+                      className="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-[var(--booking-primary)] px-3 text-[24px] font-semibold text-white disabled:opacity-60"
                     >
                       Salvar
                     </button>
@@ -886,7 +886,7 @@ function BookingSummaryPanel({
         </div>
 
         {loading && !summary ? (
-          <p className="mt-3 text-xs text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
+          <p className="mt-3 text-[24px] text-[var(--booking-muted)]">Preparando o resumo automatico do agendamento...</p>
         ) : null}
       </div>
     </aside>
@@ -907,19 +907,19 @@ function WhatsAppOverviewPanel({ className }: { className?: string }) {
         className,
       )}
     >
-      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
+      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--booking-border)] bg-white px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-[var(--booking-muted)]">
         <ShieldCheck className="h-4 w-4 text-[var(--booking-primary)]" aria-hidden="true" />
         Canal protegido
       </div>
-      <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">Agendamento oficial da clinica</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+      <h2 className="mt-4 text-[48px] font-semibold leading-tight text-stone-950">Agendamento oficial da clinica</h2>
+      <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">
         Essa entrada continua pelo WhatsApp do sistema, com o mesmo padrao operacional usado pela clinica.
       </p>
       <div className="mt-4 space-y-3">
         {items.map((item) => (
           <div key={item} className="flex gap-3">
             <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-[var(--booking-primary)]" aria-hidden="true" />
-            <p className="text-sm leading-6 text-[var(--booking-muted)]">{item}</p>
+            <p className="text-[28px] leading-[48px] text-[var(--booking-muted)]">{item}</p>
           </div>
         ))}
       </div>
@@ -946,11 +946,11 @@ function WhatsAppCtaPanel({
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-stone-900">WhatsApp oficial do sistema</p>
-            <p className="truncate text-xs text-[var(--booking-muted)]">A conversa continua no mesmo canal da operacao da clinica</p>
+            <p className="truncate text-[28px] font-semibold text-stone-900">WhatsApp oficial do sistema</p>
+            <p className="truncate text-[24px] text-[var(--booking-muted)]">A conversa continua no mesmo canal da operacao da clinica</p>
           </div>
         </div>
-        <div className="rounded-full border border-stone-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-stone-600">
+        <div className="rounded-full border border-stone-200 bg-white px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-stone-600">
           Direcionamento oficial
         </div>
       </div>
@@ -958,19 +958,19 @@ function WhatsAppCtaPanel({
       <div className="whatsapp-chat-thread-surface flex flex-1 flex-col justify-between p-5">
         <div className="space-y-4">
           <div className="max-w-[86%] rounded-[24px] rounded-bl-[10px] border border-stone-200 bg-white px-4 py-3 shadow-sm">
-            <p className="text-sm font-medium text-stone-900">Seu atendimento esta pronto.</p>
-            <p className="mt-1 text-sm leading-6 text-[var(--booking-muted)]">
+            <p className="text-[28px] font-medium text-stone-900">Seu atendimento esta pronto.</p>
+            <p className="mt-1 text-[28px] leading-[48px] text-[var(--booking-muted)]">
               Ao tocar no botao abaixo, voce continua no WhatsApp oficial e a clinica recebe sua conversa no mesmo inbox do sistema.
             </p>
           </div>
 
           <div className="flex justify-end">
-            <div className="max-w-[78%] rounded-[24px] rounded-br-[10px] bg-[var(--booking-primary)] px-4 py-3 text-sm text-white shadow-sm">
+            <div className="max-w-[78%] rounded-[24px] rounded-br-[10px] bg-[var(--booking-primary)] px-4 py-3 text-[28px] text-white shadow-sm">
               Quero falar com a assistente da clinica.
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-dashed border-stone-200 bg-white/78 px-4 py-4 text-sm leading-6 text-[var(--booking-muted)]">
+          <div className="rounded-[24px] border border-dashed border-stone-200 bg-white/78 px-4 py-4 text-[28px] leading-[48px] text-[var(--booking-muted)]">
             Essa experiencia espelha o fluxo oficial da clinica: link verificado, conversa rastreada e continuidade da jornada de agendamento.
           </div>
         </div>
@@ -979,7 +979,7 @@ function WhatsAppCtaPanel({
           type="button"
           onClick={handleOpenWhatsApp}
           disabled={loading || opening}
-          className="mt-6 inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-6 inline-flex min-h-14 items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {opening ? "Abrindo WhatsApp..." : buttonLabel}
           <MessageCircle className="h-5 w-5" aria-hidden="true" />
@@ -1030,17 +1030,17 @@ function PublicPhoneGate({
         data-testid="public-phone-gate-card"
         className="w-full max-w-md rounded-[30px] border border-white/70 bg-white p-6 shadow-[0_28px_90px_rgba(15,23,42,0.24)]"
       >
-        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[22px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
           <ShieldCheck className="h-4 w-4" aria-hidden="true" />
           {badgeLabel}
         </div>
-        <h2 className="mt-4 text-2xl font-semibold leading-tight text-stone-950">{heading}</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{descriptionPrimary}</p>
-        <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{descriptionSecondary}</p>
+        <h2 className="mt-4 text-[48px] font-semibold leading-tight text-stone-950">{heading}</h2>
+        <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{descriptionPrimary}</p>
+        <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{descriptionSecondary}</p>
 
         <form onSubmit={onSubmit} className="mt-5 space-y-4">
           <label className="block">
-            <span className="mb-2 block text-sm font-medium text-stone-800">{phoneLabel}</span>
+            <span className="mb-2 block text-[28px] font-medium text-stone-800">{phoneLabel}</span>
             <input
               autoFocus
               type="tel"
@@ -1049,18 +1049,18 @@ function PublicPhoneGate({
               value={phone}
               onChange={(event) => onPhoneChange(event.target.value)}
               placeholder="Ex.: (11) 99999-1111"
-              className="h-14 w-full rounded-2xl border border-stone-200 bg-white px-4 text-sm text-stone-900 outline-none transition focus:border-[var(--booking-primary)] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--booking-primary)_18%,transparent)]"
+              className="h-14 w-full rounded-2xl border border-stone-200 bg-white px-4 text-[28px] text-stone-900 outline-none transition focus:border-[var(--booking-primary)] focus:ring-2 focus:ring-[color:color-mix(in_srgb,var(--booking-primary)_18%,transparent)]"
             />
           </label>
 
           {error ? (
-            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{error}</p>
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[28px] text-amber-900">{error}</p>
           ) : null}
 
           <button
             type="submit"
             disabled={!phone.trim() || saving}
-            className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--booking-primary)] px-5 py-3 text-[32px] font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitLabel}
             <ArrowRight className="h-5 w-5" aria-hidden="true" />
@@ -1484,12 +1484,12 @@ export default function PublicBookingPage() {
                   )}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
-                  <h1 className="truncate text-2xl font-semibold leading-tight sm:text-3xl">{clinicName}</h1>
+                  <p className="text-[22px] font-semibold uppercase tracking-[0.22em] text-emerald-700/80">Agendamento oficial</p>
+                  <h1 className="truncate text-[48px] font-semibold leading-tight sm:text-[60px]">{clinicName}</h1>
                 </div>
               </div>
             </div>
-            <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm font-medium text-[var(--booking-muted)] shadow-sm">
+            <div className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-[28px] font-medium text-[var(--booking-muted)] shadow-sm">
               Link verificado da clinica
             </div>
           </div>
@@ -1526,7 +1526,7 @@ export default function PublicBookingPage() {
                     type="button"
                     onClick={() => setMobileSummaryOpen(false)}
                     aria-label={sidePanelCloseLabel}
-                    className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
+                    className="absolute right-3 top-3 z-10 inline-flex h-10 items-center justify-center rounded-full border border-stone-200 bg-white/92 px-3 text-[24px] font-semibold text-stone-700 shadow-sm transition hover:border-stone-300"
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
                   </button>
@@ -1568,7 +1568,7 @@ export default function PublicBookingPage() {
                 <span className="flex items-center gap-2">
                   <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
                   <span
-                    className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
+                    className="text-[20px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
                     style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
                   >
                     {sidePanelHandleText}
@@ -1627,10 +1627,10 @@ export default function PublicBookingPage() {
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--booking-border)] bg-white shadow-sm">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--booking-primary)] border-r-transparent" />
                   </div>
-                  <p className="mt-4 text-lg font-semibold text-stone-900">
+                  <p className="mt-4 text-[36px] font-semibold text-stone-900">
                     {error ? "Reconectando atendimento..." : "Carregando atendimento..."}
                   </p>
-                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">
+                  <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">
                     {error
                       ? "A conexao oscilou, mas a demo continua tentando abrir o chat automaticamente."
                       : "Preparando a conversa oficial da clinica para voce e tentando novamente automaticamente ate conectar."}
@@ -1644,8 +1644,8 @@ export default function PublicBookingPage() {
                   <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm">
                     <Info size={20} />
                   </div>
-                  <p className="mt-4 text-lg font-semibold text-stone-900">Chat do site indisponível agora</p>
-                  <p className="mt-2 text-sm leading-6 text-[var(--booking-muted)]">{publicBookingBlockingMessage}</p>
+                  <p className="mt-4 text-[36px] font-semibold text-stone-900">Chat do site indisponível agora</p>
+                  <p className="mt-2 text-[28px] leading-[48px] text-[var(--booking-muted)]">{publicBookingBlockingMessage}</p>
                 </div>
               </div>
             ) : null}
