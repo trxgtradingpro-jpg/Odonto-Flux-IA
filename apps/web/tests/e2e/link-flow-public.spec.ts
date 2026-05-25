@@ -406,7 +406,17 @@ test.describe('public link flow landing', () => {
 
     await page.goto('/agendar/tenant-a');
 
+    const viewportMeta = await page.locator('meta[name="viewport"]').getAttribute('content');
+    expect(viewportMeta).toContain('width=device-width');
+    expect(viewportMeta).toContain('initial-scale=1');
+    expect(viewportMeta).toContain('maximum-scale=1');
+    expect(viewportMeta).toMatch(/user-scalable=(no|false|0)/);
     await expect(page.getByText('Atendimento online - canal oficial da clinica')).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.getByTestId('public-webchat-mobile-title').evaluate((node) => getComputedStyle(node).color),
+      )
+      .toBe('rgb(233, 237, 239)');
     await expect(page.getByPlaceholder('Digite sua mensagem...')).toBeVisible();
     await expect(page.getByRole('button', { name: /Enviar mensagem/i })).toBeVisible();
     await expect(page.getByTestId('booking-summary-mobile-drawer')).toHaveAttribute('data-state', 'closed');

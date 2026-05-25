@@ -448,7 +448,7 @@ function PublicWebchat({
             <MessageCircle className="h-5 w-5" aria-hidden="true" />
           </span>
           <div className="min-w-0 leading-tight [&>p:nth-child(4)]:hidden sm:[&>p:nth-child(4)]:block">
-            <p className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
+            <p data-testid="public-webchat-mobile-title" className="truncate text-[20px] font-normal leading-6 text-[#e9edef] sm:hidden">{clinicName}</p>
             <p className="hidden truncate text-sm font-semibold text-stone-900 sm:block">Atendimento online</p>
             <p className="truncate text-[12px] leading-4 text-[#8696a0] sm:hidden">Atendimento online - canal oficial da clinica</p>
             <p className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 
 import { BRAND_DESCRIPTION, BRAND_NAME, BRAND_SITE_URL, BRAND_TAGLINE } from '@/lib/brand';
 import { Providers } from '@/components/providers';
@@ -27,6 +27,14 @@ export const metadata: Metadata = {
     locale: 'pt_BR',
     type: 'website',
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
   themeColor: '#06251F',
 };
 
