@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import ApiError
 from app.db.session import get_db
-from app.models import LinkFlowSession, Setting, Tenant, Unit
+from app.models import LinkFlowSession, Setting, Tenant, Unit, WhatsAppAccount
 from app.services.link_flow_service import (
+    build_whatsapp_url,
     capture_public_contact_phone,
     create_link_flow_session,
     get_intake_config,
@@ -86,7 +87,7 @@ def _public_settings(db: Session, *, tenant_id) -> dict[str, object]:
     rows = db.execute(
         select(Setting).where(
             Setting.tenant_id == tenant_id,
-            Setting.key.in_(["branding.theme", "branding.logo_data_url", "clinic.profile"]),
+            Setting.key.in_(["branding.theme", "branding.logo_data_url", "clinic.profile", "privacy.contact"]),
         )
     ).scalars().all()
     return {row.key: row.value for row in rows}
@@ -121,6 +122,43 @@ def _shared_sender_operational(db: Session) -> bool:
     )
 
 
+def _public_contact_channels(
+    db: Session,
+    *,
+    tenant: Tenant,
+    clinic_name: str,
+    settings_map: dict[str, object] | None = None,
+) -> dict[str, str | None]:
+    tenant_account = db.scalar(
+        select(WhatsAppAccount).where(
+            WhatsAppAccount.tenant_id == tenant.id,
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .order_by(WhatsAppAccount.created_at.desc())
+        .limit(1)
+    )
+    account = tenant_account or get_system_whatsapp_account(db)
+    phone = normalize_phone(account.display_phone or account.phone_number_id) if account else None
+    if not phone and isinstance(settings_map, dict):
+        clinic_profile = settings_map.get("clinic.profile")
+        if isinstance(clinic_profile, dict):
+            phone = normalize_phone(
+                _read_string(clinic_profile.get("whatsapp_phone"))
+                or _read_string(clinic_profile.get("main_phone"))
+                or _read_string(clinic_profile.get("phone"))
+            )
+    if not phone and isinstance(settings_map, dict):
+        privacy_contact = settings_map.get("privacy.contact")
+        if isinstance(privacy_contact, dict):
+            phone = normalize_phone(_read_string(privacy_contact.get("phone")))
+    if not phone:
+        return {"phone": None, "whatsapp_url": None}
+    return {
+        "phone": phone,
+        "whatsapp_url": build_whatsapp_url(phone=phone, raw_token="public-contact", clinic_name=clinic_name),
+    }
+
+
 def _booking_payload(db: Session, *, tenant: Tenant) -> dict:
     config = get_intake_config(db, tenant_id=tenant.id)
     link_flow_enabled = is_link_flow_enabled(config)
@@ -135,11 +173,16 @@ def _booking_payload(db: Session, *, tenant: Tenant) -> dict:
     logo_data_url = _read_string(settings_map.get("branding.logo_data_url")) or _read_string(theme_payload.get("logo_data_url"))
     link_flow = config["link_flow"]
 
+    clinic_name = _clinic_name(tenant, settings_map)
+    contact_channels = _public_contact_channels(db, tenant=tenant, clinic_name=clinic_name, settings_map=settings_map)
+
     return {
         "clinic": {
             "slug": tenant.slug,
-            "name": _clinic_name(tenant, settings_map),
+            "name": clinic_name,
             "logo_data_url": logo_data_url,
+            "contact_phone": contact_channels["phone"],
+            "contact_whatsapp_url": contact_channels["whatsapp_url"],
         },
         "branding": {
             "primary_color": theme_payload.get("primary_color") or "#0f766e",
@@ -235,6 +278,8 @@ def create_public_booking_session(
     settings_map = _public_settings(db, tenant_id=tenant.id)
     unit_id = _validated_public_unit_id(db, tenant=tenant, unit_id=payload.unit_id)
     if configured_cta_mode == "webchat":
+        clinic_name = _clinic_name(tenant, settings_map)
+        contact_channels = _public_contact_channels(db, tenant=tenant, clinic_name=clinic_name, settings_map=settings_map)
         bundle = create_webchat_link_flow_session(
             db,
             tenant=tenant,
@@ -256,7 +301,9 @@ def create_public_booking_session(
             **public_contact_phone_state(db, session=session),
             "clinic": {
                 "slug": tenant.slug,
-                "name": _clinic_name(tenant, settings_map),
+                "name": clinic_name,
+                "contact_phone": contact_channels["phone"],
+                "contact_whatsapp_url": contact_channels["whatsapp_url"],
             },
         }
 
@@ -277,6 +324,8 @@ def create_public_booking_session(
     )
     db.commit()
     db.refresh(session)
+    clinic_name = _clinic_name(tenant, settings_map)
+    contact_channels = _public_contact_channels(db, tenant=tenant, clinic_name=clinic_name, settings_map=settings_map)
     return {
         "session_id": str(session.id),
         "expires_at": session.expires_at.isoformat(),
@@ -286,7 +335,9 @@ def create_public_booking_session(
         **public_contact_phone_state(db, session=session),
         "clinic": {
             "slug": tenant.slug,
-            "name": _clinic_name(tenant, settings_map),
+            "name": clinic_name,
+            "contact_phone": contact_channels["phone"],
+            "contact_whatsapp_url": contact_channels["whatsapp_url"] or whatsapp_url,
         },
     }
 

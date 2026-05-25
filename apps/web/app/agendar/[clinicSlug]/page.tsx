@@ -14,7 +14,6 @@ import {
   MapPinHouse,
   MessageCircle,
   MoreVertical,
-  Paperclip,
   Phone,
   List,
   PencilLine,
@@ -36,6 +35,8 @@ type PublicBookingProfile = {
     slug: string;
     name: string;
     logo_data_url: string | null;
+    contact_phone?: string | null;
+    contact_whatsapp_url?: string | null;
   };
   branding: {
     primary_color: string;
@@ -69,6 +70,8 @@ type PublicBookingSession = {
   clinic: {
     slug: string;
     name: string;
+    contact_phone?: string | null;
+    contact_whatsapp_url?: string | null;
   };
 };
 
@@ -268,24 +271,37 @@ function normalizePhoneDraft(value: string): string {
   return value.replace(/[^\d+()\-\s]/g, "").slice(0, 30);
 }
 
+function buildPhoneCallUrl(phone: string | null | undefined): string | null {
+  const normalized = String(phone || "").replace(/\D/g, "");
+  if (!normalized) return null;
+  return `tel:+${normalized}`;
+}
+
 function PublicWebchat({
   clinicSlug,
   clinicName,
   session,
   onExpired,
   embedded = false,
+  onOpenSummary,
+  contactPhone,
+  contactWhatsAppUrl,
 }: {
   clinicSlug: string;
   clinicName: string;
   session: PublicBookingSession;
   onExpired: (message?: string) => void;
   embedded?: boolean;
+  onOpenSummary?: () => void;
+  contactPhone?: string | null;
+  contactWhatsAppUrl?: string | null;
 }) {
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [contactOptionsOpen, setContactOptionsOpen] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
   const openedRef = useRef(false);
@@ -433,6 +449,21 @@ function PublicWebchat({
     }
   }
 
+  function handleOpenContactOptions() {
+    setContactOptionsOpen(true);
+  }
+
+  function handleOpenWhatsAppContact() {
+    if (!contactWhatsAppUrl) return;
+    window.location.href = contactWhatsAppUrl;
+  }
+
+  function handleOpenPhoneContact() {
+    const phoneUrl = buildPhoneCallUrl(contactPhone);
+    if (!phoneUrl) return;
+    window.location.href = phoneUrl;
+  }
+
   return (
     <div
       data-public-webchat-shell="true"
@@ -455,10 +486,31 @@ function PublicWebchat({
             <p data-public-webchat-desktop-subtitle="true" className="truncate text-xs text-[var(--booking-muted)]">{clinicName} · canal oficial da clinica</p>
           </div>
         </div>
-        <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden" aria-hidden="true">
-          <Video className="h-6 w-6" />
-          <Phone className="h-6 w-6" />
-          <MoreVertical className="h-6 w-6" />
+        <div data-public-webchat-actions="true" className="flex shrink-0 items-center gap-4 text-[#e9edef] sm:hidden">
+          <button
+            type="button"
+            aria-label="Abrir opcoes de contato"
+            onClick={handleOpenContactOptions}
+            className="inline-flex items-center justify-center text-current"
+          >
+            <Video className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            aria-label="Abrir opcoes de contato"
+            onClick={handleOpenContactOptions}
+            className="inline-flex items-center justify-center text-current"
+          >
+            <Phone className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            aria-label="Abrir resumo do atendimento"
+            onClick={() => onOpenSummary?.()}
+            className="inline-flex items-center justify-center text-current"
+          >
+            <MoreVertical className="h-6 w-6" />
+          </button>
         </div>
         <div data-public-webchat-online-badge="true" className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 sm:block">
           Online
@@ -525,6 +577,47 @@ function PublicWebchat({
         ) : null}
       </div>
 
+      {contactOptionsOpen ? (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-stone-950/45 px-4 py-6 backdrop-blur-[2px]">
+          <div className="w-full max-w-sm rounded-[28px] border border-white/15 bg-[#111b21] p-5 text-left text-[#e9edef] shadow-[0_24px_60px_rgba(15,23,42,0.35)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold">Como voce quer continuar?</p>
+                <p className="mt-1 text-sm text-[#8696a0]">
+                  Use o numero oficial da clinica para seguir por WhatsApp ou ligacao.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar opcoes de contato"
+                onClick={() => setContactOptionsOpen(false)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[#e9edef]"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3">
+              <button
+                type="button"
+                onClick={handleOpenWhatsAppContact}
+                disabled={!contactWhatsAppUrl}
+                className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-[var(--booking-primary)] px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Continuar pelo WhatsApp
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenPhoneContact}
+                disabled={!contactPhone}
+                className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-sm font-semibold text-[#e9edef] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Ligar para a clinica
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div
         data-public-webchat-composer="true"
         className={cn("relative z-20 border-t border-transparent bg-[#0b141a] px-2 py-1.5 sm:border-stone-200 sm:bg-white/94 sm:px-5 sm:py-3", embedded && "sm:shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}
@@ -555,7 +648,6 @@ function PublicWebchat({
               style={{ fontSize: "16px" }}
               className="h-full min-w-0 flex-1 border-none bg-transparent text-[16px] leading-5 text-[#e9edef] outline-none placeholder:text-[#8696a0] sm:h-7 sm:w-full sm:text-sm sm:text-[var(--booking-text)] sm:placeholder:text-stone-400"
             />
-            <Paperclip className="h-5 w-5 shrink-0 text-[#8696a0] sm:hidden" aria-hidden="true" />
           </div>
           <button
             type="submit"
@@ -713,11 +805,11 @@ function BookingSummaryPanel({
                       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--booking-muted)]">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white">
                         {card.label}
                       </p>
                       <p
-                        className={`mt-1 break-words text-[11px] font-medium leading-4 sm:text-[12px] ${card.complete ? "text-emerald-900" : "text-stone-700"}`}
+                        className="mt-1 break-words text-[11px] font-medium leading-4 text-white sm:text-[12px]"
                       >
                         {card.value}
                       </p>
@@ -1319,7 +1411,6 @@ export default function PublicBookingPage() {
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
   const isDemoEmbeddedWebchat = isWebchat && isDemoEmbeddedRequest;
   const useOverviewSidePanel = !isWebchat || isDemoEmbeddedWebchat;
-  const sidePanelHandleText = useOverviewSidePanel ? "Canal" : "Resumo";
   const sidePanelOpenLabel = useOverviewSidePanel
     ? "Abrir painel do agendamento oficial"
     : "Abrir resumo do atendimento";
@@ -1557,7 +1648,7 @@ export default function PublicBookingPage() {
                 data-testid="booking-summary-mobile-handle"
                 aria-label={sidePanelOpenLabel}
                 className={cn(
-                  "absolute left-0 top-1/2 z-30 -translate-y-1/2 touch-pan-y rounded-r-[26px] border border-white/80 bg-white/92 px-2 py-4 text-[var(--booking-primary)] shadow-[0_18px_40px_rgba(15,23,42,0.16)] backdrop-blur lg:hidden",
+                  "absolute left-0 top-1/2 z-30 -translate-y-1/2 touch-pan-y rounded-r-[14px] border border-white bg-white px-[2px] py-2 text-[var(--booking-primary)] shadow-[0_12px_28px_rgba(15,23,42,0.14)] lg:hidden",
                   mobileSummaryOpen ? "pointer-events-none opacity-0" : "opacity-100",
                 )}
                 onClick={() => setMobileSummaryOpen(true)}
@@ -1565,19 +1656,11 @@ export default function PublicBookingPage() {
                 onPointerUp={handleMobileSummaryGestureEnd}
                 onPointerCancel={handleMobileSummaryGestureCancel}
               >
-                <span className="flex items-center gap-2">
-                  <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span
-                    className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--booking-muted)]"
-                    style={{ writingMode: "vertical-rl", textOrientation: "mixed" }}
-                  >
-                    {sidePanelHandleText}
-                  </span>
-                </span>
+                <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
               </button>
 
               <div
-                className="absolute inset-y-0 left-0 z-10 w-5 touch-pan-y lg:hidden"
+                className="absolute inset-y-0 left-0 z-10 w-3 touch-pan-y lg:hidden"
                 aria-hidden="true"
                 onPointerDown={(event) => handleMobileSummaryGestureStart(event, "open")}
                 onPointerUp={handleMobileSummaryGestureEnd}
@@ -1606,6 +1689,9 @@ export default function PublicBookingPage() {
                 clinicSlug={clinicSlug}
                 clinicName={clinicName}
                 session={session}
+                onOpenSummary={() => setMobileSummaryOpen(true)}
+                contactPhone={profile?.clinic.contact_phone || session.clinic.contact_phone}
+                contactWhatsAppUrl={profile?.clinic.contact_whatsapp_url || session.clinic.contact_whatsapp_url || session.whatsapp_url}
                 onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);
