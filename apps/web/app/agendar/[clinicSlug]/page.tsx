@@ -67,6 +67,7 @@ type PublicBookingSession = {
   public_access_token?: string | null;
   contact_phone?: string | null;
   contact_phone_required?: boolean;
+  patient_name?: string | null;
   clinic: {
     slug: string;
     name: string;
@@ -86,6 +87,7 @@ type PublicBookingSessionState = {
   completed: boolean;
   contact_phone: string | null;
   contact_phone_required: boolean;
+  patient_name?: string | null;
 };
 
 type PublicWebchatMessage = {
@@ -286,6 +288,7 @@ function PublicWebchat({
   onOpenSummary,
   contactPhone,
   contactWhatsAppUrl,
+  patientName,
 }: {
   clinicSlug: string;
   clinicName: string;
@@ -295,6 +298,7 @@ function PublicWebchat({
   onOpenSummary?: () => void;
   contactPhone?: string | null;
   contactWhatsAppUrl?: string | null;
+  patientName?: string | null;
 }) {
   const [messages, setMessages] = useState<PublicWebchatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -309,6 +313,7 @@ function PublicWebchat({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const lastMessageId = messages.length ? messages[messages.length - 1]?.id : undefined;
   const token = session.public_access_token || "";
+  const normalizedPatientName = String(patientName || "").trim();
 
   const loadMessages = useCallback(async (afterMessageId?: string) => {
     try {
@@ -411,13 +416,23 @@ function PublicWebchat({
     event.preventDefault();
     const text = draft.trim();
     if (!text || sending) return;
+    const optimisticCreatedAt = new Date().toISOString();
+    const clientMessageId =
+      typeof window.crypto?.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const optimisticMessage: PublicWebchatMessage = {
+      id: clientMessageId,
+      role: "patient",
+      text,
+      created_at: optimisticCreatedAt,
+      status: "sending",
+    };
+    setDraft("");
+    setMessages((current) => [...current, optimisticMessage]);
     setSending(true);
     setChatError(null);
     try {
-      const clientMessageId =
-        typeof window.crypto?.randomUUID === "function"
-          ? window.crypto.randomUUID()
-          : `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const response = await publicApiFetch<{ message: PublicWebchatMessage }>(
         `/public/booking/sessions/${session.session_id}/chat/messages`,
         {
@@ -426,12 +441,12 @@ function PublicWebchat({
         },
         { publicAccessToken: token },
       );
-      setDraft("");
-      setMessages((current) =>
-        current.some((message) => message.id === response.message.id)
-          ? current
-          : [...current, response.message],
-      );
+      setMessages((current) => {
+        const withoutOptimistic = current.filter((message) => message.id !== clientMessageId);
+        return withoutOptimistic.some((message) => message.id === response.message.id)
+          ? withoutOptimistic
+          : [...withoutOptimistic, response.message];
+      });
       await loadMessages(response.message.id);
       notifyDemoWebchatParent({
         clinicSlug,
@@ -439,6 +454,8 @@ function PublicWebchat({
         reason: "message_sent",
       });
     } catch (err) {
+      setMessages((current) => current.filter((message) => message.id !== clientMessageId));
+      setDraft(text);
       const message = err instanceof Error ? err.message : "Nao foi possivel enviar sua mensagem.";
       setChatError(message);
       if (shouldInvalidatePublicSession(message)) {
@@ -468,7 +485,7 @@ function PublicWebchat({
     <div
       data-public-webchat-shell="true"
       className={cn(
-        "relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[#0b141a] font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
+        "whatsapp-chat-thread-surface-dark relative flex h-full min-h-0 flex-1 flex-col overflow-hidden font-[Roboto,Arial,sans-serif] text-[#e9edef] sm:font-inherit",
         embedded
           ? "sm:bg-white"
           : "sm:rounded-[30px] sm:border sm:border-white/60 sm:bg-white/82 sm:text-[var(--booking-text)] sm:shadow-[0_22px_70px_rgba(15,23,42,0.12)] sm:backdrop-blur",
@@ -538,7 +555,9 @@ function PublicWebchat({
         {!loadingMessages && messages.length === 0 ? (
           <div className="flex justify-start">
             <div className="w-fit max-w-[80%] rounded-lg rounded-bl-[3px] bg-[#202c33] px-2.5 py-1.5 text-[16px] leading-[21px] text-[#e9edef] shadow-sm sm:max-w-[88%] sm:rounded-[24px] sm:rounded-bl-[10px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-3 sm:text-sm sm:leading-6 sm:text-[var(--booking-text)]">
-              <p className="font-medium text-[#e9edef] sm:text-stone-900">Oi, eu sou a assistente de agendamento.</p>
+              <p className="font-medium text-[#e9edef] sm:text-stone-900">
+                {normalizedPatientName ? `Oi ${normalizedPatientName}, eu sou a assistente de agendamento.` : "Oi, eu sou a assistente de agendamento."}
+              </p>
               <p className="mt-1 text-[#8696a0] sm:text-[var(--booking-muted)]">
                 Me conte o que voce precisa e eu vou te ajudar por aqui. Exemplo: Quero agendar uma avaliacao esta semana.
               </p>
@@ -570,8 +589,13 @@ function PublicWebchat({
         })}
         {sending ? (
           <div className="flex justify-start">
-            <div className="w-fit rounded-lg bg-[#202c33] px-2.5 py-1.5 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2 sm:text-xs sm:text-[var(--booking-muted)]">
-              Recebi sua mensagem. Estou preparando a resposta...
+            <div className="flex w-fit items-center gap-2 rounded-lg bg-[#202c33] px-2.5 py-2 text-[13px] leading-5 text-[#8696a0] shadow-sm sm:rounded-[20px] sm:border sm:border-stone-200 sm:bg-white sm:px-4 sm:py-2.5 sm:text-xs sm:text-[var(--booking-muted)]">
+              <span>Digitando</span>
+              <span className="typing-dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
             </div>
           </div>
         ) : null}
@@ -616,7 +640,7 @@ function PublicWebchat({
 
       <div
         data-public-webchat-composer="true"
-        className={cn("relative z-20 border-t border-transparent bg-[#0b141a] px-2 py-1.5 sm:border-stone-200 sm:bg-white/94 sm:px-5 sm:py-3", embedded && "sm:shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}
+        className={cn("relative z-20 border-t border-transparent bg-transparent px-2 py-1.5 sm:border-stone-200 sm:bg-white/94 sm:px-5 sm:py-3", embedded && "sm:shadow-[0_-8px_24px_rgba(15,23,42,0.06)]")}
         style={{
           paddingBottom: "calc(0.375rem + env(safe-area-inset-bottom))",
           transform: keyboardInset ? `translateY(-${keyboardInset}px)` : undefined,
@@ -1236,6 +1260,7 @@ export default function PublicBookingPage() {
                 ...storedSession,
                 contact_phone: storedSessionState.contact_phone,
                 contact_phone_required: storedSessionState.contact_phone_required,
+                patient_name: storedSessionState.patient_name,
               };
               void publicApiFetch(
                 `/public/booking/sessions/${storedSession.session_id}/events`,
@@ -1499,7 +1524,7 @@ export default function PublicBookingPage() {
     setSavingContactPhone(true);
     setContactPhoneError(null);
     try {
-      const response = await publicApiFetch<{ session_id: string; contact_phone: string | null; contact_phone_required: boolean }>(
+      const response = await publicApiFetch<{ session_id: string; contact_phone: string | null; contact_phone_required: boolean; patient_name?: string | null }>(
         `/public/booking/sessions/${session.session_id}/contact`,
         {
           method: "POST",
@@ -1507,15 +1532,19 @@ export default function PublicBookingPage() {
         },
         session.cta_mode === "webchat" ? { publicAccessToken: webchatToken } : undefined,
       );
-      setSession((current) =>
-        current
-          ? {
-              ...current,
-              contact_phone: response.contact_phone,
-              contact_phone_required: response.contact_phone_required,
-            }
-          : current,
-      );
+      setSession((current) => {
+        if (!current) return current;
+        const nextSession = {
+          ...current,
+          contact_phone: response.contact_phone,
+          contact_phone_required: response.contact_phone_required,
+          patient_name: response.patient_name || null,
+        };
+        if (nextSession.cta_mode === "webchat") {
+          storeWebchatSession(clinicSlug, nextSession);
+        }
+        return nextSession;
+      });
       setContactPhoneDraft(response.contact_phone || contactPhoneDraft);
       if (session.cta_mode === "webchat") {
         notifyDemoWebchatParent({
@@ -1688,6 +1717,7 @@ export default function PublicBookingPage() {
                 onOpenSummary={() => setMobileSummaryOpen(true)}
                 contactPhone={profile?.clinic.contact_phone || session.clinic.contact_phone}
                 contactWhatsAppUrl={profile?.clinic.contact_whatsapp_url || session.clinic.contact_whatsapp_url || session.whatsapp_url}
+                patientName={session.patient_name}
                 onExpired={(message) => {
                   storeWebchatSession(clinicSlug, null);
                   setSession(null);

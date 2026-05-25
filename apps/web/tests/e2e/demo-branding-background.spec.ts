@@ -44,7 +44,7 @@ test.describe('demo branding background', () => {
               id: 'branding-theme',
               key: 'branding.theme',
               value: {
-                demo_background_image_url: '/images/whatsapp-chat-background.png',
+                demo_background_image_url: '/images/fundo_whatsapp_escuro.jpeg',
                 demo_background_opacity: 0.63,
               },
               is_secret: false,
@@ -70,7 +70,7 @@ test.describe('demo branding background', () => {
         });
       })
       .toMatchObject({
-        backgroundImage: expect.stringContaining('whatsapp-chat-background.png'),
+        backgroundImage: expect.stringContaining('fundo_whatsapp_escuro.jpeg'),
         opacityVar: '0.63',
       });
   });

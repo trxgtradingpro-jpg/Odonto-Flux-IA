@@ -280,9 +280,13 @@ def _public_contact_phone(patient: Patient | None) -> str | None:
 def public_contact_phone_state(db: Session, *, session: LinkFlowSession) -> dict[str, Any]:
     patient = db.get(Patient, session.linked_patient_id) if session.linked_patient_id else None
     contact_phone = _public_contact_phone(patient)
+    patient_name = str(patient.full_name or "").strip() if patient else ""
+    if patient_name.casefold() in {"", "paciente", "novo paciente", "paciente do agendamento", "paciente webchat"}:
+        patient_name = ""
     return {
         "contact_phone": contact_phone,
         "contact_phone_required": not bool(contact_phone),
+        "patient_name": patient_name or None,
     }
 
 
