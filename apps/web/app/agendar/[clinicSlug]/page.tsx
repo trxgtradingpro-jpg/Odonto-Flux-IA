@@ -1331,6 +1331,7 @@ export default function PublicBookingPage() {
   const clinicName = profile?.clinic.name || session?.clinic.name || "clinica";
   const isWebchat = profile?.link_flow.cta_mode === "webchat";
   const forceDesktopLayout = true;
+  const showDesktopSidePanel = false;
   const isDemoEmbeddedWebchat = isWebchat && isDemoEmbeddedRequest;
   const useOverviewSidePanel = !isWebchat || isDemoEmbeddedWebchat;
   const sidePanelHandleText = useOverviewSidePanel ? "Canal" : "Resumo";
@@ -1519,7 +1520,9 @@ export default function PublicBookingPage() {
             "relative flex min-h-0 flex-1 overflow-hidden",
             isWebchat
               ? forceDesktopLayout
-                ? "grid grid-cols-[360px_minmax(0,1fr)] gap-4 p-6"
+                ? showDesktopSidePanel
+                  ? "grid grid-cols-[360px_minmax(0,1fr)] gap-4 p-6"
+                  : "p-6"
                 : "p-0 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6"
               : "p-4 sm:p-5 lg:grid lg:grid-cols-[360px_minmax(0,1fr)] lg:gap-4 lg:p-6",
           )}
@@ -1608,7 +1611,7 @@ export default function PublicBookingPage() {
             </>
           ) : null}
 
-          <div className={cn("min-h-0", forceDesktopLayout ? "flex" : "hidden lg:flex")}>
+          <div className={cn("min-h-0", forceDesktopLayout ? (showDesktopSidePanel ? "flex" : "hidden") : "hidden lg:flex")}>
             {useOverviewSidePanel ? (
               <WhatsAppOverviewPanel className="h-full" />
             ) : (
