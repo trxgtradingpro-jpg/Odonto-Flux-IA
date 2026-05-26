@@ -4511,3 +4511,167 @@ def test_support_menu_selection_adds_support_tag(seeded_db, db_session):
     assert result["status"] == "responded"
     assert result.get("scheduling_mode") == "booking_wizard_support_followup"
     assert "menu_suporte" in (conversation.tags or [])
+
+
+def test_webchat_booking_wizard_handles_ten_random_messages_across_five_conversations(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    config = _base_ai_config()
+    config["channels"] = {"whatsapp": True, "webchat": True}
+    config["max_consecutive_auto_replies"] = 20
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=config)
+    _upsert_ai_knowledge_base_setting(
+        db_session,
+        tenant_id=tenant_id,
+        value={
+            "services": [
+                {
+                    "name": "Avaliação odontológica",
+                    "description": "",
+                    "duration_note": "30 min",
+                    "price_note": "",
+                }
+            ]
+        },
+    )
+    unit = _ensure_unit(db_session, tenant_id=tenant_id, name="Unidade Webchat Aleatoria")
+    professional = Professional(
+        tenant_id=tenant_id,
+        unit_id=unit.id,
+        full_name=f"Dra Webchat Aleatoria {uuid4().hex[:6]}",
+        specialty="Avaliação odontológica",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+        shift_start="08:00",
+        shift_end="18:00",
+        procedures=["Avaliação odontológica"],
+        is_active=True,
+    )
+    db_session.add(professional)
+    db_session.commit()
+
+    random_messages = [
+        "Cara, eu estou com uma dor de dente...",
+        "kkkkkkkk",
+        "Estou com dor de dente",
+        "Mais o agendamento está funcionando muito bem",
+        "Tenho uma dúvida rápida",
+        "não entendi essa parte",
+        "estou com sensibilidade",
+        "obrigado pela ajuda",
+        "isso ficou confuso pra mim",
+        "pode continuar depois?",
+    ]
+    target_modes = [
+        {"booking_wizard_service_select"},
+        {"booking_wizard_day_select"},
+        {"booking_wizard_time_select"},
+        {"booking_wizard_confirm"},
+        {"booking_wizard_service_select"},
+    ]
+
+    def latest_ai_reply(conversation):
+        return db_session.scalar(
+            select(Message)
+            .where(
+                Message.tenant_id == tenant_id,
+                Message.conversation_id == conversation.id,
+                Message.direction == "outbound",
+                Message.sender_type == "ai",
+            )
+            .order_by(Message.created_at.desc())
+        )
+
+    def send(conversation, text):
+        inbound = _append_inbound_message(
+            db_session,
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            inbound_text=text,
+            channel="webchat",
+        )
+        result = process_inbound_message(
+            db_session,
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            inbound_message_id=inbound.id,
+        )
+        reply = latest_ai_reply(conversation)
+        return inbound, result, reply
+
+    def open_conversation_at(target_mode_set):
+        conversation, inbound = _create_conversation_with_inbound(
+            db_session,
+            tenant_id=tenant_id,
+            inbound_text="Quero agendar",
+            channel="webchat",
+        )
+        result = process_inbound_message(
+            db_session,
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            inbound_message_id=inbound.id,
+        )
+        assert result["status"] == "responded"
+        for _ in range(6):
+            reply = latest_ai_reply(conversation)
+            mode = str(((reply.payload or {}) if reply else {}).get("mode") or "")
+            if mode in target_mode_set:
+                return conversation
+            _, result, _ = send(conversation, "1")
+            assert result["status"] == "responded"
+        reply = latest_ai_reply(conversation)
+        raise AssertionError(f"Wizard não chegou nos modos {target_mode_set}; modo atual: {((reply.payload or {}) if reply else {}).get('mode')}")
+
+    for conversation_index, target_mode_set in enumerate(target_modes):
+        conversation = open_conversation_at(target_mode_set)
+        for text in random_messages[conversation_index * 2 : conversation_index * 2 + 2]:
+            inbound, result, reply = send(conversation, text)
+
+            assert result["status"] == "responded"
+            assert reply is not None
+            payload = reply.payload or {}
+            normalized_reply = (reply.body or "").lower()
+            assert payload.get("reply_to_message_id") == str(inbound.id)
+            assert "nao entendi completamente" not in normalized_reply
+            assert "não entendi completamente" not in normalized_reply
+            assert "nao entendi a opcao" not in normalized_reply
+            assert "não entendi a opção" not in normalized_reply
+            assert payload.get("mode") in target_mode_set
+            if "dor" in text.lower() or "sensibilidade" in text.lower():
+                assert "desconforto" in normalized_reply
+
+
+def test_webchat_handoff_notice_creates_visible_reply_instead_of_fallback(seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    config = _base_ai_config()
+    config["channels"] = {"whatsapp": True, "webchat": True}
+    _upsert_ai_global_setting(db_session, tenant_id=tenant_id, value=config)
+
+    conversation, inbound = _create_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Preciso de uma receita de antibiótico agora",
+        channel="webchat",
+    )
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=inbound.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(
+            Message.tenant_id == tenant_id,
+            Message.conversation_id == conversation.id,
+            Message.direction == "outbound",
+            Message.sender_type == "ai",
+        )
+        .order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "handoff"
+    assert outbound is not None
+    assert (outbound.payload or {}).get("reply_to_message_id") == str(inbound.id)
+    assert (outbound.payload or {}).get("mode") == "handoff_notice"
+    assert "nao entendi completamente" not in (outbound.body or "").lower()
+    assert "não entendi completamente" not in (outbound.body or "").lower()

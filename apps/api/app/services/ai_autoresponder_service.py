@@ -361,6 +361,35 @@ CLINICAL_PATTERNS = [
     "laudo",
 ]
 
+PATIENT_DISCOMFORT_PATTERNS = (
+    "dor de dente",
+    "dor no dente",
+    "dente doendo",
+    "dente doi",
+    "dente está doendo",
+    "dente esta doendo",
+    "estou com dor",
+    "to com dor",
+    "tô com dor",
+    "sensibilidade",
+    "gengiva doendo",
+    "gengiva inchada",
+    "latejando",
+    "incomodo",
+    "incômodo",
+)
+
+BOOKING_WIZARD_FREE_TEXT_CONTEXT_MODES = {
+    "booking_wizard_service_select",
+    "booking_wizard_unit_select",
+    "booking_wizard_day_select",
+    "booking_wizard_time_select",
+    "booking_wizard_confirm",
+    "no_slots_general",
+    "no_slots_for_period",
+    "no_slots_for_period_with_alternatives",
+}
+
 CONTACT_NAME_PATTERNS = [
     re.compile(r"\bmeu\s+nome(?:\s+completo)?\s*(?:e|eh|é)\s+(.+)$", re.IGNORECASE),
     re.compile(r"\bnome(?:\s+completo)?\s*[:\-]\s*(.+)$", re.IGNORECASE),
@@ -5797,6 +5826,84 @@ def _booking_state_summary_text(saved_state: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _is_patient_discomfort_message(normalized_text: str) -> bool:
+    if not normalized_text:
+        return False
+    return any(_normalize_for_match(pattern) in normalized_text for pattern in PATIENT_DISCOMFORT_PATTERNS)
+
+
+def _booking_wizard_continuation_hint(*, mode: str, step: str | None) -> str:
+    step_key = str(step or "").strip()
+    mode_key = str(mode or "").strip()
+    if step_key == "service" or mode_key == "booking_wizard_service_select":
+        return "Para continuar, escolha o serviço na lista ou escreva o nome do atendimento."
+    if step_key == "unit" or mode_key == "booking_wizard_unit_select":
+        return "Para continuar, escolha a unidade na lista ou escreva a unidade desejada."
+    if step_key == "day" or mode_key in {
+        "booking_wizard_day_select",
+        "no_slots_general",
+        "no_slots_for_period",
+        "no_slots_for_period_with_alternatives",
+    }:
+        return "Para continuar, escolha uma data disponível ou escreva a data que você prefere."
+    if step_key == "time" or mode_key == "booking_wizard_time_select":
+        return "Para continuar, escolha um horário disponível ou escreva o horário que você prefere."
+    if step_key == "confirm" or mode_key == "booking_wizard_confirm":
+        return "Para continuar, confirme se posso agendar ou escolha trocar o horário."
+    return "Para continuar, responda com a opção desejada ou escreva como prefere seguir."
+
+
+def _build_booking_wizard_free_text_followup_response(
+    *,
+    latest_mode: str,
+    latest_scheduling: dict[str, Any],
+    latest_step: str | None,
+    inbound_text: str,
+    normalized_inbound: str,
+    session_token: str | None,
+) -> dict[str, Any] | None:
+    if latest_mode not in BOOKING_WIZARD_FREE_TEXT_CONTEXT_MODES or not normalized_inbound:
+        return None
+
+    metadata = dict(latest_scheduling)
+    metadata = _wizard_metadata_with_session(
+        metadata=metadata,
+        session_token=session_token,
+        step=latest_step or _wizard_step_from_mode(latest_mode) or "service",
+    )
+    metadata["reason"] = "free_text_during_booking_wizard"
+    metadata["free_text_message"] = inbound_text[:280]
+
+    state = _wizard_state_from_scheduling_metadata(metadata) or {}
+    summary = _booking_state_summary_text(state)
+    continuation_hint = _booking_wizard_continuation_hint(mode=latest_mode, step=latest_step)
+
+    if _is_patient_discomfort_message(normalized_inbound):
+        intro = (
+            "Sinto muito que você esteja com esse desconforto. "
+            "Não consigo avaliar clinicamente por aqui, mas posso seguir com seu agendamento para a equipe te atender."
+        )
+        safety_note = (
+            "Se a dor estiver forte, com inchaço, febre, sangramento ou trauma, procure atendimento de urgência "
+            "ou fale com a equipe da clínica."
+        )
+        response_text = f"{intro}\n{safety_note}\n{continuation_hint}"
+    else:
+        response_text = (
+            "Entendi sua mensagem. Para não perdermos o agendamento que está em andamento, vou manter as opções abertas.\n"
+            f"{continuation_hint}"
+        )
+
+    if summary:
+        response_text = f"{response_text}\nAté aqui tenho: {summary}."
+
+    return {
+        "mode": latest_mode,
+        "response_text": response_text,
+        "metadata": metadata,
+    }
+
+
 def _has_meaningful_saved_state(saved_state: dict[str, Any] | None) -> bool:
     if not isinstance(saved_state, dict):
         return False
@@ -7066,6 +7173,17 @@ def _try_booking_wizard_response(
             or free_text_matches_current_step
             or plain_preferred_name
         ):
+            free_text_followup = _build_booking_wizard_free_text_followup_response(
+                latest_mode=latest_mode,
+                latest_scheduling=latest_scheduling,
+                latest_step=latest_step,
+                inbound_text=inbound_text,
+                normalized_inbound=normalized_inbound,
+                session_token=str(latest_scheduling.get("session_token") or "").strip()
+                or _wizard_session_token_from_message(latest_wizard),
+            )
+            if free_text_followup:
+                return free_text_followup
             return None
 
         latest_session_token = str(latest_scheduling.get("session_token") or "").strip() or _wizard_session_token_from_message(latest_wizard)
@@ -9991,7 +10109,66 @@ def _queue_handoff_notice(
     reason: str,
     reply_text: str | None = None,
 ) -> tuple[str | None, Message | None, Any | None, str | None]:
-    if conversation.channel != "whatsapp" or reason in HANDOFF_NOTICE_SKIP_REASONS:
+    if reason in HANDOFF_NOTICE_SKIP_REASONS:
+        return None, None, None, None
+
+    body = _normalize_response_text(
+        db,
+        conversation=conversation,
+        text=reply_text or _handoff_notice_text(reason),
+    )
+    if not body:
+        return None, None, None, "empty_handoff_notice"
+
+    if conversation.channel == "webchat":
+        try:
+            outbound_message = Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                direction=MessageDirection.OUTBOUND.value,
+                channel=conversation.channel,
+                sender_type="ai",
+                body=body,
+                message_type="text",
+                payload={
+                    "source": "ai_autoresponder",
+                    "mode": "handoff_notice",
+                    "reply_to_message_id": str(inbound_message.id),
+                    "handoff_reason": reason,
+                },
+                status=MessageStatus.QUEUED.value,
+            )
+            db.add(outbound_message)
+            db.flush()
+            dispatch_patient_message(
+                db,
+                tenant_id=tenant_id,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                outbound_message=outbound_message,
+                body=body,
+                message_type="text",
+                metadata={
+                    "source": "ai_autoresponder",
+                    "mode": "handoff_notice",
+                    "handoff_reason": reason,
+                    "inbound_message_id": str(inbound_message.id),
+                    "outbound_message_id": str(outbound_message.id),
+                },
+            )
+            return body, outbound_message, None, None
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "ai_autoresponder.webchat_handoff_notice_failed",
+                tenant_id=str(tenant_id),
+                conversation_id=str(conversation.id),
+                reason=reason,
+                error=str(exc),
+            )
+            return None, None, None, str(exc)
+
+    if conversation.channel != "whatsapp":
         return None, None, None, None
 
     destination, provider_context = resolve_whatsapp_reply_route(
@@ -10006,14 +10183,6 @@ def _queue_handoff_notice(
         assert_whatsapp_route_ready_for_dispatch(db, tenant_id=tenant_id, provider_context=provider_context)
     except Exception as exc:
         return None, None, None, str(exc)
-
-    body = _normalize_response_text(
-        db,
-        conversation=conversation,
-        text=reply_text or _handoff_notice_text(reason),
-    )
-    if not body:
-        return None, None, None, "empty_handoff_notice"
 
     try:
         outbound_message = Message(
