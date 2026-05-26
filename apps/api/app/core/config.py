@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     sales_outreach_sender_tenant_slug: str | None = None
     sales_outreach_display_name: str = 'Time ClinicFlux AI'
     sales_outreach_video_url: str | None = None
+    google_places_api_key: str | None = None
+    google_places_timeout_seconds: int = 12
 
     @property
     def database_url(self) -> str:

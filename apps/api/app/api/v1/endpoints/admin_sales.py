@@ -36,6 +36,10 @@ from app.schemas.admin_sales import (
     DemoGuideStateOutput,
     DemoProvisionOutput,
     DemoRedeemTokenInput,
+    GooglePlacesImportInput,
+    GooglePlacesImportOutput,
+    GooglePlacesSearchInput,
+    GooglePlacesSearchOutput,
     MagicLinkInput,
     ProspectContactInput,
     ProspectCreate,
@@ -65,6 +69,7 @@ from app.schemas.admin_sales import (
     SalesMessageTemplateOutput,
 )
 from app.services import sales_demo_service as sales
+from app.services import google_places_service
 from app.services import sales_message_service as sales_messages
 
 router = APIRouter(tags=["admin_sales"])
@@ -592,6 +597,38 @@ def record_clinic_message_event(
             "created_at": event.created_at,
         },
     }
+
+
+@router.post("/admin/google-places/search", response_model=GooglePlacesSearchOutput)
+def search_google_places(
+    payload: GooglePlacesSearchInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_principal(principal)
+    return google_places_service.search_google_places(
+        db,
+        query=payload.query,
+        limit=payload.limit,
+        region_code=payload.region_code,
+        included_type=payload.included_type,
+    )
+
+
+@router.post("/admin/google-places/import", response_model=GooglePlacesImportOutput)
+def import_google_places(
+    payload: GooglePlacesImportInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_sales_write(principal)
+    return google_places_service.import_google_places(
+        db,
+        place_ids=payload.place_ids,
+        lead_source=payload.lead_source,
+        include_rating=payload.include_rating,
+        actor_id=principal.user.id,
+    )
 
 
 @router.post("/admin/prospects", response_model=ProspectOutput)

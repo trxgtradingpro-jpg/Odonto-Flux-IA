@@ -295,6 +295,57 @@ class ProspectOutput(BaseModel):
     services: list[ProspectServiceOutput] = []
 
 
+class GooglePlacesSearchInput(BaseModel):
+    query: str = Field(min_length=3, max_length=240)
+    limit: int = Field(default=10, ge=1, le=20)
+    region_code: str = Field(default="BR", min_length=2, max_length=2)
+    included_type: str | None = Field(default="dentist", max_length=80)
+
+
+class GooglePlaceCandidateOutput(BaseModel):
+    place_id: str
+    name: str
+    formatted_address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    google_maps_url: str | None = None
+    business_status: str | None = None
+    types: list[str] = []
+    duplicate_prospect_id: str | None = None
+    duplicate_clinic_name: str | None = None
+
+
+class GooglePlacesSearchOutput(BaseModel):
+    query: str
+    limit: int
+    field_mask: str
+    cost_mode: str
+    results: list[GooglePlaceCandidateOutput]
+
+
+class GooglePlacesImportInput(BaseModel):
+    place_ids: list[str] = Field(min_length=1, max_length=20)
+    lead_source: str = Field(default="google_places", max_length=120)
+    include_rating: bool = False
+
+
+class GooglePlacesImportResultOutput(BaseModel):
+    place_id: str
+    status: Literal["created", "duplicate", "failed"]
+    message: str
+    name: str | None = None
+    prospect: ProspectOutput | None = None
+
+
+class GooglePlacesImportOutput(BaseModel):
+    created_count: int
+    duplicate_count: int
+    failed_count: int
+    requested_count: int
+    include_rating: bool
+    results: list[GooglePlacesImportResultOutput]
+
+
 class ProspectListOutput(BaseModel):
     data: list[ProspectOutput]
     total: int

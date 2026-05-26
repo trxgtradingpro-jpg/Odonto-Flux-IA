@@ -16,6 +16,7 @@ import {
   Flame,
   KeyRound,
   Lock,
+  MapPin,
   MessageSquareText,
   Pencil,
   PhoneCall,
@@ -2446,6 +2447,13 @@ export default function AdmPage() {
               >
                 <Clipboard size={16} />
                 Mensagens prontas
+              </Link>
+              <Link
+                href="/adm/importar-clinicas"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100 active:translate-y-[1px]"
+              >
+                <MapPin size={16} />
+                Importar Places
               </Link>
               <Link
                 href="/adm/implementacoes"
