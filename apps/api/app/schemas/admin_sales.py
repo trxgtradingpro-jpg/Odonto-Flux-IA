@@ -17,11 +17,55 @@ class AdminLoginOutput(BaseModel):
     expires_in: int
     force_password_change: bool = False
     roles: list[str] = []
+    page_permissions: dict = {}
+    adm_page_permissions: dict = {}
+    is_affiliate: bool = False
 
 
 class AdminChangeInitialPasswordInput(BaseModel):
     current_password: str = Field(min_length=8)
     new_password: str = Field(min_length=10)
+
+
+class AdminAffiliateRegisterInput(BaseModel):
+    full_name: str = Field(min_length=2, max_length=180)
+    email: EmailStr
+    password: str = Field(min_length=10)
+    phone: str | None = Field(default=None, max_length=30)
+
+
+class AdminAffiliateUpdateInput(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=180)
+    phone: str | None = Field(default=None, max_length=30)
+    is_active: bool | None = None
+    page_permissions: dict | None = None
+
+
+class AdminSessionOutput(BaseModel):
+    id: UUID
+    email: str
+    full_name: str
+    phone: str | None = None
+    roles: list[str] = []
+    is_active: bool = True
+    force_password_change: bool = False
+    page_permissions: dict = {}
+    adm_page_permissions: dict = {}
+    is_affiliate: bool = False
+    last_login_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminAffiliateListOutput(BaseModel):
+    data: list[AdminSessionOutput]
+    total: int
+
+
+class AdminPageDefinitionOutput(BaseModel):
+    key: str
+    href: str
+    label: str
 
 
 class ProspectUnitInput(BaseModel):

@@ -8,6 +8,8 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useAdmSession } from "@/hooks/use-adm-session";
+import { canAccessAdmPage } from "@/lib/adm-page-access";
 import { api } from "@/lib/api";
 import { getAdminAccessToken } from "@/lib/auth";
 import { BRAND_NAME } from "@/lib/brand";
@@ -55,10 +57,12 @@ function ImplementationCard({
   item,
   onToggle,
   pending,
+  canEdit,
 }: {
   item: ImplementationItem;
   onToggle: (item: ImplementationItem) => void;
   pending: boolean;
+  canEdit: boolean;
 }) {
   return (
     <Card className="border-stone-200 bg-white">
@@ -76,7 +80,7 @@ function ImplementationCard({
           </div>
           <Button
             type="button"
-            disabled={!item.can_toggle || pending}
+            disabled={!canEdit || !item.can_toggle || pending}
             onClick={() => onToggle(item)}
             className={cn("min-w-28", !item.enabled && "bg-stone-900 text-white hover:bg-stone-800")}
           >
@@ -111,10 +115,22 @@ export default function AdmImplementacoesPage() {
     setReady(true);
   }, [router]);
 
+  const admSessionQuery = useAdmSession(ready);
+  const canViewImplementations = canAccessAdmPage(
+    admSessionQuery.data?.resolved_adm_page_permissions,
+    "adm_implementations",
+    "view",
+  );
+  const canEditImplementations = canAccessAdmPage(
+    admSessionQuery.data?.resolved_adm_page_permissions,
+    "adm_implementations",
+    "edit",
+  );
+
   const snapshotQuery = useQuery<ImplementationSnapshot>({
     queryKey: ["adm-implementations"],
     queryFn: async () => (await api.get("/admin/platform/implementations")).data,
-    enabled: ready,
+    enabled: ready && canViewImplementations,
   });
 
   const toggleMutation = useMutation({
@@ -127,8 +143,24 @@ export default function AdmImplementacoesPage() {
     onError: () => toast.error("Nao foi possivel salvar o estado da implementacao."),
   });
 
-  if (!ready || snapshotQuery.isLoading) {
+  if (!ready || admSessionQuery.isLoading || snapshotQuery.isLoading) {
     return <LoadingState message="Carregando central de implementacoes..." />;
+  }
+
+  if (!canViewImplementations) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-950 px-4 text-white">
+        <Card className="w-full max-w-md border-white/10 bg-white text-stone-950">
+          <CardContent className="space-y-4 p-8 text-center">
+            <h1 className="text-xl font-black">Area restrita</h1>
+            <p className="text-sm leading-6 text-stone-600">Seu usuario nao tem permissao para ver implementacoes.</p>
+            <Link className="inline-flex h-10 items-center rounded-lg bg-stone-950 px-4 text-sm font-bold text-white" href="/adm">
+              Voltar ao /adm
+            </Link>
+          </CardContent>
+        </Card>
+      </main>
+    );
   }
 
   if (snapshotQuery.isError || !snapshotQuery.data) {
@@ -144,8 +176,8 @@ export default function AdmImplementacoesPage() {
   );
 
   return (
-    <main className="min-h-screen bg-stone-950 px-4 py-6 text-white md:px-6">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <main className="min-h-screen overflow-x-hidden bg-stone-950 px-4 py-6 text-white md:px-6">
+      <div className="mx-auto w-full max-w-7xl space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Admin comercial</p>
@@ -225,6 +257,7 @@ export default function AdmImplementacoesPage() {
                   item={item}
                   pending={toggleMutation.isPending && toggleMutation.variables?.key === item.key}
                   onToggle={(current) => toggleMutation.mutate({ key: current.key, enabled: !current.enabled })}
+                  canEdit={canEditImplementations}
                 />
               ))
             ) : (
@@ -248,6 +281,7 @@ export default function AdmImplementacoesPage() {
                   item={item}
                   pending={toggleMutation.isPending && toggleMutation.variables?.key === item.key}
                   onToggle={(current) => toggleMutation.mutate({ key: current.key, enabled: !current.enabled })}
+                  canEdit={canEditImplementations}
                 />
               ))
             ) : (
@@ -271,6 +305,7 @@ export default function AdmImplementacoesPage() {
                   item={item}
                   pending={toggleMutation.isPending && toggleMutation.variables?.key === item.key}
                   onToggle={(current) => toggleMutation.mutate({ key: current.key, enabled: !current.enabled })}
+                  canEdit={canEditImplementations}
                 />
               ))
             ) : (

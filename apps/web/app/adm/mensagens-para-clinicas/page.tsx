@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAdmSession } from "@/hooks/use-adm-session";
+import { canAccessAdmPage } from "@/lib/adm-page-access";
 import { api } from "@/lib/api";
 import { getAdminAccessToken } from "@/lib/auth";
 import { formatDateTimeBR } from "@/lib/formatters";
@@ -252,6 +254,13 @@ export default function ClinicMessagesPage() {
     setHasToken(Boolean(getAdminAccessToken()));
   }, []);
 
+  const admSessionQuery = useAdmSession(hasToken);
+  const admPermissions = admSessionQuery.data?.resolved_adm_page_permissions;
+  const canViewMessages = canAccessAdmPage(admPermissions, "adm_messages", "view");
+  const canCreateMessages = canAccessAdmPage(admPermissions, "adm_messages", "create");
+  const canEditMessages = canAccessAdmPage(admPermissions, "adm_messages", "edit");
+  const canDeleteMessages = canAccessAdmPage(admPermissions, "adm_messages", "delete");
+
   const messagesQuery = useQuery<ClinicMessagesResponse>({
     queryKey: [
       "adm-clinic-messages",
@@ -275,14 +284,14 @@ export default function ClinicMessagesPage() {
           },
         })
       ).data,
-    enabled: hasToken,
+    enabled: hasToken && canViewMessages,
     retry: false,
   });
 
   const templatesQuery = useQuery<SalesTemplate[]>({
     queryKey: ["adm-clinic-message-templates"],
     queryFn: async () => (await api.get("/admin/clinic-messages/templates")).data,
-    enabled: hasToken,
+    enabled: hasToken && canViewMessages,
     retry: false,
   });
 
@@ -575,7 +584,7 @@ export default function ClinicMessagesPage() {
 
   if (!hasToken) {
     return (
-      <main className="min-h-screen bg-stone-100 p-6 text-stone-950">
+      <main className="min-h-screen overflow-x-hidden bg-stone-100 p-6 text-stone-950">
         <Card className="mx-auto mt-20 max-w-xl border-stone-200 bg-white">
           <CardContent className="space-y-4 p-6">
             <div className="grid h-12 w-12 place-items-center rounded-xl bg-stone-950 text-sm font-black text-white">
@@ -601,10 +610,37 @@ export default function ClinicMessagesPage() {
     );
   }
 
+  if (admSessionQuery.isLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-100 px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="p-8 text-center text-sm text-stone-600">Carregando permissoes...</CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (!canViewMessages) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-100 px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="space-y-4 p-8 text-center">
+            <AlertTriangle className="mx-auto h-9 w-9 text-stone-400" />
+            <h1 className="text-xl font-black">Area sem permissao</h1>
+            <p className="text-sm leading-6 text-stone-600">Seu usuario nao tem acesso a Mensagens prontas.</p>
+            <Link className="inline-flex h-10 items-center rounded-lg bg-stone-950 px-4 text-sm font-bold text-white" href="/adm">
+              Voltar ao /adm
+            </Link>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-[#f5f2ea] text-stone-950">
+    <main className="min-h-screen overflow-x-hidden bg-[#f5f2ea] text-stone-950">
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-5">
           <div className="flex items-center gap-3">
             <Link
               href="/adm"
@@ -634,7 +670,7 @@ export default function ClinicMessagesPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1600px] space-y-4 px-5 py-5">
+      <div className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-5 lg:px-5">
         <section className="overflow-hidden rounded-2xl border border-stone-200 bg-stone-950 text-white shadow-sm">
           <div className="grid gap-4 p-5 lg:grid-cols-[1fr_420px] lg:p-7">
             <div>
@@ -673,7 +709,7 @@ export default function ClinicMessagesPage() {
             <Save size={16} />
             Editar templates
           </Button>
-          <Button variant="outline" onClick={startNewTemplate}>
+          <Button variant="outline" onClick={startNewTemplate} disabled={!canCreateMessages}>
             <Plus size={16} />
             Novo template
           </Button>
@@ -694,6 +730,9 @@ export default function ClinicMessagesPage() {
             onDelete={deleteCurrentTemplate}
             saving={saveTemplateMutation.isPending}
             deleting={deleteTemplateMutation.isPending}
+            canCreate={canCreateMessages}
+            canEdit={canEditMessages}
+            canDelete={canDeleteMessages}
           />
         ) : (
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_560px]">
@@ -746,7 +785,7 @@ export default function ClinicMessagesPage() {
             </Card>
 
             <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-              <div className="grid grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500">
+              <div className="hidden grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr] gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500 md:grid">
                 <span>Clinica</span>
                 <span>Status</span>
                 <span>Temp.</span>
@@ -765,7 +804,7 @@ export default function ClinicMessagesPage() {
                         type="button"
                         onClick={() => setSelectedId(item.prospect.id)}
                         className={cn(
-                          "grid w-full grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr] gap-3 border-b border-stone-100 px-4 py-4 text-left text-sm transition hover:bg-stone-50",
+                          "grid w-full gap-3 border-b border-stone-100 px-4 py-4 text-left text-sm transition hover:bg-stone-50 md:grid-cols-[1.3fr_0.8fr_0.7fr_0.7fr_0.9fr]",
                           selected && "bg-emerald-50/80",
                         )}
                       >
@@ -894,7 +933,7 @@ export default function ClinicMessagesPage() {
                       <Button
                         className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500"
                         onClick={() => generatePreview(false)}
-                        disabled={previewMutation.isPending || !selectedItem.demo_ready}
+                        disabled={!canCreateMessages || previewMutation.isPending || !selectedItem.demo_ready}
                       >
                         <Send size={16} />
                         {previewMutation.isPending ? "Gerando..." : "Gerar mensagem pronta"}
@@ -903,7 +942,7 @@ export default function ClinicMessagesPage() {
                         variant="outline"
                         className="flex-1"
                         onClick={() => copyMessage()}
-                        disabled={previewMutation.isPending || eventMutation.isPending}
+                        disabled={!canCreateMessages || previewMutation.isPending || eventMutation.isPending}
                       >
                         <Copy size={16} />
                         Copiar mensagem
@@ -926,18 +965,18 @@ export default function ClinicMessagesPage() {
                     />
 
                     <div className="grid gap-2 sm:grid-cols-3">
-                      <Button variant="outline" onClick={copyDemoLink} disabled={!preview?.demo_login_url}>
+                      <Button variant="outline" onClick={copyDemoLink} disabled={!canCreateMessages || !preview?.demo_login_url}>
                         <ExternalLink size={16} />
                         Copiar link
                       </Button>
-                      <Button variant="outline" onClick={markContactDone} disabled={eventMutation.isPending}>
+                      <Button variant="outline" onClick={markContactDone} disabled={!canCreateMessages || eventMutation.isPending}>
                         <CheckCircle2 size={16} />
                         Marcar contato
                       </Button>
                       <Button
                         variant="outline"
                         onClick={() => generatePreview(true)}
-                        disabled={previewMutation.isPending || !selectedItem.demo_ready}
+                        disabled={!canCreateMessages || previewMutation.isPending || !selectedItem.demo_ready}
                       >
                         <Clipboard size={16} />
                         Gerar e copiar
@@ -984,6 +1023,9 @@ function TemplateEditorPanel({
   onDelete,
   saving,
   deleting,
+  canCreate,
+  canEdit,
+  canDelete,
 }: {
   templates: SalesTemplate[];
   editingTemplateKey: string | null;
@@ -998,7 +1040,11 @@ function TemplateEditorPanel({
   onDelete: () => void;
   saving: boolean;
   deleting: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
 }) {
+  const canSaveCurrent = editingTemplateKey ? canEdit : canCreate;
   return (
     <section className="grid gap-4 xl:grid-cols-[390px_minmax(0,1fr)]">
       <Card className="border-stone-200 bg-white">
@@ -1008,7 +1054,7 @@ function TemplateEditorPanel({
               <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Biblioteca</p>
               <h2 className="text-xl font-black">Templates</h2>
             </div>
-            <Button variant="outline" onClick={onNewTemplate}>
+            <Button variant="outline" onClick={onNewTemplate} disabled={!canCreate}>
               <Plus size={16} />
               Novo
             </Button>
@@ -1063,13 +1109,13 @@ function TemplateEditorPanel({
                   <Button
                     className="bg-emerald-600 text-white hover:bg-emerald-500"
                     onClick={onSave}
-                    disabled={saving || !templateDraft.label.trim()}
+                    disabled={!canSaveCurrent || saving || !templateDraft.label.trim()}
                   >
                     <Save size={16} />
                     {saving ? "Salvando..." : "Salvar template"}
                   </Button>
                   {editingTemplateKey ? (
-                    <Button variant="outline" onClick={onDelete} disabled={deleting}>
+                    <Button variant="outline" onClick={onDelete} disabled={!canDelete || deleting}>
                       <Trash2 size={16} />
                       Excluir
                     </Button>
@@ -1084,7 +1130,7 @@ function TemplateEditorPanel({
                     value={templateDraft.key}
                     onChange={(event) => onDraftChange({ key: event.target.value })}
                     placeholder="primeiro_contato"
-                    disabled={Boolean(editingTemplateKey)}
+                    disabled={Boolean(editingTemplateKey) || !canSaveCurrent}
                   />
                   <span className="block text-xs text-stone-500">
                     A chave fica travada depois de salvar para nao quebrar historico.
@@ -1096,6 +1142,7 @@ function TemplateEditorPanel({
                     value={templateDraft.label}
                     onChange={(event) => onDraftChange({ label: event.target.value })}
                     placeholder="Primeira mensagem"
+                    disabled={!canSaveCurrent}
                   />
                 </label>
               </div>
@@ -1106,6 +1153,7 @@ function TemplateEditorPanel({
                   value={templateDraft.description}
                   onChange={(event) => onDraftChange({ description: event.target.value })}
                   placeholder="Quando usar este template"
+                  disabled={!canSaveCurrent}
                 />
               </label>
 
@@ -1117,6 +1165,7 @@ function TemplateEditorPanel({
                   value={templateDraft.recommended_for_text}
                   onChange={(event) => onDraftChange({ recommended_for_text: event.target.value })}
                   placeholder="novo, pesquisado, demo_acessada"
+                  disabled={!canSaveCurrent}
                 />
                 <span className="block text-xs text-stone-500">
                   Separe por virgula. Isso ajuda o sistema a sugerir o template certo para cada clinica.
@@ -1131,7 +1180,7 @@ function TemplateEditorPanel({
                     </p>
                     <h3 className="text-lg font-black">Crie quantas variacoes quiser</h3>
                   </div>
-                  <Button variant="outline" onClick={onAddMessage}>
+                  <Button variant="outline" onClick={onAddMessage} disabled={!canSaveCurrent}>
                     <Plus size={16} />
                     Adicionar mensagem
                   </Button>
@@ -1147,6 +1196,7 @@ function TemplateEditorPanel({
                             value={message.key}
                             onChange={(event) => onMessageChange(index, { key: event.target.value })}
                             placeholder="principal"
+                            disabled={!canSaveCurrent}
                           />
                         </label>
                         <label className="block space-y-2">
@@ -1155,6 +1205,7 @@ function TemplateEditorPanel({
                             value={message.label}
                             onChange={(event) => onMessageChange(index, { label: event.target.value })}
                             placeholder="Mensagem principal"
+                            disabled={!canSaveCurrent}
                           />
                         </label>
                         <div className="flex items-end gap-2">
@@ -1163,13 +1214,14 @@ function TemplateEditorPanel({
                               type="checkbox"
                               checked={message.is_default}
                               onChange={(event) => onMessageChange(index, { is_default: event.target.checked })}
+                              disabled={!canSaveCurrent}
                             />
                             Padrao
                           </label>
                           <Button
                             variant="outline"
                             onClick={() => onRemoveMessage(index)}
-                            disabled={templateDraft.messages.length <= 1}
+                            disabled={!canSaveCurrent || templateDraft.messages.length <= 1}
                           >
                             <Trash2 size={16} />
                           </Button>
@@ -1183,6 +1235,7 @@ function TemplateEditorPanel({
                           className="min-h-[220px] w-full resize-y rounded-2xl border border-stone-200 bg-stone-50 p-4 font-mono text-sm leading-6 text-stone-800 outline-none transition focus:border-emerald-400 focus:bg-white"
                           value={message.body}
                           onChange={(event) => onMessageChange(index, { body: event.target.value })}
+                          disabled={!canSaveCurrent}
                         />
                       </label>
                     </div>

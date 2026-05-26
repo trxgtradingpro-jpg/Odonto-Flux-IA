@@ -29,7 +29,7 @@ function isExpiredToken(token: string | null) {
 
 function isAdminToken(token: string | null) {
   const roles = parseTokenPayload(token)?.roles || [];
-  return roles.some((role) => ["admin_platform", "sales_admin", "sales_viewer"].includes(role));
+  return roles.some((role) => ["admin_platform", "sales_admin", "sales_viewer", "sales_affiliate"].includes(role));
 }
 
 export function getAccessToken() {

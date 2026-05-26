@@ -23,9 +23,14 @@ from app.models import (
     ProspectUnit,
 )
 from app.schemas.admin_sales import (
+    AdminAffiliateListOutput,
+    AdminAffiliateRegisterInput,
+    AdminAffiliateUpdateInput,
     AdminChangeInitialPasswordInput,
     AdminLoginInput,
     AdminLoginOutput,
+    AdminPageDefinitionOutput,
+    AdminSessionOutput,
     DemoAccessOutput,
     DemoActivityOutput,
     DemoEventInput,
@@ -240,6 +245,62 @@ def admin_login(payload: AdminLoginInput, request: Request, db: Session = Depend
     return sales.admin_login(db, email=payload.email, password=payload.password)
 
 
+@router.get("/admin/auth/me", response_model=AdminSessionOutput)
+def admin_me(principal=Depends(get_current_principal)):
+    sales.require_sales_principal(principal)
+    return sales.serialize_admin_session(user=principal.user, roles=principal.roles)
+
+
+@router.post("/admin/affiliates/register", response_model=AdminLoginOutput)
+def register_affiliate(payload: AdminAffiliateRegisterInput, request: Request, db: Session = Depends(get_db)):
+    _rate_limit_login(request, payload.email)
+    return sales.register_adm_affiliate(
+        db,
+        full_name=payload.full_name,
+        email=str(payload.email),
+        password=payload.password,
+        phone=payload.phone,
+    )
+
+
+@router.get("/admin/affiliates/pages", response_model=list[AdminPageDefinitionOutput])
+def list_affiliate_page_definitions(principal=Depends(get_current_principal)):
+    sales.require_adm_page_permission(principal, "adm_affiliates", "view")
+    return sales.adm_page_definitions()
+
+
+@router.get("/admin/affiliates", response_model=AdminAffiliateListOutput)
+def list_affiliates(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_adm_page_permission(principal, "adm_affiliates", "view")
+    data = sales.list_adm_affiliates(db)
+    return {"data": data, "total": len(data)}
+
+
+@router.patch("/admin/affiliates/{user_id}", response_model=AdminSessionOutput)
+def update_affiliate(
+    user_id: UUID,
+    payload: AdminAffiliateUpdateInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_affiliates", "edit")
+    return sales.update_adm_affiliate(
+        db,
+        user_id=user_id,
+        full_name=payload.full_name,
+        phone=payload.phone,
+        is_active=payload.is_active,
+        page_permissions=payload.page_permissions,
+    )
+
+
+@router.delete("/admin/affiliates/{user_id}")
+def delete_affiliate(user_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_adm_page_permission(principal, "adm_affiliates", "delete")
+    sales.delete_adm_affiliate(db, user_id=user_id)
+    return {"message": "Afiliado removido."}
+
+
 @router.post("/admin/auth/logout")
 def admin_logout():
     return {"message": "Sessao encerrada no cliente."}
@@ -269,7 +330,7 @@ def list_admin_whatsapp_conversations(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
 
@@ -346,7 +407,7 @@ def list_admin_whatsapp_messages(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
     _prospect, conversation, source = _resolve_admin_whatsapp_conversation(db, conversation_id)
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
@@ -388,7 +449,7 @@ def list_admin_whatsapp_messages(
 
 @router.get("/admin/prospects/overview", response_model=ProspectOverviewOutput)
 def prospects_overview(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     return sales.overview(db)
 
 
@@ -402,7 +463,7 @@ def list_prospects(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     query = select(ProspectAccount)
     count_query = select(func.count(ProspectAccount.id))
     filters = []
@@ -443,7 +504,7 @@ def list_clinic_message_templates(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "view")
     return sales_messages.list_sales_message_templates(db)
 
 
@@ -453,7 +514,7 @@ def create_clinic_message_template(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "create")
     return sales_messages.create_sales_message_template(db, payload.model_dump())
 
 
@@ -464,7 +525,7 @@ def update_clinic_message_template(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "edit")
     return sales_messages.update_sales_message_template(db, template_key, payload.model_dump())
 
 
@@ -474,7 +535,7 @@ def delete_clinic_message_template(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "delete")
     return sales_messages.delete_sales_message_template(db, template_key)
 
 
@@ -490,7 +551,7 @@ def list_clinic_messages(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "view")
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
     query = select(ProspectAccount)
@@ -548,7 +609,7 @@ def preview_clinic_message(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "create")
     prospect = _get_prospect(db, payload.prospect_id)
     return sales_messages.build_sales_message_preview(
         db,
@@ -571,7 +632,7 @@ def record_clinic_message_event(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "create")
     prospect = _get_prospect(db, prospect_id)
     event = sales_messages.record_sales_message_event(
         db,
@@ -605,7 +666,7 @@ def search_google_places(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_import_places", "view")
     return google_places_service.search_google_places(
         db,
         query=payload.query,
@@ -621,7 +682,7 @@ def import_google_places(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_import_places", "create")
     return google_places_service.import_google_places(
         db,
         place_ids=payload.place_ids,
@@ -633,14 +694,14 @@ def import_google_places(
 
 @router.post("/admin/prospects", response_model=ProspectOutput)
 def create_prospect(payload: ProspectCreate, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "create")
     prospect = sales.create_prospect(db, payload, actor_id=principal.user.id)
     return sales.serialize_prospect(db, prospect)
 
 
 @router.get("/admin/prospects/{prospect_id}", response_model=ProspectOutput)
 def get_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     return sales.serialize_prospect(db, _get_prospect(db, prospect_id))
 
 
@@ -651,14 +712,14 @@ def update_prospect(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = sales.update_prospect(db, _get_prospect(db, prospect_id), payload, actor_id=principal.user.id)
     return sales.serialize_prospect(db, prospect)
 
 
 @router.delete("/admin/prospects/{prospect_id}")
 def delete_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "delete")
     prospect = _get_prospect(db, prospect_id)
     if prospect.demo_tenant_id or prospect.demo_user_id:
         sales.cleanup_demo_resources(
@@ -680,7 +741,7 @@ def add_unit(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = _get_prospect(db, prospect_id)
     unit = ProspectUnit(
         prospect_account_id=prospect.id,
@@ -704,7 +765,7 @@ def add_service(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = _get_prospect(db, prospect_id)
     service = ProspectService(
         prospect_account_id=prospect.id,
@@ -728,7 +789,7 @@ def add_note(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = _get_prospect(db, prospect_id)
     note = ProspectNote(
         prospect_account_id=prospect.id,
@@ -751,7 +812,7 @@ def add_note(
 
 @router.get("/admin/prospects/{prospect_id}/timeline", response_model=list[ProspectTimelineEventOutput])
 def timeline(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     _get_prospect(db, prospect_id)
     rows = db.execute(
         select(ProspectTimelineEvent)
@@ -779,7 +840,7 @@ def generate_demo(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.generate_demo(db, _get_prospect(db, prospect_id), actor_id=principal.user.id, base_url=_base_url(request))
     return {
         "prospect": sales.serialize_prospect(db, result["prospect"]),
@@ -799,7 +860,7 @@ def send_demo_access(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = _get_prospect(db, prospect_id)
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     demo_booking_path = sales.resolve_demo_booking_path(db, prospect=prospect)
@@ -822,7 +883,7 @@ def record_contact(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = _get_prospect(db, prospect_id)
     prospect.first_contact_channel = prospect.first_contact_channel or payload.channel
     prospect.first_contact_at = prospect.first_contact_at or datetime.now(UTC)
@@ -851,7 +912,7 @@ def send_outreach(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.send_sales_outreach_step(
         db,
         prospect=_get_prospect(db, prospect_id),
@@ -871,7 +932,7 @@ def start_outreach_automation(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.start_sales_outreach_automation(
         db,
         prospect=_get_prospect(db, prospect_id),
@@ -889,7 +950,7 @@ def run_outreach_lab(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.simulate_sales_outreach_lab(
         db,
         prospect=_get_prospect(db, prospect_id),
@@ -907,7 +968,7 @@ def mark_status(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     if payload.status not in sales.PROSPECT_STATUSES:
         raise ApiError(status_code=400, code="PROSPECT_STATUS_INVALID", message="Status comercial invalido")
     prospect = _get_prospect(db, prospect_id)
@@ -930,14 +991,14 @@ def mark_status(
 
 @router.post("/admin/prospects/{prospect_id}/score/recalculate", response_model=ProspectOutput)
 def recalculate_score(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
     prospect = sales.recalculate_score(db, _get_prospect(db, prospect_id))
     return sales.serialize_prospect(db, prospect)
 
 
 @router.get("/admin/prospects/{prospect_id}/activity", response_model=list[DemoActivityOutput])
 def activity(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     _get_prospect(db, prospect_id)
     rows = db.execute(
         select(DemoActivityEvent)
@@ -959,7 +1020,7 @@ def activity(prospect_id: UUID, principal=Depends(get_current_principal), db: Se
 
 @router.get("/admin/prospects/{prospect_id}/insights", response_model=ProspectInsightsOutput)
 def insights(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
-    sales.require_sales_principal(principal)
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
     return sales.get_insights(db, _get_prospect(db, prospect_id))
 
 
@@ -1070,7 +1131,7 @@ def demo_magic_link(
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
-    sales.require_sales_write(principal)
+    sales.require_adm_page_permission(principal, "adm_messages", "create")
     prospect = _get_prospect(db, payload.prospect_account_id)
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     return {

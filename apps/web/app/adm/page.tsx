@@ -27,11 +27,14 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   UserRound,
+  UsersRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import PlatformWhatsAppSettings from "@/components/adm/platform-whatsapp-settings";
 import { EmptyState, RightDrawer } from "@/components/premium";
+import { useAdmSession } from "@/hooks/use-adm-session";
+import { canAccessAdmPage } from "@/lib/adm-page-access";
 import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
 import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
@@ -335,7 +338,7 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
 
-const CRM_PROSPECT_GRID_CLASS = "grid-cols-[minmax(220px,1.2fr)_110px_110px_70px_110px_228px]";
+const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.2fr)_110px_110px_70px_110px_228px]";
 
 type AdmSection = "crm" | "adm_whatsapp" | "whatsapp_settings";
 
@@ -767,6 +770,12 @@ function sessionId() {
 function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [affiliateName, setAffiliateName] = useState("");
+  const [affiliateEmail, setAffiliateEmail] = useState("");
+  const [affiliatePhone, setAffiliatePhone] = useState("");
+  const [affiliatePassword, setAffiliatePassword] = useState("");
+  const [affiliatePasswordConfirm, setAffiliatePasswordConfirm] = useState("");
 
   const loginMutation = useMutation({
     mutationFn: async () => (await api.post("/admin/auth/login", { email, password })).data,
@@ -778,8 +787,26 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
     onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel entrar no /adm.")),
   });
 
+  const registerMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post("/admin/affiliates/register", {
+          full_name: affiliateName,
+          email: affiliateEmail,
+          phone: affiliatePhone || null,
+          password: affiliatePassword,
+        })
+      ).data,
+    onSuccess: (data) => {
+      setAdminAccessToken(data.access_token, data.refresh_token);
+      toast.success("Afiliado cadastrado. Acesso liberado para CRM comercial e mensagens prontas.");
+      onLogged(Boolean(data.force_password_change));
+    },
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel cadastrar o afiliado.")),
+  });
+
   return (
-    <main className="grid min-h-screen place-items-center bg-stone-950 px-4 py-10 text-white">
+    <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-950 px-4 py-10 text-white">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-lg bg-white text-sm font-black text-stone-950">{BRAND_MONOGRAM}</div>
@@ -793,30 +820,73 @@ function LoginPanel({ onLogged }: { onLogged: (forceChange: boolean) => void }) 
             <CardTitle>Entrar no CRM de demos</CardTitle>
             <p className="text-sm text-stone-600">{BRAND_TAGLINE}</p>
             <p className="text-xs leading-5 text-stone-500">
-              Use exatamente as credenciais configuradas em <code>ADM_BOOTSTRAP_EMAIL</code> e <code>ADM_BOOTSTRAP_PASSWORD</code>.
+              Admin principal usa as credenciais do ambiente. Afiliados podem se cadastrar e entram com acesso inicial controlado.
             </p>
           </CardHeader>
-          <CardContent>
-            <form
-              className="space-y-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                loginMutation.mutate();
-              }}
-            >
-              <div className="space-y-1">
-                <label className="text-sm font-medium">E-mail</label>
-                <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">Senha</label>
-                <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-              </div>
-              <Button className="w-full" disabled={loginMutation.isPending}>
-                <Lock size={16} />
-                {loginMutation.isPending ? "Entrando..." : "Entrar"}
-              </Button>
-            </form>
+          <CardContent className="space-y-5">
+            {!registerOpen ? (
+              <form
+                className="space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  loginMutation.mutate();
+                }}
+              >
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">E-mail</label>
+                  <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Senha</label>
+                  <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+                </div>
+                <Button className="w-full" disabled={loginMutation.isPending}>
+                  <Lock size={16} />
+                  {loginMutation.isPending ? "Entrando..." : "Entrar"}
+                </Button>
+              </form>
+            ) : (
+              <form
+                className="space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (affiliatePassword !== affiliatePasswordConfirm) {
+                    toast.error("A confirmacao da senha nao confere.");
+                    return;
+                  }
+                  registerMutation.mutate();
+                }}
+              >
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Nome completo</label>
+                  <Input value={affiliateName} onChange={(event) => setAffiliateName(event.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">E-mail</label>
+                  <Input type="email" value={affiliateEmail} onChange={(event) => setAffiliateEmail(event.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Telefone</label>
+                  <Input value={affiliatePhone} onChange={(event) => setAffiliatePhone(event.target.value)} placeholder="Opcional" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Senha</label>
+                  <Input type="password" value={affiliatePassword} onChange={(event) => setAffiliatePassword(event.target.value)} />
+                  <p className="text-xs text-stone-500">Use ao menos 10 caracteres, com maiuscula, minuscula, numero e simbolo.</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Confirmar senha</label>
+                  <Input type="password" value={affiliatePasswordConfirm} onChange={(event) => setAffiliatePasswordConfirm(event.target.value)} />
+                </div>
+                <Button className="w-full bg-emerald-600 text-white hover:bg-emerald-500" disabled={registerMutation.isPending}>
+                  <UsersRound size={16} />
+                  {registerMutation.isPending ? "Cadastrando..." : "Cadastrar afiliado"}
+                </Button>
+              </form>
+            )}
+            <Button type="button" variant="outline" className="w-full" onClick={() => setRegisterOpen((current) => !current)}>
+              {registerOpen ? "Ja tenho acesso" : "Cadastrar afiliado"}
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -845,7 +915,7 @@ function ChangePasswordPanel({ onDone }: { onDone: () => void }) {
   });
 
   return (
-    <main className="grid min-h-screen place-items-center bg-stone-950 px-4 py-10 text-white">
+    <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-950 px-4 py-10 text-white">
       <Card className="w-full max-w-md border-white/10 bg-white text-stone-950">
         <CardHeader>
           <CardTitle>Trocar senha inicial</CardTitle>
@@ -2007,10 +2077,38 @@ export default function AdmPage() {
     setAppOrigin(resolveBrowserOrigin());
   }, []);
 
+  const admSessionQuery = useAdmSession(hasToken && !forcePasswordChange);
+  const admPermissions = admSessionQuery.data?.resolved_adm_page_permissions;
+  const canViewCrm = canAccessAdmPage(admPermissions, "adm_crm", "view");
+  const canCreateCrm = canAccessAdmPage(admPermissions, "adm_crm", "create");
+  const canEditCrm = canAccessAdmPage(admPermissions, "adm_crm", "edit");
+  const canViewMessages = canAccessAdmPage(admPermissions, "adm_messages", "view");
+  const canCreateMessages = canAccessAdmPage(admPermissions, "adm_messages", "create");
+  const canViewImportPlaces = canAccessAdmPage(admPermissions, "adm_import_places", "view");
+  const canViewAdmWhatsapp = canAccessAdmPage(admPermissions, "adm_whatsapp", "view");
+  const canViewWhatsappSettings = canAccessAdmPage(admPermissions, "adm_whatsapp_settings", "view");
+  const canViewImplementations = canAccessAdmPage(admPermissions, "adm_implementations", "view");
+  const canViewAffiliates = canAccessAdmPage(admPermissions, "adm_affiliates", "view");
+  const sessionReady = hasToken && !forcePasswordChange && Boolean(admSessionQuery.data);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    if (activeSection === "crm" && canViewCrm) return;
+    if (activeSection === "adm_whatsapp" && canViewAdmWhatsapp) return;
+    if (activeSection === "whatsapp_settings" && canViewWhatsappSettings) return;
+    if (canViewCrm) {
+      setActiveSection("crm");
+    } else if (canViewAdmWhatsapp) {
+      setActiveSection("adm_whatsapp");
+    } else if (canViewWhatsappSettings) {
+      setActiveSection("whatsapp_settings");
+    }
+  }, [activeSection, canViewAdmWhatsapp, canViewCrm, canViewWhatsappSettings, sessionReady]);
+
   const overviewQuery = useQuery<Overview>({
     queryKey: ["adm-overview"],
     queryFn: async () => (await api.get("/admin/prospects/overview")).data,
-    enabled: hasToken && !forcePasswordChange,
+    enabled: sessionReady && canViewCrm,
     retry: false,
   });
 
@@ -2022,21 +2120,21 @@ export default function AdmPage() {
           params: { status: statusFilter || undefined, q: search || undefined, limit: 200, offset: 0 },
         })
       ).data,
-    enabled: hasToken && !forcePasswordChange,
+    enabled: sessionReady && canViewCrm,
     retry: false,
   });
 
   const platformAccountsQuery = useQuery<{ data: PlatformWhatsAppAccountItem[] }>({
     queryKey: ["adm-platform-whatsapp-accounts"],
     queryFn: async () => (await api.get("/admin/platform/whatsapp/accounts")).data,
-    enabled: hasToken && !forcePasswordChange,
+    enabled: sessionReady && canViewWhatsappSettings,
     retry: false,
   });
 
   const officialTemplatesQuery = useQuery<SalesTemplate[]>({
     queryKey: ["adm-clinic-message-templates"],
     queryFn: async () => (await api.get("/admin/clinic-messages/templates")).data,
-    enabled: hasToken && !forcePasswordChange,
+    enabled: sessionReady && canViewMessages,
     retry: false,
   });
 
@@ -2128,13 +2226,13 @@ export default function AdmPage() {
   const timelineQuery = useQuery<TimelineEvent[]>({
     queryKey: ["adm-prospect-timeline", selectedProspect?.id],
     queryFn: async () => (await api.get(`/admin/prospects/${selectedProspect?.id}/timeline`)).data,
-    enabled: hasToken && !forcePasswordChange && Boolean(selectedProspect?.id),
+    enabled: sessionReady && canViewCrm && Boolean(selectedProspect?.id),
   });
 
   const activityQuery = useQuery<ActivityEvent[]>({
     queryKey: ["adm-prospect-activity", selectedProspect?.id],
     queryFn: async () => (await api.get(`/admin/prospects/${selectedProspect?.id}/activity`)).data,
-    enabled: hasToken && !forcePasswordChange && Boolean(selectedProspect?.id),
+    enabled: sessionReady && canViewCrm && Boolean(selectedProspect?.id),
   });
 
   const generateDemoMutation = useMutation({
@@ -2322,6 +2420,52 @@ export default function AdmPage() {
     return <ChangePasswordPanel onDone={() => setForcePasswordChange(false)} />;
   }
 
+  if (admSessionQuery.isLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-100 px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="p-8 text-center text-sm text-stone-600">Carregando permissoes do /adm...</CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (
+    admSessionQuery.isError ||
+    (!canViewCrm &&
+      !canViewAdmWhatsapp &&
+      !canViewWhatsappSettings &&
+      !canViewMessages &&
+      !canViewImportPlaces &&
+      !canViewImplementations &&
+      !canViewAffiliates)
+  ) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-stone-100 px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="space-y-4 p-8 text-center">
+            <Lock className="mx-auto h-9 w-9 text-stone-400" />
+            <div>
+              <h1 className="text-xl font-black">Acesso ainda nao liberado</h1>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                Seu usuario existe, mas ainda nao tem permissao para abrir uma area do /adm. Peça ao admin principal para revisar suas permissoes.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                clearAdminAccessToken();
+                setHasToken(false);
+              }}
+            >
+              Voltar ao login
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
   const prospects = prospectsQuery.data?.data ?? [];
   const overview = overviewQuery.data;
   const openAdmWhatsappForProspect = (prospect: Prospect) => {
@@ -2373,9 +2517,9 @@ export default function AdmPage() {
   }
 
   return (
-    <main className="min-h-screen bg-stone-100 text-stone-950">
+    <main className="min-h-screen overflow-x-hidden bg-stone-100 text-stone-950">
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-5 py-3">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-950 text-sm font-black text-white">CF</div>
             <div>
@@ -2389,9 +2533,10 @@ export default function AdmPage() {
               </h1>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             <Button
               variant="outline"
+              className="w-full sm:w-auto"
               onClick={() => {
                 clearAdminAccessToken();
                 setHasToken(false);
@@ -2403,7 +2548,7 @@ export default function AdmPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1600px] space-y-4 px-5 py-5">
+      <div className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-5 sm:px-5">
         <Card className="border-stone-200 bg-white">
           <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -2414,75 +2559,104 @@ export default function AdmPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant={activeSection === "crm" ? "default" : "outline"}
-                className={cn(activeSection === "crm" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                onClick={() => setActiveSection("crm")}
-              >
-                <Building2 size={16} />
-                CRM comercial
-              </Button>
-              <Button
-                variant={activeSection === "adm_whatsapp" ? "default" : "outline"}
-                className={cn(activeSection === "adm_whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                onClick={() => {
-                  setAdmWhatsappProspectId(null);
-                  setActiveSection("adm_whatsapp");
-                }}
-              >
-                <MessageSquareText size={16} />
-                WhatsApp do /adm
-              </Button>
-              <Button
-                variant={activeSection === "whatsapp_settings" ? "default" : "outline"}
-                className={cn(activeSection === "whatsapp_settings" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                onClick={() => setActiveSection("whatsapp_settings")}
-              >
-                <SlidersHorizontal size={16} />
-                WhatsApp do sistema
-              </Button>
-              <Link
-                href="/adm/mensagens-para-clinicas"
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
-              >
-                <Clipboard size={16} />
-                Mensagens prontas
-              </Link>
-              <Link
-                href="/adm/importar-clinicas"
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100 active:translate-y-[1px]"
-              >
-                <MapPin size={16} />
-                Importar Places
-              </Link>
-              <Link
-                href="/adm/implementacoes"
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
-              >
-                <SlidersHorizontal size={16} />
-                Implementacoes
-              </Link>
+              {canViewCrm ? (
+                <Button
+                  variant={activeSection === "crm" ? "default" : "outline"}
+                  className={cn(activeSection === "crm" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                  onClick={() => setActiveSection("crm")}
+                >
+                  <Building2 size={16} />
+                  CRM comercial
+                </Button>
+              ) : null}
+              {canViewAdmWhatsapp ? (
+                <Button
+                  variant={activeSection === "adm_whatsapp" ? "default" : "outline"}
+                  className={cn(activeSection === "adm_whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                  onClick={() => {
+                    setAdmWhatsappProspectId(null);
+                    setActiveSection("adm_whatsapp");
+                  }}
+                >
+                  <MessageSquareText size={16} />
+                  WhatsApp do /adm
+                </Button>
+              ) : null}
+              {canViewWhatsappSettings ? (
+                <Button
+                  variant={activeSection === "whatsapp_settings" ? "default" : "outline"}
+                  className={cn(activeSection === "whatsapp_settings" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+                  onClick={() => setActiveSection("whatsapp_settings")}
+                >
+                  <SlidersHorizontal size={16} />
+                  WhatsApp do sistema
+                </Button>
+              ) : null}
+              {canViewMessages ? (
+                <Link
+                  href="/adm/mensagens-para-clinicas"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+                >
+                  <Clipboard size={16} />
+                  Mensagens prontas
+                </Link>
+              ) : null}
+              {canViewImportPlaces ? (
+                <Link
+                  href="/adm/importar-clinicas"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100 active:translate-y-[1px]"
+                >
+                  <MapPin size={16} />
+                  Importar Places
+                </Link>
+              ) : null}
+              {canViewImplementations ? (
+                <Link
+                  href="/adm/implementacoes"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+                >
+                  <SlidersHorizontal size={16} />
+                  Implementacoes
+                </Link>
+              ) : null}
+              {canViewAffiliates ? (
+                <Link
+                  href="/adm/afiliados"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+                >
+                  <UsersRound size={16} />
+                  Afiliados
+                </Link>
+              ) : null}
             </div>
           </CardContent>
         </Card>
 
-        {activeSection === "adm_whatsapp" ? (
+        {activeSection === "adm_whatsapp" && canViewAdmWhatsapp ? (
           <AdmWhatsAppInbox selectedProspectId={admWhatsappProspectId} onClearProspectFilter={() => setAdmWhatsappProspectId(null)} />
         ) : null}
 
-        {activeSection === "whatsapp_settings" ? <PlatformWhatsAppSettings /> : null}
+        {activeSection === "whatsapp_settings" && canViewWhatsappSettings ? <PlatformWhatsAppSettings /> : null}
 
-        {activeSection === "crm" ? (
+        {activeSection === "crm" && canViewCrm ? (
           <>
-        <CreateProspectForm
-          platformAccounts={platformAccounts}
-          platformAccountUsage={platformAccountUsage}
-          onCreated={(prospect) => {
-            setSelectedId(prospect.id);
-            queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
-            queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
-          }}
-        />
+        {canCreateCrm ? (
+          <CreateProspectForm
+            platformAccounts={platformAccounts}
+            platformAccountUsage={platformAccountUsage}
+            onCreated={(prospect) => {
+              setSelectedId(prospect.id);
+              queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+              queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+            }}
+          />
+        ) : (
+          <Card className="border-amber-200 bg-amber-50">
+            <CardContent className="p-4 text-sm text-amber-900">
+              Seu acesso esta em modo leitura no CRM. Voce pode consultar prospects, mas nao cadastrar novas clinicas.
+            </CardContent>
+          </Card>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <MetricCard icon={<Building2 size={18} />} label="Prospects" value={overview?.total_prospects ?? 0} />
@@ -2519,7 +2693,7 @@ export default function AdmPage() {
             </div>
 
             <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
-              <div className={cn("grid gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500", CRM_PROSPECT_GRID_CLASS)}>
+              <div className={cn("hidden gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500 md:grid", CRM_PROSPECT_GRID_CLASS)}>
                 <span>Clinica</span>
                 <span>Status</span>
                 <span>Temperatura</span>
@@ -2570,8 +2744,10 @@ export default function AdmPage() {
                           variant="outline"
                           title="Editar clinica"
                           aria-label={`Editar ${prospect.clinic_name}`}
+                          disabled={!canEditCrm}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canEditCrm) return;
                             openProspectEditor(prospect);
                           }}
                         >
@@ -2583,8 +2759,10 @@ export default function AdmPage() {
                           variant="outline"
                           title="Gerar demo"
                           aria-label={`Gerar demo para ${prospect.clinic_name}`}
+                          disabled={!canEditCrm}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canEditCrm) return;
                             generateDemoMutation.mutate(prospect.id);
                           }}
                         >
@@ -2596,8 +2774,10 @@ export default function AdmPage() {
                           variant="outline"
                           title="Abrir WhatsApp /adm"
                           aria-label={`Abrir WhatsApp /adm de ${prospect.clinic_name}`}
+                          disabled={!canViewAdmWhatsapp}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canViewAdmWhatsapp) return;
                             openAdmWhatsappForProspect(prospect);
                           }}
                         >
@@ -2609,9 +2789,10 @@ export default function AdmPage() {
                           variant="outline"
                           title={officialWhatsAppLink ? "Escolher template para WhatsApp oficial" : "WhatsApp oficial indisponivel"}
                           aria-label={`Escolher template para WhatsApp oficial de ${prospect.clinic_name}`}
-                          disabled={!officialWhatsAppLink}
+                          disabled={!officialWhatsAppLink || !canCreateMessages}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canCreateMessages) return;
                             if (!officialWhatsAppLink) {
                               toast.error("Essa clinica nao tem numero de WhatsApp cadastrado.");
                               return;
@@ -2627,8 +2808,10 @@ export default function AdmPage() {
                           variant="outline"
                           title="Copiar acesso"
                           aria-label={`Copiar acesso de ${prospect.clinic_name}`}
+                          disabled={!canEditCrm}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canEditCrm) return;
                             accessMutation.mutate(prospect.id);
                           }}
                         >
@@ -2640,8 +2823,10 @@ export default function AdmPage() {
                           variant="outline"
                           title="Iniciar automacao"
                           aria-label={`Iniciar automacao para ${prospect.clinic_name}`}
+                          disabled={!canEditCrm}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (!canEditCrm) return;
                             automationMutation.mutate(prospect.id);
                           }}
                         >
@@ -2699,6 +2884,7 @@ export default function AdmPage() {
                 onStatusChange={(status) => statusMutation.mutate({ prospectId: selectedProspect.id, status })}
                 automationPending={automationMutation.isPending}
                 outreachLabPending={outreachLabMutation.isPending}
+                canEdit={canEditCrm}
               />
             ) : (
               <Card className="border-stone-200">
@@ -2710,6 +2896,13 @@ export default function AdmPage() {
           </aside>
         </div>
           </>
+        ) : null}
+        {activeSection === "crm" && !canViewCrm ? (
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="p-8">
+              <EmptyState title="Area bloqueada" description="Seu usuario nao tem permissao para ver o CRM comercial." />
+            </CardContent>
+          </Card>
         ) : null}
       </div>
       <EditProspectDrawer
@@ -2980,6 +3173,7 @@ function ProspectDetail({
   onStatusChange,
   automationPending,
   outreachLabPending,
+  canEdit,
 }: {
   prospect: Prospect;
   timeline: TimelineEvent[];
@@ -2998,6 +3192,7 @@ function ProspectDetail({
   onStatusChange: (status: string) => void;
   automationPending: boolean;
   outreachLabPending: boolean;
+  canEdit: boolean;
 }) {
   const checklistValues = Object.values(prospect.demo_checklist || {});
   const checklistDone = checklistValues.filter(Boolean).length;
@@ -3054,11 +3249,11 @@ function ProspectDetail({
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
-            <Button onClick={onGenerateDemo}>
+            <Button onClick={onGenerateDemo} disabled={!canEdit}>
               <ShieldCheck size={16} />
               Gerar demo
             </Button>
-            <Button variant="outline" onClick={onIssueAccess} disabled={!prospect.demo_tenant_id}>
+            <Button variant="outline" onClick={onIssueAccess} disabled={!prospect.demo_tenant_id || !canEdit}>
               <Send size={16} />
               Copiar acesso
             </Button>
@@ -3070,7 +3265,7 @@ function ProspectDetail({
               <Clipboard size={16} />
               Copiar agendamento
             </Button>
-            <Button variant="outline" onClick={onRecordContact}>
+            <Button variant="outline" onClick={onRecordContact} disabled={!canEdit}>
               <PhoneCall size={16} />
               Registrar contato
             </Button>
@@ -3078,6 +3273,7 @@ function ProspectDetail({
               className="h-10 rounded-lg border border-stone-200 bg-white px-3 text-sm"
               value={prospect.status}
               onChange={(event) => onStatusChange(event.target.value)}
+              disabled={!canEdit}
             >
               {STATUS_OPTIONS.map((status) => (
                 <option key={status} value={status}>
@@ -3109,7 +3305,7 @@ function ProspectDetail({
               </p>
             ) : null}
 
-            <Button className="mt-4 w-full bg-emerald-600 text-white hover:bg-emerald-500" onClick={onStartAutomation} disabled={automationPending || outreach.automation_active}>
+            <Button className="mt-4 w-full bg-emerald-600 text-white hover:bg-emerald-500" onClick={onStartAutomation} disabled={!canEdit || automationPending || outreach.automation_active}>
               <MessageSquareText size={16} />
               {outreach.automation_active ? "Automacao ativa no WhatsApp" : automationPending ? "Iniciando automacao..." : "Iniciar automacao comercial"}
             </Button>
@@ -3123,15 +3319,15 @@ function ProspectDetail({
           </div>
 
           <div className="grid gap-2 sm:grid-cols-3">
-            <Button variant="outline" onClick={onSendReceptionOutreach}>
+            <Button variant="outline" onClick={onSendReceptionOutreach} disabled={!canEdit}>
               <MessageSquareText size={16} />
               Chamar recepção
             </Button>
-            <Button variant="outline" onClick={onSendDecisionMakerPitch}>
+            <Button variant="outline" onClick={onSendDecisionMakerPitch} disabled={!canEdit}>
               <ArrowRight size={16} />
               Enviar pitch + demo
             </Button>
-            <Button variant="outline" onClick={onSendVideoFollowup}>
+            <Button variant="outline" onClick={onSendVideoFollowup} disabled={!canEdit}>
               <Send size={16} />
               Enviar vídeo
             </Button>
@@ -3166,7 +3362,7 @@ function ProspectDetail({
               <Button
                 className="bg-cyan-700 text-white hover:bg-cyan-600"
                 onClick={() => onRunOutreachLab(labScenario)}
-                disabled={outreachLabPending}
+                disabled={!canEdit || outreachLabPending}
               >
                 <MessageSquareText size={16} />
                 {outreachLabPending ? "Rodando simulacao..." : "Rodar IA Lab"}

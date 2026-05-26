@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAdmSession } from "@/hooks/use-adm-session";
+import { canAccessAdmPage } from "@/lib/adm-page-access";
 import { api } from "@/lib/api";
 import { getAdminAccessToken } from "@/lib/auth";
 import { Badge, Button, Card, CardContent, Input, cn } from "@odontoflux/ui";
@@ -102,6 +104,11 @@ export default function ImportClinicsFromPlacesPage() {
     setHasToken(Boolean(getAdminAccessToken()));
   }, []);
 
+  const admSessionQuery = useAdmSession(hasToken);
+  const admPermissions = admSessionQuery.data?.resolved_adm_page_permissions;
+  const canViewImport = canAccessAdmPage(admPermissions, "adm_import_places", "view");
+  const canCreateImport = canAccessAdmPage(admPermissions, "adm_import_places", "create");
+
   const candidates = useMemo(() => searchData?.results ?? [], [searchData?.results]);
   const selectedCandidates = useMemo(
     () => candidates.filter((candidate) => selectedIds.includes(candidate.place_id)),
@@ -164,7 +171,7 @@ export default function ImportClinicsFromPlacesPage() {
 
   if (!hasToken) {
     return (
-      <main className="min-h-screen bg-[#f5f2ea] p-6 text-stone-950">
+      <main className="min-h-screen overflow-x-hidden bg-[#f5f2ea] p-6 text-stone-950">
         <Card className="mx-auto max-w-xl border-stone-200 bg-white">
           <CardContent className="space-y-5 p-8">
             <div className="grid h-12 w-12 place-items-center rounded-xl bg-stone-950 text-sm font-black text-white">
@@ -190,10 +197,37 @@ export default function ImportClinicsFromPlacesPage() {
     );
   }
 
+  if (admSessionQuery.isLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-[#f5f2ea] px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="p-8 text-center text-sm text-stone-600">Carregando permissoes...</CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (!canViewImport) {
+    return (
+      <main className="grid min-h-screen place-items-center overflow-x-hidden bg-[#f5f2ea] px-4 text-stone-950">
+        <Card className="w-full max-w-md border-stone-200 bg-white">
+          <CardContent className="space-y-4 p-8 text-center">
+            <AlertTriangle className="mx-auto h-9 w-9 text-stone-400" />
+            <h1 className="text-xl font-black">Area sem permissao</h1>
+            <p className="text-sm leading-6 text-stone-600">Seu usuario nao tem acesso a importacao pelo Google Places.</p>
+            <Link className="inline-flex h-10 items-center rounded-lg bg-stone-950 px-4 text-sm font-bold text-white" href="/adm">
+              Voltar ao /adm
+            </Link>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen bg-[#f5f2ea] text-stone-950">
+    <main className="min-h-screen overflow-x-hidden bg-[#f5f2ea] text-stone-950">
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1500px] flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-5">
           <div className="flex items-center gap-3">
             <Link
               href="/adm"
@@ -221,7 +255,7 @@ export default function ImportClinicsFromPlacesPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1500px] space-y-5 px-5 py-5">
+      <div className="mx-auto w-full max-w-[1500px] space-y-5 px-4 py-5 lg:px-5">
         <section className="overflow-hidden rounded-3xl border border-emerald-200 bg-[radial-gradient(circle_at_top_left,#dcfce7,transparent_32%),linear-gradient(135deg,#052e2b,#0f766e)] text-white shadow-sm">
           <div className="grid gap-6 p-6 lg:grid-cols-[1fr_360px] lg:p-8">
             <div>
@@ -412,7 +446,7 @@ export default function ImportClinicsFromPlacesPage() {
 
                 <Button
                   className="w-full bg-stone-950 text-white hover:bg-stone-800"
-                  disabled={!selectedIds.length || importMutation.isPending}
+                  disabled={!canCreateImport || !selectedIds.length || importMutation.isPending}
                   onClick={() => importMutation.mutate()}
                 >
                   <Database size={16} />

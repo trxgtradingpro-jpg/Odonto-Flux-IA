@@ -314,10 +314,32 @@ DEFAULT_SALES_OUTREACH_SENDER_TENANT_LEGAL_NAME = "ClinicFlux AI Comercial LTDA"
 DEFAULT_SALES_OUTREACH_SENDER_TENANT_TRADE_NAME = "ClinicFlux AI Comercial"
 ADM_BOOTSTRAP_GRANT_ROLE_NAMES = ("admin_platform", "sales_admin")
 ADM_BOOTSTRAP_ACCESS_ROLE_NAMES = ("admin_platform", "sales_admin", "sales_viewer")
+ADM_FULL_ACCESS_ROLE_NAMES = ("admin_platform", "sales_admin")
+ADM_AFFILIATE_ROLE_NAME = "sales_affiliate"
 ADM_BOOTSTRAP_MANAGED_KEY = "adm_bootstrap_managed"
 ADM_BOOTSTRAP_VERSION_KEY = "adm_bootstrap_version"
 ADM_INITIAL_PASSWORD_KEY = "adm_initial_password"
+ADM_AFFILIATE_MARKER_KEY = "adm_affiliate"
 ADM_BOOTSTRAP_DISPLAY_NAME = "Admin Comercial ClinicFlux AI"
+ADM_PERMISSION_ACTIONS = ("view", "create", "edit", "delete")
+ADM_MANAGED_PAGES = (
+    {"key": "adm_crm", "href": "/adm", "label": "CRM comercial"},
+    {"key": "adm_messages", "href": "/adm/mensagens-para-clinicas", "label": "Mensagens prontas"},
+    {"key": "adm_import_places", "href": "/adm/importar-clinicas", "label": "Importar Google Places"},
+    {"key": "adm_whatsapp", "href": "/adm", "label": "WhatsApp do /adm"},
+    {"key": "adm_whatsapp_settings", "href": "/adm", "label": "WhatsApp do sistema"},
+    {"key": "adm_implementations", "href": "/adm/implementacoes", "label": "Implementacoes"},
+    {"key": "adm_affiliates", "href": "/adm/afiliados", "label": "Afiliados"},
+)
+ADM_DEFAULT_AFFILIATE_PERMISSIONS = {
+    "adm_crm": {"view": True, "create": True, "edit": True, "delete": False},
+    "adm_messages": {"view": True, "create": True, "edit": True, "delete": False},
+}
+ADM_VIEWER_DEFAULT_PERMISSIONS = {
+    "adm_crm": {"view": True, "create": False, "edit": False, "delete": False},
+    "adm_messages": {"view": True, "create": False, "edit": False, "delete": False},
+    "adm_whatsapp": {"view": True, "create": False, "edit": False, "delete": False},
+}
 PUBLIC_SITE_QUICK_DEMO_TAGS = ("site_home_demo", "demo_rapida")
 PUBLIC_SITE_QUICK_DEMO_CHANNEL = "site_home_demo"
 PUBLIC_SITE_QUICK_DEMO_LEAD_SOURCE = "site_home_demo"
@@ -526,6 +548,7 @@ def ensure_sales_roles(db: Session) -> dict[str, Role]:
     roles = {
         "sales_admin": ["sales.prospects.manage", "sales.demos.manage", "sales.activity.read"],
         "sales_viewer": ["sales.prospects.read", "sales.activity.read"],
+        ADM_AFFILIATE_ROLE_NAME: ["sales.prospects.manage", "sales.activity.read"],
         "demo_client": ["dashboard.read"],
         "admin_platform": ["platform.admin", "tenants.manage", "plans.manage", "feature_flags.manage"],
         "owner": [
@@ -549,7 +572,9 @@ def ensure_sales_roles(db: Session) -> dict[str, Role]:
             role = Role(
                 name=name,
                 description=f"Role {name}",
-                scope="platform" if name in {"admin_platform", "sales_admin", "sales_viewer"} else "tenant",
+                scope="platform"
+                if name in {"admin_platform", "sales_admin", "sales_viewer", ADM_AFFILIATE_ROLE_NAME}
+                else "tenant",
                 permissions=permissions,
                 is_system=True,
             )
@@ -570,8 +595,86 @@ def _page_permissions(user: User) -> dict:
     return dict(user.page_permissions or {})
 
 
+def _empty_adm_permission_flags() -> dict[str, bool]:
+    return {action: False for action in ADM_PERMISSION_ACTIONS}
+
+
+def _clone_adm_permission_flags(raw: object) -> dict[str, bool]:
+    if not isinstance(raw, dict):
+        return _empty_adm_permission_flags()
+    return {action: bool(raw.get(action)) for action in ADM_PERMISSION_ACTIONS}
+
+
+def _empty_adm_page_permissions() -> dict[str, dict[str, bool]]:
+    return {str(page["key"]): _empty_adm_permission_flags() for page in ADM_MANAGED_PAGES}
+
+
+def _full_adm_page_permissions() -> dict[str, dict[str, bool]]:
+    return {str(page["key"]): {action: True for action in ADM_PERMISSION_ACTIONS} for page in ADM_MANAGED_PAGES}
+
+
+def adm_page_definitions() -> list[dict[str, str]]:
+    return [dict(page) for page in ADM_MANAGED_PAGES]
+
+
+def normalize_adm_page_permissions(
+    raw_permissions: dict | None,
+    roles: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> dict[str, dict[str, bool]]:
+    role_set = set(roles or [])
+    if role_set.intersection(ADM_FULL_ACCESS_ROLE_NAMES):
+        return _full_adm_page_permissions()
+
+    normalized = _empty_adm_page_permissions()
+    defaults: dict[str, dict[str, bool]] = {}
+    if ADM_AFFILIATE_ROLE_NAME in role_set:
+        defaults.update(ADM_DEFAULT_AFFILIATE_PERMISSIONS)
+    if "sales_viewer" in role_set:
+        defaults.update(ADM_VIEWER_DEFAULT_PERMISSIONS)
+
+    for page_key, flags in defaults.items():
+        normalized[page_key] = _clone_adm_permission_flags(flags)
+
+    raw = raw_permissions or {}
+    for page in ADM_MANAGED_PAGES:
+        page_key = str(page["key"])
+        if page_key in raw:
+            normalized[page_key] = _clone_adm_permission_flags(raw.get(page_key))
+
+    return normalized
+
+
+def _write_adm_page_permissions(
+    current_permissions: dict | None,
+    page_permissions: dict | None,
+    *,
+    mark_affiliate: bool = False,
+) -> dict:
+    permissions = dict(current_permissions or {})
+    normalized = normalize_adm_page_permissions(page_permissions or {}, roles=[])
+    for page in ADM_MANAGED_PAGES:
+        page_key = str(page["key"])
+        if page_permissions and page_key in page_permissions:
+            permissions[page_key] = normalized[page_key]
+    if mark_affiliate:
+        permissions[ADM_AFFILIATE_MARKER_KEY] = True
+    return permissions
+
+
 def _user_role_ids(db: Session, user_id: UUID) -> set[UUID]:
     return {row[0] for row in db.execute(select(UserRole.role_id).where(UserRole.user_id == user_id)).all()}
+
+
+def _user_role_names(db: Session, user_id: UUID) -> list[str]:
+    return [
+        row[0]
+        for row in db.execute(
+            select(Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .where(UserRole.user_id == user_id)
+            .order_by(Role.name.asc())
+        ).all()
+    ]
 
 
 def _revoke_user_refresh_tokens(db: Session, *, user_id: UUID) -> None:
@@ -762,7 +865,7 @@ def ensure_admin_bootstrap(db: Session) -> None:
 
 
 def require_sales_principal(principal) -> None:
-    if not {"admin_platform", "sales_admin", "sales_viewer"}.intersection(set(principal.roles)):
+    if not {"admin_platform", "sales_admin", "sales_viewer", ADM_AFFILIATE_ROLE_NAME}.intersection(set(principal.roles)):
         raise ApiError(status_code=403, code="SALES_FORBIDDEN", message="Acesso restrito ao modulo comercial")
     if principal.user.page_permissions.get("adm_initial_password"):
         raise ApiError(status_code=403, code="ADM_PASSWORD_CHANGE_REQUIRED", message="Troque a senha inicial para continuar")
@@ -772,6 +875,164 @@ def require_sales_write(principal) -> None:
     require_sales_principal(principal)
     if not {"admin_platform", "sales_admin"}.intersection(set(principal.roles)):
         raise ApiError(status_code=403, code="SALES_WRITE_FORBIDDEN", message="Permissao comercial insuficiente")
+
+
+def require_adm_page_permission(principal, page_key: str, action: str = "view") -> None:
+    require_sales_principal(principal)
+    if action not in ADM_PERMISSION_ACTIONS:
+        raise ApiError(status_code=400, code="ADM_PERMISSION_ACTION_INVALID", message="Acao de permissao invalida")
+    if set(principal.roles).intersection(ADM_FULL_ACCESS_ROLE_NAMES):
+        return
+    permissions = normalize_adm_page_permissions(principal.user.page_permissions or {}, principal.roles)
+    if permissions.get(page_key, {}).get(action):
+        return
+    raise ApiError(
+        status_code=403,
+        code="ADM_PAGE_FORBIDDEN",
+        message="Voce nao tem permissao para acessar essa area do /adm",
+        details={"page": page_key, "action": action},
+    )
+
+
+def build_admin_auth_payload(*, user: User, roles: list[str]) -> dict:
+    access_token = create_access_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)
+    refresh_token = create_refresh_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)
+    adm_permissions = normalize_adm_page_permissions(user.page_permissions or {}, roles)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": settings.api_access_token_expire_minutes * 60,
+        "force_password_change": bool(user.page_permissions.get(ADM_INITIAL_PASSWORD_KEY)),
+        "roles": roles,
+        "page_permissions": user.page_permissions or {},
+        "adm_page_permissions": adm_permissions,
+        "is_affiliate": ADM_AFFILIATE_ROLE_NAME in set(roles),
+    }
+
+
+def serialize_admin_session(*, user: User, roles: list[str]) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "phone": user.phone,
+        "roles": roles,
+        "is_active": user.is_active,
+        "force_password_change": bool(user.page_permissions.get(ADM_INITIAL_PASSWORD_KEY)),
+        "page_permissions": user.page_permissions or {},
+        "adm_page_permissions": normalize_adm_page_permissions(user.page_permissions or {}, roles),
+        "is_affiliate": ADM_AFFILIATE_ROLE_NAME in set(roles),
+        "last_login_at": user.last_login_at,
+        "created_at": user.created_at,
+        "updated_at": user.updated_at,
+    }
+
+
+def _get_affiliate_user(db: Session, user_id: UUID) -> User:
+    user = db.get(User, user_id)
+    if not user:
+        raise ApiError(status_code=404, code="ADM_AFFILIATE_NOT_FOUND", message="Afiliado nao encontrado")
+    roles = set(_user_role_names(db, user.id))
+    if ADM_AFFILIATE_ROLE_NAME not in roles:
+        raise ApiError(status_code=404, code="ADM_AFFILIATE_NOT_FOUND", message="Afiliado nao encontrado")
+    return user
+
+
+def serialize_adm_affiliate_user(db: Session, user: User) -> dict:
+    roles = _user_role_names(db, user.id)
+    return serialize_admin_session(user=user, roles=roles)
+
+
+def list_adm_affiliates(db: Session) -> list[dict]:
+    rows = (
+        db.execute(
+            select(User)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(Role.name == ADM_AFFILIATE_ROLE_NAME)
+            .order_by(User.created_at.desc())
+        )
+        .scalars()
+        .unique()
+        .all()
+    )
+    return [serialize_adm_affiliate_user(db, user) for user in rows]
+
+
+def register_adm_affiliate(
+    db: Session,
+    *,
+    full_name: str,
+    email: str,
+    password: str,
+    phone: str | None = None,
+) -> dict:
+    ensure_admin_bootstrap(db)
+    normalized_email = email.lower().strip()
+    if db.scalar(select(User.id).where(func.lower(User.email) == normalized_email)):
+        raise ApiError(status_code=409, code="ADM_AFFILIATE_EMAIL_EXISTS", message="Ja existe um usuario com este e-mail")
+    validate_password_strength(password)
+    roles = ensure_sales_roles(db)
+    permissions = _write_adm_page_permissions(
+        {},
+        ADM_DEFAULT_AFFILIATE_PERMISSIONS,
+        mark_affiliate=True,
+    )
+    user = User(
+        tenant_id=None,
+        unit_id=None,
+        email=normalized_email,
+        full_name=full_name.strip(),
+        phone=phone.strip() if phone else None,
+        hashed_password=hash_password(password),
+        is_active=True,
+        page_permissions=permissions,
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(tenant_id=None, user_id=user.id, role_id=roles[ADM_AFFILIATE_ROLE_NAME].id))
+    db.commit()
+    db.refresh(user)
+    role_names = _user_role_names(db, user.id)
+    return build_admin_auth_payload(user=user, roles=role_names)
+
+
+def update_adm_affiliate(
+    db: Session,
+    *,
+    user_id: UUID,
+    full_name: str | None = None,
+    phone: str | None = None,
+    is_active: bool | None = None,
+    page_permissions: dict | None = None,
+) -> dict:
+    user = _get_affiliate_user(db, user_id)
+    if full_name is not None:
+        user.full_name = full_name.strip()
+    if phone is not None:
+        user.phone = phone.strip() or None
+    if is_active is not None:
+        user.is_active = is_active
+        if not is_active:
+            _revoke_user_refresh_tokens(db, user_id=user.id)
+    if page_permissions is not None:
+        user.page_permissions = _write_adm_page_permissions(
+            user.page_permissions or {},
+            page_permissions,
+            mark_affiliate=True,
+        )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return serialize_adm_affiliate_user(db, user)
+
+
+def delete_adm_affiliate(db: Session, *, user_id: UUID) -> None:
+    user = _get_affiliate_user(db, user_id)
+    _revoke_user_refresh_tokens(db, user_id=user.id)
+    db.execute(delete(UserRole).where(UserRole.user_id == user.id))
+    db.delete(user)
+    db.commit()
 
 
 def serialize_unit(unit: ProspectUnit) -> dict:
@@ -3737,30 +3998,22 @@ def get_insights(db: Session, prospect: ProspectAccount) -> dict:
 def admin_login(db: Session, *, email: str, password: str) -> dict:
     ensure_admin_bootstrap(db)
     normalized_email = email.lower().strip()
-    if _adm_bootstrap_credentials_configured():
-        bootstrap_email = settings.adm_bootstrap_email.lower().strip()
-        if normalized_email != bootstrap_email:
-            raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Credenciais invalidas")
     user = db.scalar(select(User).where(User.email == normalized_email))
     if not user or not verify_password(password, user.hashed_password):
         raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Credenciais invalidas")
     if not user.is_active:
         raise ApiError(status_code=403, code="AUTH_USER_DISABLED", message="Usuario inativo")
-    roles = [row[0] for row in db.execute(select(Role.name).join(UserRole, UserRole.role_id == Role.id).where(UserRole.user_id == user.id)).all()]
-    if not {"admin_platform", "sales_admin", "sales_viewer"}.intersection(set(roles)):
+    roles = _user_role_names(db, user.id)
+    if _adm_bootstrap_credentials_configured():
+        bootstrap_email = settings.adm_bootstrap_email.lower().strip()
+        if normalized_email != bootstrap_email and ADM_AFFILIATE_ROLE_NAME not in set(roles):
+            raise ApiError(status_code=401, code="AUTH_INVALID_CREDENTIALS", message="Credenciais invalidas")
+    if not {"admin_platform", "sales_admin", "sales_viewer", ADM_AFFILIATE_ROLE_NAME}.intersection(set(roles)):
         raise ApiError(status_code=403, code="ADM_FORBIDDEN", message="Usuario sem permissao para /adm")
-    access_token = create_access_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)
-    refresh_token = create_refresh_token(subject=str(user.id), tenant_id=user.tenant_id, roles=roles)
     user.last_login_at = _now()
     db.add(user)
     db.commit()
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "expires_in": settings.api_access_token_expire_minutes * 60,
-        "force_password_change": bool(user.page_permissions.get("adm_initial_password")),
-        "roles": roles,
-    }
+    return build_admin_auth_payload(user=user, roles=roles)
 
 
 def change_initial_admin_password(db: Session, *, user: User, current_password: str, new_password: str) -> None:
