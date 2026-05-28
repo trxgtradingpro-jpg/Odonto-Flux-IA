@@ -154,6 +154,7 @@ type OutreachResult = {
   sender_tenant_id: string;
   conversation_id: string;
   outbound_message_id: string;
+  transport?: string | null;
 };
 
 type OutreachSnapshot = {
@@ -169,6 +170,19 @@ type OutreachSnapshot = {
   last_sent_at?: string | null;
   last_reply_at?: string | null;
   last_reply_preview?: string | null;
+  dispatch_transport?: string | null;
+};
+
+type OutreachRuntime = {
+  transport: string;
+  sender_tenant_slug: string;
+  bridge_enabled: boolean;
+  bridge_configured: boolean;
+  bridge_pending: number;
+  bridge_processing: number;
+  bridge_failed: number;
+  bridge_dead_letter: number;
+  bridge_command?: string | null;
 };
 
 type OutreachLabTurn = {
@@ -1300,7 +1314,7 @@ function CreateProspectForm({
     },
     onSuccess: (data) => {
       toast.success("Clinica cadastrada.");
-      setOpen(false);
+      onOpenChange(false);
       setClinicName("");
       setOwnerName("");
       setWhatsappPhone("");
@@ -2074,6 +2088,13 @@ export default function AdmPage() {
     retry: false,
   });
 
+  const outreachRuntimeQuery = useQuery<OutreachRuntime>({
+    queryKey: ["adm-outreach-runtime"],
+    queryFn: async () => (await api.get("/admin/outreach/runtime")).data,
+    enabled: sessionReady && canViewCrm,
+    retry: false,
+  });
+
   const prospectsQuery = useQuery<{ data: Prospect[]; total: number }>({
     queryKey: ["adm-prospects", statusFilter, search],
     queryFn: async () =>
@@ -2104,6 +2125,8 @@ export default function AdmPage() {
     const rows = prospectsQuery.data?.data ?? [];
     return rows.find((item) => item.id === selectedId) ?? null;
   }, [prospectsQuery.data?.data, selectedId]);
+  const outreachRuntime = outreachRuntimeQuery.data ?? null;
+  const usesWhatsAppWebBridge = outreachRuntime?.transport === "whatsapp_web_bridge";
 
   const platformAccounts = useMemo(
     () =>
@@ -2296,6 +2319,7 @@ export default function AdmPage() {
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
       queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
     },
     onError: (error: unknown) => {
       const response = (error as { response?: { data?: { error?: { message?: string } } } }).response;
@@ -2311,11 +2335,16 @@ export default function AdmPage() {
         syncLatestDemoLinks(data);
         navigator.clipboard?.writeText(data.demo_login_url);
       }
-      toast.success("Automacao comercial iniciada. O WhatsApp vai acompanhar a resposta e avancar para pitch e video.");
+      toast.success(
+        data.transport === "whatsapp_web_bridge"
+          ? "Automacao iniciada. O primeiro envio entrou na fila do WhatsApp Web local e a resposta vai avancar o fluxo."
+          : "Automacao comercial iniciada. O WhatsApp vai acompanhar a resposta e avancar para pitch e video.",
+      );
       queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
       queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
       queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
     },
     onError: (error: unknown) => {
       const response = (error as { response?: { data?: { error?: { message?: string } } } }).response;
@@ -2604,6 +2633,38 @@ export default function AdmPage() {
           </Card>
         )}
 
+        {usesWhatsAppWebBridge ? (
+          <Card className={cn("border-emerald-200", outreachRuntime?.bridge_configured ? "bg-emerald-50" : "bg-amber-50 border-amber-200")}>
+            <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Canal de envio comercial</p>
+                <p className="text-base font-black text-stone-950">WhatsApp Web local conectado ao /adm</p>
+                <p className="text-sm text-stone-700">
+                  {outreachRuntime?.bridge_configured
+                    ? `Fila atual: ${outreachRuntime.bridge_pending} pendente(s), ${outreachRuntime.bridge_processing} em envio, ${outreachRuntime.bridge_failed} falha(s) e ${outreachRuntime.bridge_dead_letter} dead letter.`
+                    : "Configure o token do bridge antes de iniciar automacoes reais pelo WhatsApp Web."}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge className="bg-white text-emerald-700">WhatsApp Web local</Badge>
+                {outreachRuntime?.bridge_command ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(outreachRuntime.bridge_command || "");
+                      toast.success("Comando do bridge copiado.");
+                    }}
+                  >
+                    <Clipboard size={16} />
+                    Copiar comando do bridge
+                  </Button>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
         <div className="space-y-4">
           <section className="space-y-4">
             <div className="flex flex-col gap-3 rounded-lg border border-stone-200 bg-white p-3 lg:flex-row lg:items-center">
@@ -2891,6 +2952,7 @@ export default function AdmPage() {
       <ProspectDetailModal
         open={prospectDetailOpen && Boolean(selectedProspect)}
         prospect={selectedProspect}
+        outreachRuntime={outreachRuntime}
         timeline={timelineQuery.data ?? []}
         activity={activityQuery.data ?? []}
         lastDemoLink={lastDemoLink}
@@ -3076,6 +3138,7 @@ function AdmMenuButtons({
 function ProspectDetailModal({
   open,
   prospect,
+  outreachRuntime,
   timeline,
   activity,
   lastDemoLink,
@@ -3097,6 +3160,7 @@ function ProspectDetailModal({
 }: {
   open: boolean;
   prospect: Prospect | null;
+  outreachRuntime: OutreachRuntime | null;
   timeline: TimelineEvent[];
   activity: ActivityEvent[];
   lastDemoLink: string;
@@ -3136,6 +3200,7 @@ function ProspectDetailModal({
         <div className="overflow-y-auto p-3 sm:p-6">
           <ProspectDetail
             prospect={prospect}
+            outreachRuntime={outreachRuntime}
             timeline={timeline}
             activity={activity}
             lastDemoLink={lastDemoLink}
@@ -3358,6 +3423,7 @@ function OfficialWhatsAppTemplateDrawer({
 
 function ProspectDetail({
   prospect,
+  outreachRuntime,
   timeline,
   activity,
   lastDemoLink,
@@ -3377,6 +3443,7 @@ function ProspectDetail({
   canEdit,
 }: {
   prospect: Prospect;
+  outreachRuntime: OutreachRuntime | null;
   timeline: TimelineEvent[];
   activity: ActivityEvent[];
   lastDemoLink: string;
@@ -3403,6 +3470,17 @@ function ProspectDetail({
   const outreachLab = getOutreachLabSnapshot(prospect);
   const lastLabRun = outreachLab.last_run && typeof outreachLab.last_run === "object" ? outreachLab.last_run : null;
   const automationLabel = outreachAutomationLabel(outreach);
+  const automationTransport = outreach.dispatch_transport || outreachRuntime?.transport || "official_api";
+  const usesWhatsAppWebBridge = automationTransport === "whatsapp_web_bridge";
+  const automationButtonLabel = outreach.automation_active
+    ? usesWhatsAppWebBridge
+      ? "Automacao ativa no WhatsApp Web local"
+      : "Automacao ativa no WhatsApp"
+    : automationPending
+      ? "Iniciando automacao..."
+      : usesWhatsAppWebBridge
+        ? "Iniciar automacao no WhatsApp Web"
+        : "Iniciar automacao comercial";
   const [labScenario, setLabScenario] = useState<string>("manager_interested");
   const resolvedBookingLink = lastBookingLink || bookingLink;
 
@@ -3491,6 +3569,9 @@ function ProspectDetail({
                 <p className="mt-1 max-w-xl leading-6">
                   Um clique inicia o contato da {BRAND_SALES_TEAM} no WhatsApp. Quando a clinica responder, o sistema registra a resposta, envia o pitch curto com demo e depois o video automaticamente.
                 </p>
+                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-900/80">
+                  Canal atual: {usesWhatsAppWebBridge ? "WhatsApp Web local da sua maquina" : "WhatsApp oficial do sistema"}
+                </p>
               </div>
               <Badge className="bg-white text-emerald-800">{automationLabel}</Badge>
             </div>
@@ -3508,7 +3589,7 @@ function ProspectDetail({
 
             <Button className="mt-4 w-full bg-emerald-600 text-white hover:bg-emerald-500" onClick={onStartAutomation} disabled={!canEdit || automationPending || outreach.automation_active}>
               <MessageSquareText size={16} />
-              {outreach.automation_active ? "Automacao ativa no WhatsApp" : automationPending ? "Iniciando automacao..." : "Iniciar automacao comercial"}
+              {automationButtonLabel}
             </Button>
           </div>
 
