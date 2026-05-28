@@ -19,6 +19,7 @@ import {
   MapPin,
   MessageSquareText,
   Pencil,
+  PanelLeft,
   PhoneCall,
   Plus,
   RefreshCw,
@@ -340,7 +341,7 @@ const OUTREACH_LAB_SCENARIOS = [
 
 const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.2fr)_110px_110px_70px_110px_228px]";
 
-type AdmSection = "crm" | "adm_whatsapp" | "whatsapp_settings";
+type AdmSection = "crm" | "stats" | "adm_whatsapp" | "whatsapp_settings";
 
 type AdmWhatsappConversation = {
   id: string;
@@ -1211,15 +1212,18 @@ function AdmWhatsAppInbox({
 }
 
 function CreateProspectForm({
+  open,
+  onOpenChange,
   onCreated,
   platformAccounts,
   platformAccountUsage,
 }: {
+  open: boolean;
+  onOpenChange: (nextOpen: boolean) => void;
   onCreated: (prospect: Prospect) => void;
   platformAccounts: PlatformWhatsAppAccountItem[];
   platformAccountUsage: Record<string, { prospectId: string; clinicName: string }>;
 }) {
-  const [open, setOpen] = useState(false);
   const [clinicName, setClinicName] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [whatsappPhone, setWhatsappPhone] = useState("");
@@ -1318,49 +1322,13 @@ function CreateProspectForm({
       setDemoBackgroundOpacity(DEFAULT_DEMO_BACKGROUND_OPACITY);
       setNotes("");
       onCreated(data);
+      onOpenChange(false);
     },
     onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel cadastrar a clinica.")),
   });
 
   if (!open) {
-    return (
-      <Card className="overflow-hidden border-stone-200 bg-white">
-        <CardContent className="p-0">
-          <div className="grid gap-0 lg:grid-cols-[1.15fr_0.85fr]">
-            <div className="space-y-5 p-6">
-              <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-emerald-700">
-                <ShieldCheck size={14} />
-                CRM interno de vendas
-              </div>
-              <div>
-                <h2 className="text-2xl font-black tracking-tight text-stone-950">Cadastrar clinica prospectada</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-stone-600">
-                  Salve a clinica que respondeu ao primeiro contato manual, registre dores comerciais e prepare a base para gerar uma demo isolada com dados criveis.
-                </p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MiniStep number="1" title="Contato" text="Nome, WhatsApp, decisor e origem do lead." />
-                <MiniStep number="2" title="Contexto" text="Dor principal, cidade, endereco e observacoes." />
-                <MiniStep number="3" title="Demo" text="Servicos iniciais e numero de teste da clinica." />
-              </div>
-            </div>
-            <div className="flex flex-col justify-between border-t border-stone-200 bg-stone-950 p-6 text-white lg:border-l lg:border-t-0">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">Operacao rapida</p>
-                <h3 className="mt-3 text-xl font-black">Comece com o essencial e refine depois.</h3>
-                <p className="mt-2 text-sm leading-6 text-white/65">
-                  O cadastro pode nascer simples. Depois voce adiciona unidades, servicos, notas, gera a demo e acompanha o comportamento no painel.
-                </p>
-              </div>
-              <Button className="mt-6 w-full bg-emerald-500 text-stone-950 hover:bg-emerald-400" onClick={() => setOpen(true)}>
-                <Plus size={16} />
-                Abrir cadastro da clinica
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    );
+    return null;
   }
 
   return (
@@ -1377,7 +1345,7 @@ function CreateProspectForm({
               Preencha o suficiente para a {BRAND_NAME} montar uma demo personalizada. Os campos principais ajudam o follow-up, o score comercial e o provisionamento da demo.
             </p>
           </div>
-          <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar cadastro
           </Button>
         </div>
@@ -1558,7 +1526,7 @@ function CreateProspectForm({
               <p className="mt-1 text-sm text-emerald-800">Voce podera gerar a demo personalizada, copiar o acesso e acompanhar os eventos comerciais.</p>
             </div>
             <div className="flex gap-2">
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Fechar
               </Button>
               <Button disabled={mutation.isPending}>
@@ -2014,16 +1982,6 @@ function EditProspectDrawer({
   );
 }
 
-function MiniStep({ number, title, text }: { number: string; title: string; text: string }) {
-  return (
-    <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
-      <div className="mb-3 grid h-8 w-8 place-items-center rounded-full bg-stone-950 text-xs font-black text-white">{number}</div>
-      <p className="font-bold text-stone-950">{title}</p>
-      <p className="mt-1 text-xs leading-5 text-stone-600">{text}</p>
-    </div>
-  );
-}
-
 function SectionIntro({ title, text }: { title: string; text: string }) {
   return (
     <div>
@@ -2058,6 +2016,9 @@ export default function AdmPage() {
   const [hasToken, setHasToken] = useState(false);
   const [forcePasswordChange, setForcePasswordChange] = useState(false);
   const [activeSection, setActiveSection] = useState<AdmSection>("crm");
+  const [createProspectOpen, setCreateProspectOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [prospectDetailOpen, setProspectDetailOpen] = useState(false);
   const [admWhatsappProspectId, setAdmWhatsappProspectId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
@@ -2094,6 +2055,7 @@ export default function AdmPage() {
   useEffect(() => {
     if (!sessionReady) return;
     if (activeSection === "crm" && canViewCrm) return;
+    if (activeSection === "stats" && canViewCrm) return;
     if (activeSection === "adm_whatsapp" && canViewAdmWhatsapp) return;
     if (activeSection === "whatsapp_settings" && canViewWhatsappSettings) return;
     if (canViewCrm) {
@@ -2140,7 +2102,7 @@ export default function AdmPage() {
 
   const selectedProspect = useMemo(() => {
     const rows = prospectsQuery.data?.data ?? [];
-    return rows.find((item) => item.id === selectedId) ?? rows[0] ?? null;
+    return rows.find((item) => item.id === selectedId) ?? null;
   }, [prospectsQuery.data?.data, selectedId]);
 
   const platformAccounts = useMemo(
@@ -2181,13 +2143,22 @@ export default function AdmPage() {
   }, [prospectsQuery.data?.data]);
 
   useEffect(() => {
-    if (!selectedId && selectedProspect) setSelectedId(selectedProspect.id);
-  }, [selectedId, selectedProspect]);
-
-  useEffect(() => {
     setLastDemoLink("");
     setLastBookingLink("");
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const exists = (prospectsQuery.data?.data ?? []).some((item) => item.id === selectedId);
+    if (!exists) {
+      setSelectedId(null);
+      setProspectDetailOpen(false);
+    }
+  }, [prospectsQuery.data?.data, selectedId]);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [activeSection, createProspectOpen]);
 
   useEffect(() => {
     if (!officialWhatsAppProspect || !officialTemplates.length) return;
@@ -2527,6 +2498,8 @@ export default function AdmPage() {
               <h1 className="text-lg font-bold">
                 {activeSection === "crm"
                   ? "Prospeccao e demos personalizadas"
+                  : activeSection === "stats"
+                    ? "Estatisticas comerciais"
                   : activeSection === "adm_whatsapp"
                     ? "WhatsApp do /adm"
                     : "Configuracao do WhatsApp oficial"}
@@ -2550,84 +2523,35 @@ export default function AdmPage() {
 
       <div className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-5 sm:px-5">
         <Card className="border-stone-200 bg-white">
-          <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</p>
-              <h2 className="mt-1 text-xl font-black text-stone-950">Escolha a area que quer operar agora</h2>
-              <p className="mt-1 text-sm text-stone-600">
-                Alterne entre o CRM comercial, as conversas das demos e a configuracao do WhatsApp oficial da plataforma.
-              </p>
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between gap-3 lg:hidden">
+              <Button type="button" variant="outline" onClick={() => setMobileMenuOpen(true)}>
+                <PanelLeft size={16} />
+                Abrir menu
+              </Button>
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {canViewCrm ? (
-                <Button
-                  variant={activeSection === "crm" ? "default" : "outline"}
-                  className={cn(activeSection === "crm" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                  onClick={() => setActiveSection("crm")}
-                >
-                  <Building2 size={16} />
-                  CRM comercial
-                </Button>
-              ) : null}
-              {canViewAdmWhatsapp ? (
-                <Button
-                  variant={activeSection === "adm_whatsapp" ? "default" : "outline"}
-                  className={cn(activeSection === "adm_whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                  onClick={() => {
-                    setAdmWhatsappProspectId(null);
-                    setActiveSection("adm_whatsapp");
-                  }}
-                >
-                  <MessageSquareText size={16} />
-                  WhatsApp do /adm
-                </Button>
-              ) : null}
-              {canViewWhatsappSettings ? (
-                <Button
-                  variant={activeSection === "whatsapp_settings" ? "default" : "outline"}
-                  className={cn(activeSection === "whatsapp_settings" && "bg-emerald-600 text-white hover:bg-emerald-500")}
-                  onClick={() => setActiveSection("whatsapp_settings")}
-                >
-                  <SlidersHorizontal size={16} />
-                  WhatsApp do sistema
-                </Button>
-              ) : null}
-              {canViewMessages ? (
-                <Link
-                  href="/adm/mensagens-para-clinicas"
-                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
-                >
-                  <Clipboard size={16} />
-                  Mensagens prontas
-                </Link>
-              ) : null}
-              {canViewImportPlaces ? (
-                <Link
-                  href="/adm/importar-clinicas"
-                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100 active:translate-y-[1px]"
-                >
-                  <MapPin size={16} />
-                  Importar Places
-                </Link>
-              ) : null}
-              {canViewImplementations ? (
-                <Link
-                  href="/adm/implementacoes"
-                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
-                >
-                  <SlidersHorizontal size={16} />
-                  Implementacoes
-                </Link>
-              ) : null}
-              {canViewAffiliates ? (
-                <Link
-                  href="/adm/afiliados"
-                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
-                >
-                  <UsersRound size={16} />
-                  Afiliados
-                </Link>
-              ) : null}
+            <div className="hidden lg:block">
+              <AdmMenuButtons
+                activeSection={activeSection}
+                canCreateCrm={canCreateCrm}
+                canViewAdmWhatsapp={canViewAdmWhatsapp}
+                canViewAffiliates={canViewAffiliates}
+                canViewCrm={canViewCrm}
+                canViewImportPlaces={canViewImportPlaces}
+                canViewImplementations={canViewImplementations}
+                canViewMessages={canViewMessages}
+                canViewWhatsappSettings={canViewWhatsappSettings}
+                onOpenCreateProspect={() => {
+                  setActiveSection("crm");
+                  setCreateProspectOpen(true);
+                }}
+                onSelectAdmWhatsapp={() => {
+                  setAdmWhatsappProspectId(null);
+                  setActiveSection("adm_whatsapp");
+                }}
+                onSelectSection={setActiveSection}
+              />
             </div>
           </CardContent>
         </Card>
@@ -2638,10 +2562,32 @@ export default function AdmPage() {
 
         {activeSection === "whatsapp_settings" && canViewWhatsappSettings ? <PlatformWhatsAppSettings /> : null}
 
+        {activeSection === "stats" && canViewCrm ? (
+          <section className="space-y-4">
+            <Card className="border-stone-200 bg-white">
+              <CardHeader>
+                <CardTitle className="text-xl">Estatisticas do CRM</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <MetricCard icon={<Building2 size={18} />} label="Prospects" value={overview?.total_prospects ?? 0} />
+                  <MetricCard icon={<ShieldCheck size={18} />} label="Demos criadas" value={overview?.demos_created ?? 0} />
+                  <MetricCard icon={<Eye size={18} />} label="Demos acessadas" value={overview?.demos_accessed ?? 0} />
+                  <MetricCard icon={<Flame size={18} />} label="Quentes" value={overview?.hot_leads ?? 0} />
+                  <MetricCard icon={<CalendarClock size={18} />} label="Reunioes" value={overview?.meetings_scheduled ?? 0} />
+                  <MetricCard icon={<CheckCircle2 size={18} />} label="Ganhos" value={overview?.won ?? 0} />
+                </div>
+              </CardContent>
+            </Card>
+          </section>
+        ) : null}
+
         {activeSection === "crm" && canViewCrm ? (
           <>
         {canCreateCrm ? (
           <CreateProspectForm
+            open={createProspectOpen}
+            onOpenChange={setCreateProspectOpen}
             platformAccounts={platformAccounts}
             platformAccountUsage={platformAccountUsage}
             onCreated={(prospect) => {
@@ -2658,16 +2604,7 @@ export default function AdmPage() {
           </Card>
         )}
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <MetricCard icon={<Building2 size={18} />} label="Prospects" value={overview?.total_prospects ?? 0} />
-          <MetricCard icon={<ShieldCheck size={18} />} label="Demos criadas" value={overview?.demos_created ?? 0} />
-          <MetricCard icon={<Eye size={18} />} label="Demos acessadas" value={overview?.demos_accessed ?? 0} />
-          <MetricCard icon={<Flame size={18} />} label="Quentes" value={overview?.hot_leads ?? 0} />
-          <MetricCard icon={<CalendarClock size={18} />} label="Reunioes" value={overview?.meetings_scheduled ?? 0} />
-          <MetricCard icon={<CheckCircle2 size={18} />} label="Ganhos" value={overview?.won ?? 0} />
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-[1fr_520px]">
+        <div className="space-y-4">
           <section className="space-y-4">
             <div className="flex flex-col gap-3 rounded-lg border border-stone-200 bg-white p-3 lg:flex-row lg:items-center">
               <div className="relative flex-1">
@@ -2717,9 +2654,15 @@ export default function AdmPage() {
                         CRM_PROSPECT_GRID_CLASS,
                         selectedProspect?.id === prospect.id && "bg-emerald-50/70",
                       )}
-                      onClick={() => setSelectedId(prospect.id)}
+                      onClick={() => {
+                        setSelectedId(prospect.id);
+                        setProspectDetailOpen(true);
+                      }}
                       onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") setSelectedId(prospect.id);
+                        if (event.key === "Enter" || event.key === " ") {
+                          setSelectedId(prospect.id);
+                          setProspectDetailOpen(true);
+                        }
                       }}
                     >
                       <span className="min-w-0">
@@ -2845,55 +2788,6 @@ export default function AdmPage() {
             </div>
           </section>
 
-          <aside className="space-y-4">
-            {selectedProspect ? (
-              <ProspectDetail
-                prospect={selectedProspect}
-                timeline={timelineQuery.data ?? []}
-                activity={activityQuery.data ?? []}
-                lastDemoLink={lastDemoLink}
-                lastBookingLink={lastBookingLink}
-                bookingLink={selectedProspectBookingLink}
-                onGenerateDemo={() => generateDemoMutation.mutate(selectedProspect.id)}
-                onIssueAccess={() => accessMutation.mutate(selectedProspect.id)}
-                onRecordContact={() => contactMutation.mutate(selectedProspect.id)}
-                onStartAutomation={() => automationMutation.mutate(selectedProspect.id)}
-                onSendReceptionOutreach={() =>
-                  outreachMutation.mutate({ prospectId: selectedProspect.id, step: "reception_intro" })
-                }
-                onSendDecisionMakerPitch={() =>
-                  outreachMutation.mutate({
-                    prospectId: selectedProspect.id,
-                    step: "decision_maker_pitch",
-                    recipientName: selectedProspect.owner_name || selectedProspect.manager_name,
-                  })
-                }
-                onSendVideoFollowup={() =>
-                  outreachMutation.mutate({
-                    prospectId: selectedProspect.id,
-                    step: "video_followup",
-                    recipientName: selectedProspect.owner_name || selectedProspect.manager_name,
-                  })
-                }
-                onRunOutreachLab={(scenario) =>
-                  outreachLabMutation.mutate({
-                    prospectId: selectedProspect.id,
-                    scenario,
-                  })
-                }
-                onStatusChange={(status) => statusMutation.mutate({ prospectId: selectedProspect.id, status })}
-                automationPending={automationMutation.isPending}
-                outreachLabPending={outreachLabMutation.isPending}
-                canEdit={canEditCrm}
-              />
-            ) : (
-              <Card className="border-stone-200">
-                <CardContent className="p-8">
-                  <EmptyState title="Selecione uma clinica" description="Os detalhes comerciais aparecem aqui." />
-                </CardContent>
-              </Card>
-            )}
-          </aside>
         </div>
           </>
         ) : null}
@@ -2955,7 +2849,314 @@ export default function AdmPage() {
           void openOfficialWhatsAppWithTemplate();
         }}
       />
+      {mobileMenuOpen ? (
+        <div className="fixed inset-0 z-[115] bg-stone-950/45 lg:hidden" onClick={() => setMobileMenuOpen(false)}>
+          <div
+            className="h-full w-[88vw] max-w-sm border-r border-stone-200 bg-white p-4 shadow-[0_30px_80px_rgba(15,23,42,0.24)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Menu do /adm</p>
+                <p className="mt-1 text-sm font-semibold text-stone-950">Acesse as areas principais</p>
+              </div>
+              <Button type="button" variant="outline" onClick={() => setMobileMenuOpen(false)}>
+                Fechar
+              </Button>
+            </div>
+            <AdmMenuButtons
+              activeSection={activeSection}
+              canCreateCrm={canCreateCrm}
+              canViewAdmWhatsapp={canViewAdmWhatsapp}
+              canViewAffiliates={canViewAffiliates}
+              canViewCrm={canViewCrm}
+              canViewImportPlaces={canViewImportPlaces}
+              canViewImplementations={canViewImplementations}
+              canViewMessages={canViewMessages}
+              canViewWhatsappSettings={canViewWhatsappSettings}
+              onOpenCreateProspect={() => {
+                setActiveSection("crm");
+                setCreateProspectOpen(true);
+              }}
+              onSelectAdmWhatsapp={() => {
+                setAdmWhatsappProspectId(null);
+                setActiveSection("adm_whatsapp");
+              }}
+              onSelectSection={setActiveSection}
+              stacked
+            />
+          </div>
+        </div>
+      ) : null}
+      <ProspectDetailModal
+        open={prospectDetailOpen && Boolean(selectedProspect)}
+        prospect={selectedProspect}
+        timeline={timelineQuery.data ?? []}
+        activity={activityQuery.data ?? []}
+        lastDemoLink={lastDemoLink}
+        lastBookingLink={lastBookingLink}
+        bookingLink={selectedProspectBookingLink}
+        onOpenChange={(open) => {
+          setProspectDetailOpen(open);
+          if (!open) {
+            setSelectedId(null);
+          }
+        }}
+        onGenerateDemo={() => {
+          if (!selectedProspect) return;
+          generateDemoMutation.mutate(selectedProspect.id);
+        }}
+        onIssueAccess={() => {
+          if (!selectedProspect) return;
+          accessMutation.mutate(selectedProspect.id);
+        }}
+        onRecordContact={() => {
+          if (!selectedProspect) return;
+          contactMutation.mutate(selectedProspect.id);
+        }}
+        onStartAutomation={() => {
+          if (!selectedProspect) return;
+          automationMutation.mutate(selectedProspect.id);
+        }}
+        onSendReceptionOutreach={() => {
+          if (!selectedProspect) return;
+          outreachMutation.mutate({ prospectId: selectedProspect.id, step: "reception_intro" });
+        }}
+        onSendDecisionMakerPitch={() => {
+          if (!selectedProspect) return;
+          outreachMutation.mutate({
+            prospectId: selectedProspect.id,
+            step: "decision_maker_pitch",
+            recipientName: selectedProspect.owner_name || selectedProspect.manager_name,
+          });
+        }}
+        onSendVideoFollowup={() => {
+          if (!selectedProspect) return;
+          outreachMutation.mutate({
+            prospectId: selectedProspect.id,
+            step: "video_followup",
+            recipientName: selectedProspect.owner_name || selectedProspect.manager_name,
+          });
+        }}
+        onRunOutreachLab={(scenario) => {
+          if (!selectedProspect) return;
+          outreachLabMutation.mutate({
+            prospectId: selectedProspect.id,
+            scenario,
+          });
+        }}
+        onStatusChange={(status) => {
+          if (!selectedProspect) return;
+          statusMutation.mutate({ prospectId: selectedProspect.id, status });
+        }}
+        automationPending={automationMutation.isPending}
+        outreachLabPending={outreachLabMutation.isPending}
+        canEdit={canEditCrm}
+      />
     </main>
+  );
+}
+
+function AdmMenuButtons({
+  activeSection,
+  canCreateCrm,
+  canViewAdmWhatsapp,
+  canViewAffiliates,
+  canViewCrm,
+  canViewImportPlaces,
+  canViewImplementations,
+  canViewMessages,
+  canViewWhatsappSettings,
+  onOpenCreateProspect,
+  onSelectAdmWhatsapp,
+  onSelectSection,
+  stacked = false,
+}: {
+  activeSection: AdmSection;
+  canCreateCrm: boolean;
+  canViewAdmWhatsapp: boolean;
+  canViewAffiliates: boolean;
+  canViewCrm: boolean;
+  canViewImportPlaces: boolean;
+  canViewImplementations: boolean;
+  canViewMessages: boolean;
+  canViewWhatsappSettings: boolean;
+  onOpenCreateProspect: () => void;
+  onSelectAdmWhatsapp: () => void;
+  onSelectSection: (section: AdmSection) => void;
+  stacked?: boolean;
+}) {
+  const layoutClassName = stacked ? "flex flex-col gap-2" : "flex flex-wrap gap-2";
+  const linkClassName = stacked
+    ? "inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]"
+    : "inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 transition hover:bg-stone-100 active:translate-y-[1px]";
+
+  return (
+    <div className={layoutClassName}>
+      {canViewCrm ? (
+        <Button
+          variant={activeSection === "stats" ? "default" : "outline"}
+          className={cn(stacked && "w-full", activeSection === "stats" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+          onClick={() => onSelectSection("stats")}
+        >
+          <BarChart3 size={16} />
+          Estatisticas
+        </Button>
+      ) : null}
+      {canViewCrm ? (
+        <Button
+          variant={activeSection === "crm" ? "default" : "outline"}
+          className={cn(stacked && "w-full", activeSection === "crm" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+          onClick={() => onSelectSection("crm")}
+        >
+          <Building2 size={16} />
+          CRM comercial
+        </Button>
+      ) : null}
+      {canViewAdmWhatsapp ? (
+        <Button
+          variant={activeSection === "adm_whatsapp" ? "default" : "outline"}
+          className={cn(stacked && "w-full", activeSection === "adm_whatsapp" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+          onClick={onSelectAdmWhatsapp}
+        >
+          <MessageSquareText size={16} />
+          WhatsApp do /adm
+        </Button>
+      ) : null}
+      {canViewWhatsappSettings ? (
+        <Button
+          variant={activeSection === "whatsapp_settings" ? "default" : "outline"}
+          className={cn(stacked && "w-full", activeSection === "whatsapp_settings" && "bg-emerald-600 text-white hover:bg-emerald-500")}
+          onClick={() => onSelectSection("whatsapp_settings")}
+        >
+          <SlidersHorizontal size={16} />
+          WhatsApp do sistema
+        </Button>
+      ) : null}
+      {canCreateCrm ? (
+        <Button className={cn("bg-emerald-500 text-stone-950 hover:bg-emerald-400", stacked && "w-full")} onClick={onOpenCreateProspect}>
+          <Plus size={16} />
+          Cadastrar clinica
+        </Button>
+      ) : null}
+      {canViewMessages ? (
+        <Link href="/adm/mensagens-para-clinicas" className={linkClassName}>
+          <Clipboard size={16} />
+          Mensagens prontas
+        </Link>
+      ) : null}
+      {canViewImportPlaces ? (
+        <Link
+          href="/adm/importar-clinicas"
+          className={cn(
+            linkClassName,
+            "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100",
+          )}
+        >
+          <MapPin size={16} />
+          Importar Places
+        </Link>
+      ) : null}
+      {canViewImplementations ? (
+        <Link href="/adm/implementacoes" className={linkClassName}>
+          <SlidersHorizontal size={16} />
+          Implementacoes
+        </Link>
+      ) : null}
+      {canViewAffiliates ? (
+        <Link href="/adm/afiliados" className={linkClassName}>
+          <UsersRound size={16} />
+          Afiliados
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function ProspectDetailModal({
+  open,
+  prospect,
+  timeline,
+  activity,
+  lastDemoLink,
+  lastBookingLink,
+  bookingLink,
+  onOpenChange,
+  onGenerateDemo,
+  onIssueAccess,
+  onRecordContact,
+  onStartAutomation,
+  onSendReceptionOutreach,
+  onSendDecisionMakerPitch,
+  onSendVideoFollowup,
+  onRunOutreachLab,
+  onStatusChange,
+  automationPending,
+  outreachLabPending,
+  canEdit,
+}: {
+  open: boolean;
+  prospect: Prospect | null;
+  timeline: TimelineEvent[];
+  activity: ActivityEvent[];
+  lastDemoLink: string;
+  lastBookingLink: string;
+  bookingLink: string;
+  onOpenChange: (open: boolean) => void;
+  onGenerateDemo: () => void;
+  onIssueAccess: () => void;
+  onRecordContact: () => void;
+  onStartAutomation: () => void;
+  onSendReceptionOutreach: () => void;
+  onSendDecisionMakerPitch: () => void;
+  onSendVideoFollowup: () => void;
+  onRunOutreachLab: (scenario: string) => void;
+  onStatusChange: (status: string) => void;
+  automationPending: boolean;
+  outreachLabPending: boolean;
+  canEdit: boolean;
+}) {
+  if (!open || !prospect) return null;
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-start justify-center bg-stone-950/55 p-3 sm:p-6" onClick={() => onOpenChange(false)}>
+      <div
+        className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-stone-200 bg-stone-100 shadow-[0_30px_80px_rgba(15,23,42,0.28)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-4 sm:px-6">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Detalhes da clinica</p>
+            <h2 className="truncate text-lg font-black text-stone-950 sm:text-2xl">{prospect.clinic_name}</h2>
+          </div>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Fechar
+          </Button>
+        </div>
+        <div className="overflow-y-auto p-3 sm:p-6">
+          <ProspectDetail
+            prospect={prospect}
+            timeline={timeline}
+            activity={activity}
+            lastDemoLink={lastDemoLink}
+            lastBookingLink={lastBookingLink}
+            bookingLink={bookingLink}
+            onGenerateDemo={onGenerateDemo}
+            onIssueAccess={onIssueAccess}
+            onRecordContact={onRecordContact}
+            onStartAutomation={onStartAutomation}
+            onSendReceptionOutreach={onSendReceptionOutreach}
+            onSendDecisionMakerPitch={onSendDecisionMakerPitch}
+            onSendVideoFollowup={onSendVideoFollowup}
+            onRunOutreachLab={onRunOutreachLab}
+            onStatusChange={onStatusChange}
+            automationPending={automationPending}
+            outreachLabPending={outreachLabPending}
+            canEdit={canEdit}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
