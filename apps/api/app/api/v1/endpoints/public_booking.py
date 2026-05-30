@@ -231,7 +231,16 @@ def _active_tenant_by_slug(db: Session, clinic_slug: str) -> Tenant:
 
 def _validated_public_unit_id(db: Session, *, tenant: Tenant, unit_id: UUID | None) -> UUID | None:
     if not unit_id:
-        return None
+        active_unit_ids = db.execute(
+            select(Unit.id)
+            .where(
+                Unit.tenant_id == tenant.id,
+                Unit.is_active.is_(True),
+            )
+            .order_by(Unit.created_at.asc())
+            .limit(2)
+        ).scalars().all()
+        return active_unit_ids[0] if len(active_unit_ids) == 1 else None
     unit = db.scalar(
         select(Unit).where(
             Unit.id == unit_id,

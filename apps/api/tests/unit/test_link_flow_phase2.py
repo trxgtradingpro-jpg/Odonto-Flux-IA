@@ -445,6 +445,35 @@ def test_webchat_public_session_requires_valid_token(seeded_db, db_session):
     assert exc.value.code == "WEBCHAT_SESSION_FORBIDDEN"
 
 
+def test_webchat_session_and_conversation_default_to_only_active_unit(seeded_db, db_session):
+    tenant = seeded_db["tenant_b"]
+    config = _enable_webchat_intake(db_session, tenant)
+    unit = Unit(
+        tenant_id=tenant.id,
+        name="Unidade principal",
+        code="PRINCIPAL",
+        is_active=True,
+        address={},
+        working_hours={},
+    )
+    db_session.add(unit)
+    db_session.flush()
+
+    bundle = create_webchat_link_flow_session(
+        db_session,
+        tenant=tenant,
+        config=config,
+        landing_path="/agendar/tenant-b",
+    )
+    conversation = ensure_webchat_conversation(db_session, session=bundle.session, tenant=tenant)
+    patient = db_session.get(Patient, conversation.patient_id)
+
+    assert bundle.session.unit_id == unit.id
+    assert conversation.unit_id == unit.id
+    assert patient is not None
+    assert patient.unit_id == unit.id
+
+
 def test_webchat_channel_dispatch_persists_local_message(seeded_db, db_session):
     tenant = seeded_db["tenant_b"]
     config = _enable_webchat_intake(db_session, tenant)

@@ -38,6 +38,19 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _single_active_unit_id(db: Session, *, tenant_id: UUID) -> UUID | None:
+    rows = db.execute(
+        select(Unit.id)
+        .where(
+            Unit.tenant_id == tenant_id,
+            Unit.is_active.is_(True),
+        )
+        .order_by(Unit.created_at.asc())
+        .limit(2)
+    ).scalars().all()
+    return rows[0] if len(rows) == 1 else None
+
+
 def _placeholder_patient_name(value: str | None) -> bool:
     normalized = str(value or "").strip().casefold()
     return not normalized or normalized in {"paciente webchat", "paciente", "novo paciente", "paciente do agendamento"}
@@ -95,9 +108,10 @@ def create_webchat_link_flow_session(
     public_access_token = secrets.token_urlsafe(32)
     internal_token = secrets.token_urlsafe(32)
     expires_at = _now() + timedelta(minutes=_positive_int(link_flow.get("session_ttl_minutes"), 30))
+    resolved_unit_id = unit_id or _single_active_unit_id(db, tenant_id=tenant.id)
     session = LinkFlowSession(
         tenant_id=tenant.id,
-        unit_id=unit_id,
+        unit_id=resolved_unit_id,
         mode="link_flow",
         cta_mode="webchat",
         channel="webchat",
@@ -253,9 +267,17 @@ def validate_public_webchat_session(
 
 
 def _ensure_webchat_patient(db: Session, *, session: LinkFlowSession, tenant: Tenant) -> Patient:
+    resolved_unit_id = session.unit_id or _single_active_unit_id(db, tenant_id=tenant.id)
+    if resolved_unit_id and not session.unit_id:
+        session.unit_id = resolved_unit_id
+        db.add(session)
+
     if session.linked_patient_id:
         patient = db.get(Patient, session.linked_patient_id)
         if patient and patient.tenant_id == tenant.id:
+            if resolved_unit_id and not patient.unit_id:
+                patient.unit_id = resolved_unit_id
+                db.add(patient)
             return patient
 
     synthetic_contact = f"webchat{session.id.hex[:18]}"
@@ -268,7 +290,7 @@ def _ensure_webchat_patient(db: Session, *, session: LinkFlowSession, tenant: Te
     if not patient:
         patient = Patient(
             tenant_id=tenant.id,
-            unit_id=session.unit_id,
+            unit_id=resolved_unit_id,
             full_name="Paciente Webchat",
             phone=synthetic_contact,
             normalized_phone=synthetic_contact,
@@ -290,15 +312,28 @@ def ensure_webchat_conversation(
     session: LinkFlowSession,
     tenant: Tenant,
 ) -> Conversation:
+    resolved_unit_id = session.unit_id or _single_active_unit_id(db, tenant_id=tenant.id)
+    if resolved_unit_id and not session.unit_id:
+        session.unit_id = resolved_unit_id
+        db.add(session)
+
     if session.linked_conversation_id:
         conversation = db.get(Conversation, session.linked_conversation_id)
         if conversation and conversation.tenant_id == tenant.id and conversation.channel == "webchat":
+            if resolved_unit_id and not conversation.unit_id:
+                conversation.unit_id = resolved_unit_id
+                db.add(conversation)
+            if conversation.patient_id:
+                patient = db.get(Patient, conversation.patient_id)
+                if patient and patient.tenant_id == tenant.id and resolved_unit_id and not patient.unit_id:
+                    patient.unit_id = resolved_unit_id
+                    db.add(patient)
             return conversation
 
     patient = _ensure_webchat_patient(db, session=session, tenant=tenant)
     conversation = Conversation(
         tenant_id=tenant.id,
-        unit_id=session.unit_id,
+        unit_id=session.unit_id or resolved_unit_id,
         patient_id=patient.id,
         channel="webchat",
         external_thread_id=f"link_flow:{session.id}",

@@ -1309,6 +1309,10 @@ def _reply_claims_booking_confirmation(message: str) -> bool:
 def _looks_like_placeholder_name(value: Any) -> bool:
     normalized = _normalized_reply_guardrail_text(value)
     return normalized in {
+        "paciente",
+        "paciente do agendamento",
+        "paciente webchat",
+        "novo paciente",
         "paciente ia lab",
         "paciente teste ia lab",
         "lead ia lab",
@@ -1503,6 +1507,7 @@ def _reply_prompt(
         f"{json.dumps(decision.model_dump(mode='json'), ensure_ascii=False)}\n\n"
         "SAFE_PERSISTENCE_PLAN_JSON:\n"
         f"{json.dumps(plan.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+        "REGRA_DE_DATAS_JSON: se SYSTEM_ACTION_RESULT_JSON tiver date_first=true e available_dates, ofereca somente as datas e pergunte qual data o paciente prefere; nao liste horarios ainda.\n\n"
         "SYSTEM_ACTION_RESULT_JSON:\n"
         f"{json.dumps(system_action_result, ensure_ascii=False, default=str)}\n\n"
         "Retorne somente PatientReplyOutput JSON válido, sem markdown."
@@ -1706,6 +1711,28 @@ def _execute_system_action(
             else None,
         }
     if action == "query_availability":
+        if _should_return_available_dates_first(
+            db,
+            tenant_id=tenant_id,
+            context=context,
+            decision=decision,
+            params=params,
+            inbound_text=inbound_message.body or "",
+        ):
+            available_dates = _query_available_dates(
+                db,
+                tenant_id=tenant_id,
+                context=context,
+                decision=decision,
+                params=params,
+            )
+            return {
+                "action": action,
+                "status": "ok",
+                "date_first": True,
+                "available_dates": available_dates,
+                "slots": [],
+            }
         slots = _query_availability(
             db,
             tenant_id=tenant_id,
@@ -2028,9 +2055,10 @@ def _repair_patient_reply_after_review(
     elif any(flag.startswith("pergunta_repetida_") for flag in flags) or "mensagem_muito_parecida_com_anterior" in flags:
         next_field = decision.reply_control.next_expected_field or (decision.reply_control.missing_fields[0] if decision.reply_control.missing_fields else None)
         if next_field:
-            message = f"Perfeito, já aproveitei os dados que você passou. Para avançar com segurança, ainda preciso confirmar: {next_field}."
+            field_label = _patient_facing_reply_field_label(next_field)
+            message = f"Perfeito, ja aproveitei os dados que voce passou. Para avancar com seguranca, ainda preciso confirmar {field_label}."
         else:
-            message = "Perfeito, já aproveitei o que você passou. Vou seguir pelo próximo passo do agendamento com segurança."
+            message = "Perfeito, ja aproveitei o que voce passou. Vou seguir pelo proximo passo do agendamento com seguranca."
 
     if not message:
         return _fallback_patient_reply(decision=decision, system_action_result=system_action_result, context=context)
@@ -2042,6 +2070,26 @@ def _repair_patient_reply_after_review(
             "decision_reason": f"pre_send_review_repaired:{review.get('motivo') or 'review_failed'}"[:255],
         }
     )
+
+
+def _patient_facing_reply_field_label(field: str | None) -> str:
+    normalized = str(field or "").strip().lower()
+    labels = {
+        "patient_name": "seu nome completo",
+        "full_name": "seu nome completo",
+        "name": "seu nome completo",
+        "phone": "seu telefone",
+        "phone_confirmation": "se esse WhatsApp e o melhor numero para confirmacao",
+        "cpf": "seu CPF",
+        "birth_date": "sua data de nascimento",
+        "email": "seu e-mail",
+        "unit": "a unidade de preferencia",
+        "unidade": "a unidade de preferencia",
+        "procedure": "o procedimento desejado",
+        "procedimento": "o procedimento desejado",
+        "confirmed_slot": "o horario escolhido",
+    }
+    return labels.get(normalized, "essa informacao")
 
 
 def _dispatch_patient_reply(
@@ -2597,6 +2645,20 @@ def _fallback_patient_reply(
 ) -> PatientReplyOutput:
     action = system_action_result.get("action")
     if action == "query_availability":
+        available_dates = system_action_result.get("available_dates") if isinstance(system_action_result.get("available_dates"), list) else []
+        if system_action_result.get("date_first") and available_dates:
+            options = []
+            for index, item in enumerate(available_dates, start=1):
+                options.append(f"{index}. {item.get('label') or item.get('date')}")
+            return PatientReplyOutput(
+                schema_version=STRUCTURED_FLOW_SCHEMA_VERSION,
+                message="Tenho estas datas disponiveis:\n" + "\n".join(options) + "\nQual delas fica melhor para voce?",
+                message_type="text",
+                interactive_payload=None,
+                confidence=0.82,
+                final_decision="reply",
+                decision_reason="available_dates_returned",
+            )
         slots = system_action_result.get("slots") if isinstance(system_action_result.get("slots"), list) else []
         if slots:
             patient_name = context.patient_context.preferred_name or context.patient_context.full_name
@@ -2798,6 +2860,10 @@ def _query_availability(
     slots: list[dict[str, Any]] = []
     for day_offset in range(0, 21):
         current_date = start_date + timedelta(days=day_offset)
+        unit_window = _unit_working_window_for_date(unit, current_date, timezone=timezone)
+        if unit_window is None:
+            continue
+        unit_start, unit_end = unit_window
         excluded_slot_tokens = (
             _recent_offered_slot_tokens(
                 db,
@@ -2813,8 +2879,10 @@ def _query_availability(
         for professional in professionals:
             shift_start = _parse_hhmm(professional.shift_start) or time(8, 0)
             shift_end = _parse_hhmm(professional.shift_end) or time(18, 0)
-            day_start = datetime.combine(current_date, shift_start, timezone)
-            day_end = datetime.combine(current_date, shift_end, timezone)
+            day_start = max(datetime.combine(current_date, shift_start, timezone), datetime.combine(current_date, unit_start, timezone))
+            day_end = min(datetime.combine(current_date, shift_end, timezone), datetime.combine(current_date, unit_end, timezone))
+            if day_end <= day_start:
+                continue
             if time_before_minutes is not None:
                 day_end = min(day_end, _datetime_for_minutes(current_date, minutes=time_before_minutes, timezone=timezone))
             if not professional_is_available_on_day(
@@ -2850,13 +2918,93 @@ def _query_availability(
                             "procedure_type": procedure,
                             "starts_at": cursor.astimezone(UTC).isoformat(),
                             "ends_at": (cursor + timedelta(minutes=duration)).astimezone(UTC).isoformat(),
-                            "label": cursor.strftime("%d/%m/%Y às %H:%M"),
+                            "label": cursor.strftime("%d/%m/%Y as %H:%M"),
                         }
                     )
                     if len(slots) >= limit:
                         return slots
                 cursor += timedelta(minutes=30)
     return slots
+
+
+def _should_return_available_dates_first(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    context: AiConversationContext,
+    decision: AiDecisionOutput,
+    params: dict[str, Any],
+    inbound_text: str,
+) -> bool:
+    if params.get("date") or decision.extracted_data.preferred_date or decision.appointment_intent.starts_at:
+        return False
+    if _extract_preferred_date_hint(inbound_text=inbound_text, timezone=_timezone(context.clinic_context.timezone)):
+        return False
+    if _extract_slot_datetime_hint(inbound_text=inbound_text, timezone=_timezone(context.clinic_context.timezone)):
+        return False
+    memory = _recent_scheduling_memory(
+        db,
+        tenant_id=tenant_id,
+        context=context,
+    )
+    if memory.get("preferred_date"):
+        return False
+    return decision.intent in {"agendar_consulta", "consultar_horarios"} or decision.appointment_intent.wants_booking
+
+
+def _query_available_dates(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    context: AiConversationContext,
+    decision: AiDecisionOutput,
+    params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    timezone = _timezone(context.clinic_context.timezone)
+    start_date = _resolve_target_date(None, timezone=timezone)
+    limit = int(params.get("limit") or 3)
+    options: list[dict[str, Any]] = []
+    seen_dates: set[str] = set()
+    for day_offset in range(0, 21):
+        candidate_date = start_date + timedelta(days=day_offset)
+        candidate_params = {
+            **params,
+            "date": candidate_date.isoformat(),
+            "period": params.get("period"),
+            "limit": 1,
+            "exclude_previously_offered": False,
+        }
+        slots = _query_availability(
+            db,
+            tenant_id=tenant_id,
+            context=context,
+            decision=decision,
+            params=candidate_params,
+        )
+        if not slots:
+            continue
+        first_slot = slots[0]
+        first_slot_starts_at = _parse_slot_datetime(first_slot.get("starts_at") if isinstance(first_slot, dict) else None)
+        if not first_slot_starts_at or first_slot_starts_at.astimezone(timezone).date() != candidate_date:
+            continue
+        date_key = candidate_date.isoformat()
+        if date_key in seen_dates:
+            continue
+        seen_dates.add(date_key)
+        options.append(
+            {
+                "date": date_key,
+                "label": candidate_date.strftime("%d/%m/%Y"),
+                "first_slot": first_slot,
+                "unit_id": first_slot.get("unit_id"),
+                "unit_name": first_slot.get("unit_name"),
+                "professional_id": first_slot.get("professional_id"),
+                "professional_name": first_slot.get("professional_name"),
+            }
+        )
+        if len(options) >= limit:
+            return options
+    return options
 
 
 def _validate_slot(
@@ -2898,6 +3046,15 @@ def _validate_slot(
     )
     service_catalog = get_service_duration_catalog(db, tenant_id=tenant_id)
     duration = resolve_service_duration_minutes(procedure_type=procedure, service_catalog=service_catalog)
+    timezone = _timezone(context.clinic_context.timezone)
+    local_starts_at = starts_at.astimezone(timezone) if starts_at.tzinfo else starts_at.replace(tzinfo=timezone)
+    local_ends_at = (starts_at + timedelta(minutes=duration)).astimezone(timezone) if starts_at.tzinfo else local_starts_at + timedelta(minutes=duration)
+    unit_window = _unit_working_window_for_date(unit, local_starts_at.date(), timezone=timezone)
+    if unit_window is None:
+        return {"status": "outside_unit_working_hours", "available": False, "starts_at": starts_at.isoformat()}
+    unit_start, unit_end = unit_window
+    if local_starts_at.time() < unit_start or local_ends_at.time() > unit_end:
+        return {"status": "outside_unit_working_hours", "available": False, "starts_at": starts_at.isoformat()}
     professional_id = _parse_uuid(params.get("professional_id") or decision.extracted_data.professional_id or decision.appointment_intent.professional_id)
     professionals = eligible_professionals_for_procedure(
         list_active_professionals_for_unit(
@@ -4096,6 +4253,31 @@ def _message_prefers_same_period(text: str) -> bool:
     return any(marker in normalized for marker in ("mesmo periodo", "mesma faixa"))
 
 
+def _extract_time_hint_from_message(text: str) -> time | None:
+    normalized = _normalized_reply_guardrail_text(text)
+    if not normalized:
+        return None
+    patterns = (
+        r"\b(?:as|a|para as|pra as)\s+(\d{1,2})(?::|h)?(\d{2})?\b",
+        r"\b(\d{1,2})(?::(\d{2})|h(\d{2})?)\b",
+        r"\b(\d{1,2})\s*horas?\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        hour_text = match.group(1)
+        minute_text = next((group for group in match.groups()[1:] if group), "00")
+        try:
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except Exception:
+            continue
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return time(hour, minute)
+    return None
+
+
 def _availability_window_hints_from_message(text: str) -> dict[str, str]:
     normalized = _normalized_reply_guardrail_text(text)
     if "fim da manha" in normalized or "final da manha" in normalized:
@@ -4119,6 +4301,89 @@ def _period_from_datetime(value: datetime) -> PreferredPeriod:
     if value.hour < 18:
         return "tarde"
     return "noite"
+
+
+def _parse_time_range_text(value: Any) -> tuple[time, time] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = re.split(r"\s*(?:-|ate|até|a)\s*", text, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None
+    start = _parse_hhmm(parts[0])
+    end = _parse_hhmm(parts[1])
+    if not start or not end or end <= start:
+        return None
+    return start, end
+
+
+def _unit_working_weekdays(working_hours: dict[str, Any]) -> set[int] | None:
+    raw_weekdays = working_hours.get("weekdays")
+    if isinstance(raw_weekdays, list):
+        days = {int(day) for day in raw_weekdays if str(day).isdigit() and 0 <= int(day) <= 6}
+        if days:
+            return days
+
+    normalized_keys = {_normalized_reply_guardrail_text(key): value for key, value in working_hours.items()}
+    if any(key in normalized_keys for key in ("monday_friday", "seg-sex", "segunda-sexta", "segunda sexta")):
+        return {0, 1, 2, 3, 4}
+
+    days_text = _normalized_reply_guardrail_text(
+        _first_text(
+            working_hours.get("days_text"),
+            working_hours.get("days"),
+            working_hours.get("weekdays_text"),
+        )
+    )
+    if not days_text:
+        return None
+    if any(marker in days_text for marker in ("todos os dias", "segunda a domingo", "seg a dom", "seg-dom")):
+        return {0, 1, 2, 3, 4, 5, 6}
+    if any(marker in days_text for marker in ("segunda a sabado", "segunda a sábado", "seg a sab", "seg-sab")):
+        return {0, 1, 2, 3, 4, 5}
+    if any(marker in days_text for marker in ("segunda a sexta", "seg a sex", "seg-sex")):
+        return {0, 1, 2, 3, 4}
+
+    day_aliases = (
+        ("segunda", "seg", 0),
+        ("terca", "ter", 1),
+        ("quarta", "qua", 2),
+        ("quinta", "qui", 3),
+        ("sexta", "sex", 4),
+        ("sabado", "sab", 5),
+        ("domingo", "dom", 6),
+    )
+    days = {day for long_name, short_name, day in day_aliases if long_name in days_text or re.search(rf"\b{short_name}\b", days_text)}
+    return days or None
+
+
+def _unit_working_window_for_date(unit: Unit, current_date: date, *, timezone: ZoneInfo) -> tuple[time, time] | None:
+    working_hours = unit.working_hours if isinstance(unit.working_hours, dict) else {}
+    if not working_hours:
+        return time(0, 0), time(23, 59)
+
+    weekdays = _unit_working_weekdays(working_hours)
+    if weekdays is not None and current_date.weekday() not in weekdays:
+        return None
+
+    normalized_keys = {_normalized_reply_guardrail_text(key): value for key, value in working_hours.items()}
+    range_text = _first_text(
+        working_hours.get("range"),
+        working_hours.get("hours"),
+        working_hours.get("monday_friday"),
+        normalized_keys.get("seg-sex"),
+        normalized_keys.get("segunda-sexta"),
+        normalized_keys.get("segunda sexta"),
+    )
+    parsed_range = _parse_time_range_text(range_text)
+    if parsed_range:
+        return parsed_range
+
+    start = _parse_hhmm(_first_text(working_hours.get("start"), working_hours.get("opens_at"))) or time(0, 0)
+    end = _parse_hhmm(_first_text(working_hours.get("end"), working_hours.get("closes_at"))) or time(23, 59)
+    if end <= start:
+        return None
+    return start, end
 
 
 def _decision_metadata_payload(row: AIAutoresponderDecision) -> dict[str, Any]:
@@ -4302,6 +4567,34 @@ def _recent_offered_slot_tokens(
     return tokens
 
 
+def _recent_offered_slot_for_time_hint(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    context: AiConversationContext,
+    inbound_text: str,
+) -> dict[str, Any] | None:
+    requested_time = _extract_time_hint_from_message(inbound_text)
+    if not requested_time:
+        return None
+    timezone = _timezone(context.clinic_context.timezone)
+    memory = _recent_scheduling_memory(
+        db,
+        tenant_id=tenant_id,
+        context=context,
+    )
+    for slot in memory.get("offered_slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        starts_at = _parse_slot_datetime(slot.get("starts_at") or slot.get("slot_id"))
+        if not starts_at:
+            continue
+        local_starts_at = starts_at.astimezone(timezone)
+        if local_starts_at.hour == requested_time.hour and local_starts_at.minute == requested_time.minute:
+            return slot
+    return None
+
+
 def _extract_procedure_hint_from_context(*, context: AiConversationContext, inbound_text: str) -> str | None:
     normalized = _strip_accents(str(inbound_text or "").casefold())
     if not normalized:
@@ -4382,10 +4675,25 @@ def _enrich_decision_with_selection_hints(
             inbound_text=inbound_text,
             timezone=_timezone(context.clinic_context.timezone),
         )
+    matched_recent_slot = None
+    if not selected_slot:
+        matched_recent_slot = _recent_offered_slot_for_time_hint(
+            db,
+            tenant_id=tenant_id,
+            context=context,
+            inbound_text=inbound_text,
+        )
+        if matched_recent_slot:
+            selected_slot = _parse_slot_datetime(matched_recent_slot.get("starts_at") or matched_recent_slot.get("slot_id"))
     if not selected_slot:
         return decision
     selected_slot_iso = selected_slot.isoformat()
-    selected_slot_id = decision.system_action.params.slot_id or decision.extracted_data.selected_slot_id or f"slot:{selected_slot_iso}"
+    selected_slot_id = (
+        decision.system_action.params.slot_id
+        or decision.extracted_data.selected_slot_id
+        or (str(matched_recent_slot.get("slot_id") or "").strip() if matched_recent_slot else None)
+        or f"slot:{selected_slot_iso}"
+    )
     selected_unit = None
     if not decision.extracted_data.unit_id and not decision.appointment_intent.unit_id:
         if decision.extracted_data.unit_requested_text:
@@ -4419,6 +4727,8 @@ def _enrich_decision_with_selection_hints(
         update={
             "unit_requested_text": decision.extracted_data.unit_requested_text or (selected_unit.name if selected_unit else None),
             "unit_id": decision.extracted_data.unit_id or (str(selected_unit.id) if selected_unit else None),
+            "procedure_type": decision.extracted_data.procedure_type or (matched_recent_slot.get("procedure_type") if matched_recent_slot else None),
+            "professional_id": decision.extracted_data.professional_id or (matched_recent_slot.get("professional_id") if matched_recent_slot else None),
             "selected_slot_id": selected_slot_id,
             "selected_datetime": decision.extracted_data.selected_datetime or selected_slot_iso,
         }
@@ -4426,6 +4736,8 @@ def _enrich_decision_with_selection_hints(
     appointment_intent = decision.appointment_intent.model_copy(
         update={
             "unit_id": decision.appointment_intent.unit_id or (str(selected_unit.id) if selected_unit else None),
+            "procedure_type": decision.appointment_intent.procedure_type or extracted_data.procedure_type,
+            "professional_id": decision.appointment_intent.professional_id or extracted_data.professional_id,
             "starts_at": decision.appointment_intent.starts_at or selected_slot_iso,
         }
     )
@@ -4434,6 +4746,10 @@ def _enrich_decision_with_selection_hints(
             "params": decision.system_action.params.model_copy(
                 update={
                     "slot_id": selected_slot_id,
+                    "unit_id": decision.system_action.params.unit_id or extracted_data.unit_id,
+                    "unit_name": decision.system_action.params.unit_name or extracted_data.unit_requested_text,
+                    "procedure_type": decision.system_action.params.procedure_type or extracted_data.procedure_type,
+                    "professional_id": decision.system_action.params.professional_id or extracted_data.professional_id,
                 }
             )
         }
@@ -4691,11 +5007,15 @@ def _enrich_decision_with_personal_data_hints(
             )
 
     if pending_slot_confirmation:
-        first_name = (name_hint or "").split()[0] if name_hint else None
+        stored_name = context.patient_context.preferred_name or context.patient_context.full_name
+        if _looks_like_placeholder_name(stored_name):
+            stored_name = None
+        effective_name = name_hint or stored_name
+        first_name = (effective_name or "").split()[0] if effective_name else None
         suggested_next_question = reply_control.suggested_next_question
         next_expected_field = reply_control.next_expected_field
         missing_fields = [field for field in reply_control.missing_fields if field]
-        if not name_hint:
+        if not effective_name:
             suggested_next_question = "Perfeito. Para confirmar certinho, qual é o seu nome completo?"
             next_expected_field = "patient_name"
             missing_fields = ["patient_name"]
