@@ -112,6 +112,43 @@ SystemActionName = Literal[
 ReplyDecision = Literal["reply", "handoff", "no_reply", "ask_clarification"]
 MessageType = Literal["text", "interactive"]
 
+WEEKDAY_HINTS: tuple[tuple[str, int], ...] = (
+    ("segunda", 0),
+    ("terca", 1),
+    ("quarta", 2),
+    ("quinta", 3),
+    ("sexta", 4),
+    ("sabado", 5),
+    ("domingo", 6),
+)
+
+MONTH_HINTS: dict[str, int] = {
+    "janeiro": 1,
+    "jan": 1,
+    "fevereiro": 2,
+    "fev": 2,
+    "marco": 3,
+    "mar": 3,
+    "abril": 4,
+    "abr": 4,
+    "maio": 5,
+    "mai": 5,
+    "junho": 6,
+    "jun": 6,
+    "julho": 7,
+    "jul": 7,
+    "agosto": 8,
+    "ago": 8,
+    "setembro": 9,
+    "set": 9,
+    "outubro": 10,
+    "out": 10,
+    "novembro": 11,
+    "nov": 11,
+    "dezembro": 12,
+    "dez": 12,
+}
+
 ALLOWED_UPDATE_FIELDS: dict[str, set[str]] = {
     "conversations": {
         "status",
@@ -216,6 +253,14 @@ class ConversationContext(StrictModel):
     recent_messages: list[RecentMessageContext] = Field(default_factory=list)
 
 
+class ConversationMemoryContext(StrictModel):
+    summary: str | None = None
+    booking_state: dict[str, Any] = Field(default_factory=dict)
+    last_question: str | None = None
+    last_response: str | None = None
+    updated_at: str | None = None
+
+
 class PatientContext(StrictModel):
     patient_id: str | None = None
     lead_id: str | None = None
@@ -305,6 +350,7 @@ class AiConversationContext(StrictModel):
     clinic_context: ClinicContext
     autoresponder_rules: AutoresponderRulesContext
     conversation_context: ConversationContext
+    conversation_memory: ConversationMemoryContext = Field(default_factory=ConversationMemoryContext)
     patient_context: PatientContext
     business_context: BusinessContext
     safety_rules: SafetyRulesContext = Field(default_factory=SafetyRulesContext)
@@ -569,6 +615,23 @@ def build_safe_persistence_plan(
     return plan
 
 
+def _conversation_ai_state(conversation: Conversation) -> dict[str, Any]:
+    state = getattr(conversation, "ai_state", None)
+    return dict(state) if isinstance(state, dict) else {}
+
+
+def _conversation_memory_from_state(conversation: Conversation) -> ConversationMemoryContext:
+    state = _conversation_ai_state(conversation)
+    booking_state = state.get("booking") if isinstance(state.get("booking"), dict) else {}
+    return ConversationMemoryContext(
+        summary=_optional_text(state.get("memory_summary") or conversation.ai_summary),
+        booking_state=booking_state,
+        last_question=_optional_text(booking_state.get("ultima_pergunta_feita")),
+        last_response=_optional_text(booking_state.get("ultima_resposta_enviada")),
+        updated_at=_optional_text(state.get("updated_at")),
+    )
+
+
 def build_ai_conversation_context(
     db: Session,
     *,
@@ -669,6 +732,7 @@ def build_ai_conversation_context(
             ai_autoresponder_last_reason=conversation.ai_autoresponder_last_reason,
             recent_messages=recent_messages,
         ),
+        conversation_memory=_conversation_memory_from_state(conversation),
         patient_context=PatientContext(
             patient_id=str(patient.id) if patient else None,
             lead_id=str(lead.id) if lead else None,
@@ -830,6 +894,7 @@ def process_structured_inbound_message(
             conversation_id=conversation.id,
             inbound_text=inbound_text,
             context=context,
+            model_override=str(config.get("llm_model") or "").strip() or None,
         )
     except (ValidationError, ValueError) as exc:
         return _invalid_contract_fallback(
@@ -901,6 +966,17 @@ def process_structured_inbound_message(
         context=context,
         config=config,
     )
+    _sync_conversation_ai_state(
+        db,
+        tenant_id=tenant_id,
+        conversation=conversation,
+        context=context,
+        decision=decision,
+        plan=plan,
+        applied_updates=applied_updates,
+        system_action_result=system_action_result,
+        config=config,
+    )
 
     if decision.handoff.required or decision.guardrails.triggered or system_action_result.get("handoff_required"):
         return _handoff(
@@ -936,6 +1012,7 @@ def process_structured_inbound_message(
             decision=decision,
             plan=plan,
             system_action_result=system_action_result,
+            model_override=str(config.get("llm_model") or "").strip() or None,
         )
     except Exception as exc:
         logger.warning(
@@ -1012,6 +1089,7 @@ def _run_extractor_with_retry(
     conversation_id: UUID | None,
     inbound_text: str,
     context: AiConversationContext,
+    model_override: str | None = None,
 ) -> tuple[AiDecisionOutput, dict[str, Any]]:
     prompt = _extractor_prompt(context=context, inbound_text=inbound_text)
     last_payload: dict[str, Any] | None = None
@@ -1030,6 +1108,7 @@ def _run_extractor_with_retry(
             conversation_id=conversation_id,
             task="auto_responder_structured_extract",
             prompt=llm_prompt,
+            **({"model_override": model_override} if model_override else {}),
         )
         last_payload = {"prompt": llm_prompt, **result}
         try:
@@ -1077,6 +1156,7 @@ def _run_reply_generator(
     decision: AiDecisionOutput,
     plan: SafePersistencePlan,
     system_action_result: dict[str, Any],
+    model_override: str | None = None,
 ) -> tuple[PatientReplyOutput, dict[str, Any]]:
     prompt = _reply_prompt(
         context=context,
@@ -1090,6 +1170,7 @@ def _run_reply_generator(
         conversation_id=conversation_id,
         task="auto_responder_structured_reply",
         prompt=prompt,
+        **({"model_override": model_override} if model_override else {}),
     )
     payload = {"prompt": prompt, **result}
     try:
@@ -1367,6 +1448,7 @@ def _extractor_prompt(*, context: AiConversationContext, inbound_text: str) -> s
         "Você não conversa com o paciente. Você não gera resposta final. Você não salva dados. Você não consulta banco.\n"
         "Seu objetivo é entender intenção, extrair dados e sugerir a próxima ação segura para atendimento de clínicas.\n"
         "Regras obrigatórias:\n"
+        "- Use conversation_memory.booking_state e conversation_memory.summary para não pedir novamente dados já salvos.\n"
         "- Não invente campos, unidades, horários, preços, convênios, endereços ou profissionais.\n"
         "- Quando depender de agenda, unidade, serviço, preço, convênio, profissional, status de consulta, cancelamento ou remarcação, marque system_action.required=true.\n"
         "- Para consulta de horários ou agendamento, use query_availability antes de qualquer oferta de horário.\n"
@@ -1403,6 +1485,7 @@ def _reply_prompt(
         "Responda pelo WhatsApp de forma simpática, objetiva e segura usando somente dados permitidos, validados e "
         "retornados pelo backend.\n"
         "Objetivo da conversa: acolher, entender, qualificar e conduzir para o próximo passo de agendamento sem parecer robótica.\n"
+        "Use conversation_memory.summary e conversation_memory.booking_state para manter contexto e evitar perguntas repetidas.\n"
         "Regras de resposta:\n"
         "- Fale curto, humano e profissional, como uma recepção experiente e bem treinada.\n"
         "- Faça uma pergunta por vez e não transforme a conversa em formulário.\n"
@@ -1659,6 +1742,308 @@ def _execute_system_action(
     return {"action": action, "status": "unsupported", "handoff_required": True, "reason": "unsupported_system_action"}
 
 
+def _normalized_review_text(value: Any) -> str:
+    return _normalized_reply_guardrail_text(value)
+
+
+def _state_put(booking: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return
+    booking[key] = value
+
+
+def _unit_name_from_context(context: AiConversationContext, unit_id: str | None) -> str | None:
+    if not unit_id:
+        return None
+    for unit in context.business_context.units:
+        if unit.id == unit_id:
+            return unit.name
+    return None
+
+
+def _service_from_context(context: AiConversationContext, *, service_id: str | None = None, procedure_type: str | None = None) -> ServiceContext | None:
+    procedure_norm = _normalized_review_text(procedure_type)
+    for service in context.business_context.services:
+        if service_id and service.id == service_id:
+            return service
+        if procedure_norm and procedure_norm in _normalized_review_text(service.name):
+            return service
+    return None
+
+
+def _next_memory_summary(previous: str | None, message_summary: str | None, *, max_length: int = 900) -> str | None:
+    current = _compact(message_summary, 240)
+    existing = _compact(previous, max_length)
+    if not current:
+        return existing or None
+    if current and current.lower() in existing.lower():
+        return existing or current
+    joined = f"{existing} | {current}" if existing else current
+    return _compact(joined, max_length)
+
+
+def _sync_conversation_ai_state(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    conversation: Conversation,
+    context: AiConversationContext,
+    decision: AiDecisionOutput,
+    plan: SafePersistencePlan,
+    applied_updates: dict[str, Any],
+    system_action_result: dict[str, Any],
+    config: dict[str, Any],
+    patient_reply: PatientReplyOutput | None = None,
+    review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    state = _conversation_ai_state(conversation)
+    booking = dict(state.get("booking") if isinstance(state.get("booking"), dict) else {})
+    patient = db.get(Patient, conversation.patient_id) if conversation.patient_id else None
+    extracted = decision.extracted_data
+
+    _state_put(booking, "nome", patient.full_name if patient else extracted.patient_name)
+    _state_put(booking, "telefone", patient.normalized_phone if patient else extracted.phone)
+    _state_put(booking, "email", patient.email if patient else extracted.email)
+    _state_put(booking, "cpf", patient.normalized_cpf if patient else extracted.cpf)
+    _state_put(booking, "unidade_id", extracted.unit_id or decision.appointment_intent.unit_id or context.conversation_context.unit_id)
+    _state_put(booking, "unidade_nome", extracted.unit_requested_text or _unit_name_from_context(context, booking.get("unidade_id")))
+    _state_put(booking, "procedimento", extracted.procedure_type or decision.appointment_intent.procedure_type)
+    _state_put(booking, "servico_id", extracted.service_id)
+    _state_put(booking, "data_desejada", extracted.preferred_date)
+    _state_put(booking, "periodo_desejado", extracted.preferred_period)
+    _state_put(booking, "horario_desejado", extracted.preferred_time_text)
+    _state_put(booking, "horario_escolhido", extracted.selected_datetime)
+    _state_put(booking, "slot_id", extracted.selected_slot_id)
+    _state_put(booking, "profissional_id", extracted.professional_id or decision.appointment_intent.professional_id)
+    _state_put(booking, "pendencias", list(decision.reply_control.missing_fields or []))
+    _state_put(booking, "ultima_pergunta_feita", decision.reply_control.suggested_next_question or decision.reply_control.next_expected_field)
+
+    service_payload = system_action_result.get("service") if isinstance(system_action_result.get("service"), dict) else None
+    if service_payload:
+        _state_put(booking, "servico_id", service_payload.get("id"))
+        _state_put(booking, "procedimento", service_payload.get("name"))
+        _state_put(booking, "preco_informado", service_payload.get("price_note"))
+    else:
+        service = _service_from_context(
+            context,
+            service_id=extracted.service_id,
+            procedure_type=extracted.procedure_type or decision.appointment_intent.procedure_type,
+        )
+        if service:
+            _state_put(booking, "servico_id", service.id)
+            _state_put(booking, "procedimento", service.name)
+            _state_put(booking, "preco_informado", service.price_note)
+
+    action = str(system_action_result.get("action") or "")
+    status = str(system_action_result.get("status") or "")
+    if action in {"validate_slot", "validate_and_hold_slot", "confirm_appointment"}:
+        _state_put(booking, "slot_validado", status in {"available", "held", "created", "already_exists"})
+    if action == "confirm_appointment" and status in {"created", "already_exists"}:
+        _state_put(booking, "appointment_id", system_action_result.get("appointment_id"))
+    if patient_reply:
+        _state_put(booking, "ultima_resposta_enviada", patient_reply.message)
+    if review:
+        booking["ultima_revisao"] = review
+
+    memory_summary = state.get("memory_summary") or conversation.ai_summary
+    if config.get("conversation_memory_enabled", True):
+        memory_summary = _next_memory_summary(memory_summary, decision.message_summary)
+        conversation.ai_summary = memory_summary
+
+    state = {
+        **state,
+        "schema_version": "elite-agent-state-v1",
+        "booking": booking,
+        "memory_summary": memory_summary,
+        "last_inbound_message_id": str(plan.message_id),
+        "last_intent": decision.intent,
+        "last_system_action": system_action_result.get("action"),
+        "last_applied_updates": applied_updates,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    conversation.ai_state = state
+    db.add(conversation)
+    db.add(
+        MessageEvent(
+            tenant_id=tenant_id,
+            message_id=UUID(plan.message_id),
+            event_type="ai_structured_state_updated",
+            payload={
+                "keys": sorted(booking.keys()),
+                "intent": decision.intent,
+                "system_action": system_action_result.get("action"),
+                "has_review": bool(review),
+            },
+        )
+    )
+    return state
+
+
+def _similarity_ratio(left: str, right: str) -> float:
+    left_tokens = set(_normalized_review_text(left).split())
+    right_tokens = set(_normalized_review_text(right).split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
+
+
+def _recent_outbound_bodies(context: AiConversationContext) -> list[str]:
+    return [
+        item.body
+        for item in context.conversation_context.recent_messages
+        if item.direction == "outbound" and str(item.body or "").strip()
+    ]
+
+
+def _message_asks_known_field(message: str, context: AiConversationContext) -> str | None:
+    normalized = _normalized_review_text(message)
+    has_name = bool(context.patient_context.full_name or context.patient_context.preferred_name)
+    has_phone = bool(context.patient_context.phone)
+    if has_name and any(marker in normalized for marker in ("qual seu nome", "seu nome completo", "me informe seu nome", "me passe seu nome")):
+        return "nome"
+    if has_phone and any(marker in normalized for marker in ("seu telefone", "seu celular", "seu whatsapp", "celular com ddd", "whatsapp com ddd")):
+        return "telefone"
+    return None
+
+
+def _service_price_known(system_action_result: dict[str, Any]) -> bool:
+    service = system_action_result.get("service") if isinstance(system_action_result.get("service"), dict) else {}
+    return bool(str(service.get("price_note") or "").strip())
+
+
+def _system_action_created_appointment(system_action_result: dict[str, Any]) -> bool:
+    return (
+        str(system_action_result.get("action") or "") == "confirm_appointment"
+        and str(system_action_result.get("status") or "") in {"created", "already_exists"}
+        and bool(str(system_action_result.get("appointment_id") or "").strip())
+    )
+
+
+def _system_action_validated_or_held_slot(system_action_result: dict[str, Any]) -> bool:
+    return (
+        str(system_action_result.get("action") or "") in {"validate_slot", "validate_and_hold_slot", "confirm_appointment"}
+        and str(system_action_result.get("status") or "") in {"available", "held", "created", "already_exists"}
+    )
+
+
+def _reply_claims_final_appointment_confirmation(message: str) -> bool:
+    normalized = _normalized_review_text(message)
+    return any(marker in normalized for marker in ("agendado", "agendada", "agendamento confirmado", "consulta confirmada"))
+
+
+def _review_patient_reply_before_dispatch(
+    *,
+    config: dict[str, Any],
+    context: AiConversationContext,
+    patient_reply: PatientReplyOutput,
+    decision: AiDecisionOutput,
+    system_action_result: dict[str, Any],
+) -> dict[str, Any]:
+    review_enabled = bool(config.get("pre_send_review_enabled", False))
+    repetition_enabled = bool(config.get("repetition_guard_enabled", True))
+    review = {
+        "approved": True,
+        "respondeu_a_pergunta": True,
+        "inventou_dado": False,
+        "confirmou_sem_validar": False,
+        "parece_repetida": False,
+        "tom_natural": True,
+        "precisa_humano": False,
+        "motivo": None,
+        "flags": [],
+    }
+    message = patient_reply.message
+    normalized = _normalized_review_text(message)
+    flags: list[str] = []
+
+    if review_enabled and _reply_claims_final_appointment_confirmation(message) and not _system_action_created_appointment(system_action_result):
+        review["confirmou_sem_validar"] = True
+        flags.append("confirmou_sem_validar")
+    elif review_enabled and _reply_claims_slot_confirmation(message) and not _system_action_validated_or_held_slot(system_action_result):
+        review["confirmou_sem_validar"] = True
+        flags.append("confirmou_sem_validar")
+
+    if review_enabled and "r$" in normalized and decision.intent in {"consultar_preco", "consultar_servico"} and not _service_price_known(system_action_result):
+        review["inventou_dado"] = True
+        flags.append("preco_sem_cadastro")
+
+    if review_enabled and _reply_contains_negative_availability_claim(message):
+        slots = system_action_result.get("slots") if isinstance(system_action_result.get("slots"), list) else []
+        if slots:
+            flags.append("negou_horario_com_slots_disponiveis")
+
+    known_field = _message_asks_known_field(message, context)
+    if known_field:
+        flags.append(f"pergunta_repetida_{known_field}")
+
+    if repetition_enabled:
+        for previous in _recent_outbound_bodies(context)[:3]:
+            if _normalized_review_text(previous) == normalized or _similarity_ratio(previous, message) >= 0.86:
+                review["parece_repetida"] = True
+                flags.append("mensagem_muito_parecida_com_anterior")
+                break
+
+    if review_enabled and patient_reply.confidence < float(config.get("confidence_threshold") or 0.65):
+        flags.append("baixa_confianca_resposta")
+
+    if flags:
+        review["approved"] = False
+        review["flags"] = sorted(set(flags))
+        review["motivo"] = ", ".join(review["flags"])
+
+    if "baixa_confianca_resposta" in flags and (config.get("handoff_triggers") or {}).get("low_confidence", True):
+        review["precisa_humano"] = True
+    if "confirmou_sem_validar" in flags and (config.get("handoff_triggers") or {}).get("schedule_error", True):
+        review["precisa_humano"] = False
+    if flags and (config.get("handoff_triggers") or {}).get("review_failed", True) and len(flags) >= 3:
+        review["precisa_humano"] = True
+    return review
+
+
+def _repair_patient_reply_after_review(
+    *,
+    patient_reply: PatientReplyOutput,
+    decision: AiDecisionOutput,
+    system_action_result: dict[str, Any],
+    context: AiConversationContext,
+    review: dict[str, Any],
+) -> PatientReplyOutput:
+    flags = set(review.get("flags") or [])
+    message: str | None = None
+    if "confirmou_sem_validar" in flags:
+        message = "Ainda preciso validar esse horário no sistema antes de confirmar. Vou conferir a disponibilidade e te passar a opção segura."
+    elif "preco_sem_cadastro" in flags:
+        service = system_action_result.get("service") if isinstance(system_action_result.get("service"), dict) else {}
+        service_name = str(service.get("name") or decision.extracted_data.procedure_type or "esse procedimento").strip()
+        message = f"Sobre {service_name}, não tenho um valor fechado cadastrado com segurança aqui. Posso te mostrar horários para uma avaliação e a equipe confirma certinho."
+    elif "negou_horario_com_slots_disponiveis" in flags:
+        slots = system_action_result.get("slots") if isinstance(system_action_result.get("slots"), list) else []
+        labels = [str(slot.get("label") or "").strip() for slot in slots[:3] if isinstance(slot, dict) and str(slot.get("label") or "").strip()]
+        if labels:
+            message = f"Encontrei estas opções disponíveis: {', '.join(labels)}. Qual delas fica melhor para você?"
+    elif any(flag.startswith("pergunta_repetida_") for flag in flags) or "mensagem_muito_parecida_com_anterior" in flags:
+        next_field = decision.reply_control.next_expected_field or (decision.reply_control.missing_fields[0] if decision.reply_control.missing_fields else None)
+        if next_field:
+            message = f"Perfeito, já aproveitei os dados que você passou. Para avançar com segurança, ainda preciso confirmar: {next_field}."
+        else:
+            message = "Perfeito, já aproveitei o que você passou. Vou seguir pelo próximo passo do agendamento com segurança."
+
+    if not message:
+        return _fallback_patient_reply(decision=decision, system_action_result=system_action_result, context=context)
+
+    return patient_reply.model_copy(
+        update={
+            "message": _humanize_structured_reply_text(message),
+            "confidence": min(patient_reply.confidence, 0.74),
+            "decision_reason": f"pre_send_review_repaired:{review.get('motivo') or 'review_failed'}"[:255],
+        }
+    )
+
+
 def _dispatch_patient_reply(
     db: Session,
     *,
@@ -1701,6 +2086,63 @@ def _dispatch_patient_reply(
         patient_reply=patient_reply,
         context=context,
     )
+    pre_send_review = _review_patient_reply_before_dispatch(
+        config=config,
+        context=context,
+        patient_reply=patient_reply,
+        decision=decision,
+        system_action_result=system_action_result,
+    )
+    if not pre_send_review.get("approved"):
+        if pre_send_review.get("precisa_humano"):
+            return _handoff(
+                db,
+                tenant_id=tenant_id,
+                conversation=conversation,
+                inbound_message=inbound_message,
+                dedupe_key=dedupe_key,
+                config=config,
+                reason="pre_send_review_failed",
+                guardrail=str(pre_send_review.get("motivo") or "review_failed"),
+                extractor_payload=extractor_payload,
+                reply_payload=reply_payload,
+                metadata={
+                    "structured_flow": True,
+                    "pre_send_review": pre_send_review,
+                    "plan": plan.model_dump(mode="json"),
+                    "applied_updates": applied_updates,
+                    "system_action_result": system_action_result,
+                },
+                reply_text="Vou encaminhar sua conversa para nossa equipe conferir isso com segurança antes de seguir.",
+            )
+        original_message = patient_reply.message
+        patient_reply = _repair_patient_reply_after_review(
+            patient_reply=patient_reply,
+            decision=decision,
+            system_action_result=system_action_result,
+            context=context,
+            review=pre_send_review,
+        )
+        pre_send_review = {
+            **pre_send_review,
+            "repaired": True,
+            "original_message": original_message[:600],
+            "repaired_message": patient_reply.message[:600],
+        }
+
+    _sync_conversation_ai_state(
+        db,
+        tenant_id=tenant_id,
+        conversation=conversation,
+        context=context,
+        decision=decision,
+        plan=plan,
+        applied_updates=applied_updates,
+        system_action_result=system_action_result,
+        config=config,
+        patient_reply=patient_reply,
+        review=pre_send_review,
+    )
 
     message_type = "interactive_list" if patient_reply.message_type == "interactive" and conversation.channel == "whatsapp" else "text"
     interactive_payload = (
@@ -1723,6 +2165,7 @@ def _dispatch_patient_reply(
             "intent": decision.intent,
             "system_action": system_action_result.get("action"),
             "interactive": interactive_payload,
+            "pre_send_review": pre_send_review,
         },
         status=MessageStatus.QUEUED.value,
     )
@@ -1775,6 +2218,7 @@ def _dispatch_patient_reply(
             "plan": plan.model_dump(mode="json"),
             "applied_updates": applied_updates,
             "system_action_result": system_action_result,
+            "pre_send_review": pre_send_review,
         },
     )
     db.add(
@@ -3328,8 +3772,14 @@ def _safe_llm_metadata(payload: dict[str, Any] | None) -> dict[str, Any] | None:
 def _safe_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": config.get("enabled"),
+        "conversation_flow_mode": config.get("conversation_flow_mode"),
         "structured_flow_enabled": config.get("structured_flow_enabled"),
         "channels": config.get("channels"),
+        "llm_model": config.get("llm_model"),
+        "pre_send_review_enabled": config.get("pre_send_review_enabled"),
+        "repetition_guard_enabled": config.get("repetition_guard_enabled"),
+        "conversation_memory_enabled": config.get("conversation_memory_enabled"),
+        "auto_save_patient_data_enabled": config.get("auto_save_patient_data_enabled"),
         "outside_business_hours_mode": config.get("outside_business_hours_mode"),
         "max_consecutive_auto_replies": config.get("max_consecutive_auto_replies"),
         "confidence_threshold": config.get("confidence_threshold"),
@@ -3511,27 +3961,108 @@ def _extract_slot_datetime_hint(*, inbound_text: str, timezone: ZoneInfo) -> dat
     return localized.astimezone(UTC)
 
 
+def _weekday_hint_from_text(normalized_text: str) -> int | None:
+    for label, weekday in WEEKDAY_HINTS:
+        if re.search(rf"\b{re.escape(label)}(?:\s*feira)?\b", normalized_text):
+            return weekday
+    return None
+
+
+def _next_weekday_date(*, today: date, weekday: int) -> date:
+    for offset in range(1, 15):
+        candidate = today + timedelta(days=offset)
+        if candidate.weekday() == weekday:
+            return candidate
+    return today + timedelta(days=1)
+
+
+def _future_date_for_day_number(
+    *,
+    today: date,
+    day: int,
+    target_weekday: int | None,
+    month: int | None = None,
+    year: int | None = None,
+) -> date | None:
+    if not 1 <= day <= 31:
+        return None
+    if year is not None and year < 100:
+        year += 2000
+    if month is not None:
+        candidate_year = year or today.year
+        try:
+            candidate = date(candidate_year, month, day)
+        except ValueError:
+            return None
+        if candidate < today and year is None:
+            try:
+                candidate = date(candidate_year + 1, month, day)
+            except ValueError:
+                return None
+        if target_weekday is not None and candidate.weekday() != target_weekday:
+            return None
+        return candidate
+
+    start_month_index = (today.year * 12) + today.month - 1
+    for month_offset in range(0, 14):
+        absolute_month = start_month_index + month_offset
+        candidate_year = absolute_month // 12
+        candidate_month = (absolute_month % 12) + 1
+        try:
+            candidate = date(candidate_year, candidate_month, day)
+        except ValueError:
+            continue
+        if candidate < today:
+            continue
+        if target_weekday is not None and candidate.weekday() != target_weekday:
+            continue
+        return candidate
+    return None
+
+
 def _extract_preferred_date_hint(*, inbound_text: str, timezone: ZoneInfo) -> str | None:
     normalized = _strip_accents(str(inbound_text or "").lower())
     today = datetime.now(timezone).date()
+    target_weekday = _weekday_hint_from_text(normalized)
+
+    if "depois de amanha" in normalized:
+        return (today + timedelta(days=2)).isoformat()
     if "amanha" in normalized:
         return (today + timedelta(days=1)).isoformat()
-    match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", normalized)
-    if not match:
-        return None
-    day = int(match.group(1))
-    month = int(match.group(2))
-    year_raw = match.group(3)
-    year = today.year
-    if year_raw:
-        year = int(year_raw)
-        if year < 100:
-            year += 2000
-    try:
-        candidate = date(year, month, day)
-    except ValueError:
-        return None
-    return candidate.isoformat()
+
+    numeric_match = re.search(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", normalized)
+    if numeric_match:
+        day = int(numeric_match.group(1))
+        month = int(numeric_match.group(2))
+        year_raw = numeric_match.group(3)
+        year = int(year_raw) if year_raw else today.year
+        candidate = _future_date_for_day_number(
+            today=today,
+            day=day,
+            month=month,
+            year=year,
+            target_weekday=target_weekday,
+        )
+        if candidate:
+            return candidate.isoformat()
+
+    day_match = re.search(r"\bdia\s+(\d{1,2})(?:\s+de\s+([a-z]{3,12}))?(?:\s+de\s+(\d{2,4}))?\b", normalized)
+    if day_match:
+        month_hint = MONTH_HINTS.get(str(day_match.group(2) or "").strip()) if day_match.group(2) else None
+        year_hint = int(day_match.group(3)) if day_match.group(3) else None
+        candidate = _future_date_for_day_number(
+            today=today,
+            day=int(day_match.group(1)),
+            month=month_hint,
+            year=year_hint,
+            target_weekday=target_weekday,
+        )
+        if candidate:
+            return candidate.isoformat()
+
+    if target_weekday is not None:
+        return _next_weekday_date(today=today, weekday=target_weekday).isoformat()
+    return None
 
 
 def _message_has_booking_intent(text: str) -> bool:
@@ -3924,6 +4455,11 @@ def _enrich_decision_with_first_message_context_hints(
     inbound_text: str,
     context: AiConversationContext,
 ) -> AiDecisionOutput:
+    deterministic_date = _extract_preferred_date_hint(
+        inbound_text=inbound_text,
+        timezone=_timezone(context.clinic_context.timezone),
+    )
+    deterministic_period = _detect_preferred_period_from_message(inbound_text)
     unit = None
     if not decision.extracted_data.unit_id and not decision.extracted_data.unit_requested_text:
         unit = _extract_unit_hint_from_text(db, tenant_id=tenant_id, inbound_text=inbound_text)
@@ -3936,10 +4472,7 @@ def _enrich_decision_with_first_message_context_hints(
         or _extract_procedure_hint_from_context(context=context, inbound_text=inbound_text)
     )
     preferred_period = decision.extracted_data.preferred_period or _detect_preferred_period_from_message(inbound_text)
-    preferred_date = decision.extracted_data.preferred_date or _extract_preferred_date_hint(
-        inbound_text=inbound_text,
-        timezone=_timezone(context.clinic_context.timezone),
-    )
+    preferred_date = deterministic_date or decision.extracted_data.preferred_date
 
     extracted_data = decision.extracted_data.model_copy(
         update={
@@ -3955,6 +4488,21 @@ def _enrich_decision_with_first_message_context_hints(
 
     appointment_intent = decision.appointment_intent
     system_action = decision.system_action
+    if system_action.action != "none" or system_action.required:
+        system_action = system_action.model_copy(
+            update={
+                "params": system_action.params.model_copy(
+                    update={
+                        "unit_id": system_action.params.unit_id or extracted_data.unit_id,
+                        "unit_name": system_action.params.unit_name or extracted_data.unit_requested_text,
+                        "service_id": system_action.params.service_id or extracted_data.service_id,
+                        "procedure_type": system_action.params.procedure_type or extracted_data.procedure_type,
+                        "date": deterministic_date or system_action.params.date or extracted_data.preferred_date,
+                        "period": deterministic_period or system_action.params.period or extracted_data.preferred_period,
+                    }
+                )
+            }
+        )
     if _message_has_booking_intent(inbound_text):
         appointment_intent = appointment_intent.model_copy(
             update={
@@ -4001,7 +4549,25 @@ def _enrich_decision_with_recent_availability_hints(
     alternative_requested = _message_requests_alternative_slots(inbound_text)
     same_period_requested = _message_prefers_same_period(inbound_text)
     window_hints = _availability_window_hints_from_message(inbound_text)
-    if not alternative_requested and not same_period_requested and not window_hints:
+    deterministic_date = _extract_preferred_date_hint(
+        inbound_text=inbound_text,
+        timezone=_timezone(context.clinic_context.timezone),
+    )
+    deterministic_period = _detect_preferred_period_from_message(inbound_text)
+    slot_selection_requested = bool(
+        _extract_slot_datetime_hint(
+            inbound_text=inbound_text,
+            timezone=_timezone(context.clinic_context.timezone),
+        )
+    ) or decision.intent == "selecionar_horario" or decision.system_action.action in {
+        "validate_slot",
+        "validate_and_hold_slot",
+        "confirm_appointment",
+    }
+    if slot_selection_requested and not alternative_requested and not same_period_requested and not window_hints:
+        return decision
+    temporal_adjustment_requested = bool(deterministic_date or deterministic_period)
+    if not alternative_requested and not same_period_requested and not window_hints and not temporal_adjustment_requested:
         return decision
 
     memory = _recent_scheduling_memory(
@@ -4009,15 +4575,17 @@ def _enrich_decision_with_recent_availability_hints(
         tenant_id=tenant_id,
         context=context,
     )
-    if not any(memory.get(field) for field in ("unit_id", "unit_name", "procedure_type", "preferred_date", "offered_slots")):
+    has_scheduling_memory = any(memory.get(field) for field in ("unit_id", "unit_name", "procedure_type", "preferred_date", "offered_slots"))
+    if not has_scheduling_memory and not temporal_adjustment_requested:
         return decision
 
     inherited_period = (
-        _normalize_preferred_period(decision.extracted_data.preferred_period)
+        _normalize_preferred_period(deterministic_period)
+        or _normalize_preferred_period(decision.extracted_data.preferred_period)
         or _normalize_preferred_period(decision.system_action.params.period)
         or _normalize_preferred_period(window_hints.get("period"))
     )
-    if (same_period_requested or alternative_requested) and not inherited_period:
+    if (same_period_requested or alternative_requested or (deterministic_date and not deterministic_period)) and not inherited_period:
         inherited_period = _normalize_preferred_period(memory.get("preferred_period"))
 
     extracted_data = decision.extracted_data.model_copy(
@@ -4028,13 +4596,13 @@ def _enrich_decision_with_recent_availability_hints(
             "service_requested_text": decision.extracted_data.service_requested_text or memory.get("procedure_type"),
             "procedure_type": decision.extracted_data.procedure_type or memory.get("procedure_type"),
             "professional_id": decision.extracted_data.professional_id or memory.get("professional_id"),
-            "preferred_date": decision.extracted_data.preferred_date or memory.get("preferred_date"),
-            "preferred_period": window_hints.get("period") or decision.extracted_data.preferred_period or inherited_period,
+            "preferred_date": deterministic_date or decision.extracted_data.preferred_date or memory.get("preferred_date"),
+            "preferred_period": window_hints.get("period") or deterministic_period or decision.extracted_data.preferred_period or inherited_period,
         }
     )
 
     appointment_intent = decision.appointment_intent
-    if alternative_requested or same_period_requested or window_hints:
+    if alternative_requested or same_period_requested or window_hints or temporal_adjustment_requested:
         appointment_intent = appointment_intent.model_copy(
             update={
                 "wants_booking": True,
@@ -4045,12 +4613,12 @@ def _enrich_decision_with_recent_availability_hints(
         )
 
     action_name = decision.system_action.action
-    if alternative_requested or same_period_requested or window_hints:
+    if alternative_requested or same_period_requested or window_hints or temporal_adjustment_requested:
         action_name = "query_availability"
 
     system_action = decision.system_action.model_copy(
         update={
-            "required": decision.system_action.required or alternative_requested or same_period_requested or bool(window_hints),
+            "required": decision.system_action.required or alternative_requested or same_period_requested or bool(window_hints) or temporal_adjustment_requested,
             "action": action_name,
             "params": decision.system_action.params.model_copy(
                 update={
@@ -4059,8 +4627,8 @@ def _enrich_decision_with_recent_availability_hints(
                     "service_id": decision.system_action.params.service_id or extracted_data.service_id,
                     "procedure_type": decision.system_action.params.procedure_type or extracted_data.procedure_type,
                     "professional_id": decision.system_action.params.professional_id or extracted_data.professional_id,
-                    "date": decision.system_action.params.date or extracted_data.preferred_date,
-                    "period": window_hints.get("period") or decision.system_action.params.period or extracted_data.preferred_period,
+                    "date": deterministic_date or decision.system_action.params.date or extracted_data.preferred_date,
+                    "period": window_hints.get("period") or deterministic_period or decision.system_action.params.period or extracted_data.preferred_period,
                     "time_after": window_hints.get("time_after") or decision.system_action.params.time_after,
                     "time_before": window_hints.get("time_before") or decision.system_action.params.time_before,
                     "exclude_previously_offered": decision.system_action.params.exclude_previously_offered or alternative_requested or same_period_requested or bool(window_hints),

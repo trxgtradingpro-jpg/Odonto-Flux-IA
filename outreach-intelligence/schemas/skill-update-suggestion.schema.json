@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clinicflux.ai/schemas/outreach/skill-update-suggestion.schema.json",
+  "title": "ClinicFlux AI Outreach Skill Update Suggestion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "skill",
+    "change_type",
+    "suggested_rule",
+    "reason",
+    "based_on_count",
+    "confidence",
+    "expected_impact",
+    "analysis_mode",
+    "token_efficiency_mode",
+    "token_budget_level",
+    "should_use_elite_mode",
+    "elite_mode_reason",
+    "estimated_token_cost_level",
+    "data_loading_strategy",
+    "large_context_allowed",
+    "requires_human_approval"
+  ],
+  "properties": {
+    "skill": { "type": "string", "minLength": 1 },
+    "change_type": {
+      "type": "string",
+      "enum": ["add_rule", "adjust_rule", "retire_rule", "add_example", "update_scoring", "document_risk"]
+    },
+    "suggested_rule": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string", "minLength": 1 },
+    "based_on_count": { "type": "integer", "minimum": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "expected_impact": { "type": "string" },
+    "analysis_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_efficiency_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_budget_level": { "type": "string", "enum": ["low", "medium", "high"] },
+    "should_use_elite_mode": { "type": "boolean" },
+    "elite_mode_reason": { "type": "string" },
+    "estimated_token_cost_level": { "type": "string", "enum": ["low", "medium", "high", "very_high"] },
+    "data_loading_strategy": {
+      "type": "string",
+      "enum": ["minimal", "lead_profile_only", "recent_events_only", "aggregated_summary", "full_campaign_analysis"]
+    },
+    "large_context_allowed": { "type": "boolean" },
+    "requires_human_approval": { "type": "boolean" }
+  }
+}

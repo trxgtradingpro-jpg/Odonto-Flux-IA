@@ -12,6 +12,7 @@ from app.services.backup_service import run_due_automatic_backups
 from app.services.billing_gateway_service import run_delinquency_check
 from app.services.demo_whatsapp_simulation_service import process_demo_whatsapp_reply_simulation
 from app.services.monitoring_service import monitoring_snapshot
+from app.services.sales_outreach_automation_service import process_batch
 from app.services.sales_demo_service import cleanup_expired_demos
 from app.services.whatsapp_service import process_inbound_audio_message, process_outbox_batch
 
@@ -104,6 +105,23 @@ def process_whatsapp_outbox_task():
     db = SessionLocal()
     try:
         return process_outbox_batch(db, batch_size=40)
+    finally:
+        db.close()
+
+
+@shared_task(name='app.tasks.jobs.process_sales_outreach_batch_task', bind=True, max_retries=2)
+def process_sales_outreach_batch_task(self, batch_id: str):
+    db = SessionLocal()
+    try:
+        result = process_batch(db, batch_id=UUID(batch_id))
+        return {"status": "ok", "batch_id": batch_id, "summary": result.get("summary", {})}
+    except Exception as exc:
+        logger.exception(
+            'sales_outreach_batch.task_failed',
+            batch_id=batch_id,
+            error=str(exc),
+        )
+        raise self.retry(exc=exc, countdown=2**self.request.retries)
     finally:
         db.close()
 

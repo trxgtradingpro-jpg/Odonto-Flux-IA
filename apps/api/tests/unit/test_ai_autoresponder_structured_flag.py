@@ -8,9 +8,9 @@ from sqlalchemy import create_engine, select, text
 
 from app.db.base import Base
 from app.core.security import hash_password
-from app.models import AIAutoresponderDecision, Conversation, Message, OutboxMessage, Patient, Role, Setting, Tenant, TenantPlan, User, UserRole, WhatsAppAccount
+from app.models import AIAutoresponderDecision, Conversation, FeatureFlag, Message, OutboxMessage, Patient, Role, Setting, Tenant, TenantPlan, User, UserRole, WhatsAppAccount
 from app.models.enums import MessageDirection
-from app.services.ai_autoresponder_service import process_inbound_message
+from app.services.ai_autoresponder_service import get_global_config, process_inbound_message, set_platform_global_config
 
 
 @pytest.fixture(scope="session")
@@ -180,3 +180,59 @@ def test_legacy_autoresponder_still_runs_when_structured_flag_disabled(monkeypat
     assert decision is not None
     assert decision.prompt_version != "structured-v1.0"
     assert outbox is not None
+
+
+def test_platform_agent_config_becomes_default_for_tenant_without_override(seeded_legacy_db, db_session):
+    tenant_id = seeded_legacy_db.id
+
+    config = set_platform_global_config(
+        db_session,
+        payload={
+            "enabled": True,
+            "conversation_flow_mode": "structured_elite",
+            "structured_flow_enabled": True,
+            "llm_model": "gpt-4.1",
+            "pre_send_review_enabled": True,
+        },
+    )
+
+    resolved = get_global_config(db_session, tenant_id=tenant_id)
+    platform_row = db_session.scalar(select(FeatureFlag).where(FeatureFlag.tenant_id.is_(None), FeatureFlag.key == "platform.ai_autoresponder.global"))
+
+    assert config["conversation_flow_mode"] == "structured_elite"
+    assert resolved["conversation_flow_mode"] == "structured_elite"
+    assert resolved["structured_flow_enabled"] is True
+    assert resolved["llm_model"] == "gpt-4.1"
+    assert resolved["pre_send_review_enabled"] is True
+    assert platform_row is not None
+
+
+def test_tenant_override_still_wins_over_platform_default(seeded_legacy_db, db_session):
+    tenant_id = seeded_legacy_db.id
+
+    set_platform_global_config(
+        db_session,
+        payload={
+            "enabled": True,
+            "conversation_flow_mode": "structured_elite",
+            "structured_flow_enabled": True,
+            "llm_model": "gpt-4.1",
+        },
+    )
+    _upsert_setting(
+        db_session,
+        tenant_id=tenant_id,
+        key="ai_autoresponder.global",
+        value={
+            "enabled": True,
+            "conversation_flow_mode": "legacy",
+            "structured_flow_enabled": False,
+            "llm_model": "gpt-4.1-mini",
+        },
+    )
+
+    resolved = get_global_config(db_session, tenant_id=tenant_id)
+
+    assert resolved["conversation_flow_mode"] == "legacy"
+    assert resolved["structured_flow_enabled"] is False
+    assert resolved["llm_model"] == "gpt-4.1-mini"

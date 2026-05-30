@@ -23,6 +23,10 @@ import { api } from "@/lib/api";
 import { getAdminAccessToken } from "@/lib/auth";
 import { Badge, Button, Card, CardContent, Input, cn } from "@odontoflux/ui";
 
+const RECENT_QUERIES_STORAGE_KEY = "adm-google-places-recent-queries";
+const LAST_QUERY_STORAGE_KEY = "adm-google-places-last-query";
+const MAX_RECENT_QUERIES = 6;
+
 type PlaceCandidate = {
   place_id: string;
   name: string;
@@ -89,6 +93,31 @@ function resultBadgeClass(status: ImportResult["status"]) {
   return "border-red-200 bg-red-50 text-red-700";
 }
 
+function normalizeRecentQuery(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function loadRecentQueries() {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENT_QUERIES_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length >= 3) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentQueries(queries: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RECENT_QUERIES_STORAGE_KEY, JSON.stringify(queries));
+}
+
+function saveLastQuery(query: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LAST_QUERY_STORAGE_KEY, query);
+}
+
 export default function ImportClinicsFromPlacesPage() {
   const queryClient = useQueryClient();
   const [hasToken, setHasToken] = useState(false);
@@ -96,12 +125,24 @@ export default function ImportClinicsFromPlacesPage() {
   const [limit, setLimit] = useState(10);
   const [includedType, setIncludedType] = useState("dentist");
   const [includeRating, setIncludeRating] = useState(false);
+  const [recentQueries, setRecentQueries] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchData, setSearchData] = useState<PlacesSearchResponse | null>(null);
   const [importData, setImportData] = useState<PlacesImportResponse | null>(null);
 
   useEffect(() => {
     setHasToken(Boolean(getAdminAccessToken()));
+  }, []);
+
+  useEffect(() => {
+    const storedRecentQueries = loadRecentQueries();
+    setRecentQueries(storedRecentQueries);
+
+    if (typeof window === "undefined") return;
+    const lastQuery = window.localStorage.getItem(LAST_QUERY_STORAGE_KEY);
+    if (lastQuery && lastQuery.trim().length >= 3) {
+      setQuery(lastQuery);
+    }
   }, []);
 
   const admSessionQuery = useAdmSession(hasToken);
@@ -116,10 +157,10 @@ export default function ImportClinicsFromPlacesPage() {
   );
 
   const searchMutation = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (overrideQuery?: string) =>
       (
         await api.post<PlacesSearchResponse>("/admin/google-places/search", {
-          query,
+          query: normalizeRecentQuery(overrideQuery ?? query),
           limit,
           region_code: "BR",
           included_type: includedType === "none" ? null : includedType,
@@ -128,6 +169,13 @@ export default function ImportClinicsFromPlacesPage() {
     onSuccess: (data) => {
       setSearchData(data);
       setImportData(null);
+      const normalizedQuery = normalizeRecentQuery(data.query);
+      saveLastQuery(normalizedQuery);
+      setRecentQueries((current) => {
+        const next = [normalizedQuery, ...current.filter((item) => item !== normalizedQuery)].slice(0, MAX_RECENT_QUERIES);
+        persistRecentQueries(next);
+        return next;
+      });
       const selectableIds = data.results
         .filter((candidate) => !candidate.duplicate_prospect_id)
         .map((candidate) => candidate.place_id);
@@ -241,7 +289,7 @@ export default function ImportClinicsFromPlacesPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => searchMutation.mutate()} disabled={searchMutation.isPending}>
+            <Button variant="outline" onClick={() => searchMutation.mutate(undefined)} disabled={searchMutation.isPending}>
               <RefreshCw size={16} className={cn(searchMutation.isPending && "animate-spin")} />
               Buscar novamente
             </Button>
@@ -295,6 +343,9 @@ export default function ImportClinicsFromPlacesPage() {
                 value={limit}
                 onChange={(event) => setLimit(Math.max(1, Math.min(Number(event.target.value) || 1, 20)))}
               />
+              <span className="block text-xs leading-5 text-stone-500">
+                O Google Places limita a busca a 20 resultados por pagina. Para chegar a 100, seriam 5 chamadas e mais custo.
+              </span>
             </label>
             <label className="space-y-2">
               <span className="text-xs font-bold uppercase tracking-[0.16em] text-stone-500">Tipo</span>
@@ -310,7 +361,7 @@ export default function ImportClinicsFromPlacesPage() {
             </label>
             <Button
               className="bg-emerald-600 text-white hover:bg-emerald-500"
-              onClick={() => searchMutation.mutate()}
+              onClick={() => searchMutation.mutate(undefined)}
               disabled={searchMutation.isPending || query.trim().length < 3}
             >
               <Search size={16} />
@@ -318,6 +369,29 @@ export default function ImportClinicsFromPlacesPage() {
             </Button>
           </CardContent>
         </Card>
+
+        {recentQueries.length ? (
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="space-y-3 p-4">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-stone-500">Buscas recentes</p>
+              <div className="flex flex-wrap gap-2">
+                {recentQueries.map((recentQuery) => (
+                  <button
+                    key={recentQuery}
+                    type="button"
+                    className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-3 py-1.5 text-sm font-semibold text-stone-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800"
+                    onClick={() => {
+                      setQuery(recentQuery);
+                      searchMutation.mutate(recentQuery);
+                    }}
+                  >
+                    {recentQuery}
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
           <section className="space-y-3">

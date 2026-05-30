@@ -295,7 +295,7 @@ def _lead_phone_matches(value: str | None, normalized_phone: str) -> bool:
 def _is_simulated_inbound_payload(payload: dict | None) -> bool:
     if not isinstance(payload, dict):
         return False
-    return bool(payload.get("simulated_patient") or payload.get("source") == "demo_whatsapp_simulation")
+    return bool(payload.get("simulated_patient") or payload.get("simulated_clinic") or payload.get("source") == "demo_whatsapp_simulation")
 
 
 def _extract_sender_phone_from_message_payload(payload: dict | None) -> str | None:

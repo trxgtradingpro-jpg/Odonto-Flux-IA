@@ -292,6 +292,11 @@ html[data-demo-webchat-workspace-open="true"] [data-app-shell-support-fab="true"
   display: none !important;
 }
 
+html[data-mobile-entry-open="true"] [data-app-shell-support-fab="true"],
+html[data-mobile-entry-open="true"] [data-demo-entry-shortcut="true"] {
+  display: none !important;
+}
+
 img,
 svg,
 video,
@@ -733,6 +738,86 @@ th {
   animation: auth-progress-breathe 2.4s ease-in-out infinite;
 }
 
+@keyframes mobile-entry-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.98);
+    filter: blur(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes mobile-entry-pulse {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.74;
+  }
+
+  50% {
+    transform: translate3d(0, -2%, 0) scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes mobile-entry-scan {
+  0% {
+    transform: translateX(-125%) rotate(8deg);
+  }
+
+  58%,
+  100% {
+    transform: translateX(125%) rotate(8deg);
+  }
+}
+
+.mobile-entry-stage {
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--surface-base) 92%, white 8%), var(--surface-subtle)),
+    radial-gradient(circle at 12% 10%, color-mix(in srgb, var(--tenant-secondary) 28%, transparent), transparent 36%),
+    radial-gradient(circle at 86% 18%, color-mix(in srgb, var(--tenant-accent) 24%, transparent), transparent 34%),
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--tenant-primary) 18%, transparent), transparent 44%);
+}
+
+.mobile-entry-stage::before {
+  content: "";
+  position: absolute;
+  inset: -18%;
+  background:
+    radial-gradient(circle at 28% 18%, color-mix(in srgb, var(--tenant-primary) 34%, transparent), transparent 24%),
+    radial-gradient(circle at 76% 74%, color-mix(in srgb, var(--tenant-accent) 24%, transparent), transparent 25%);
+  animation: mobile-entry-pulse 7.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.mobile-entry-shine::after {
+  content: "";
+  position: absolute;
+  inset: -18% -45%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+  animation: mobile-entry-scan 3.8s cubic-bezier(0.22, 1, 0.36, 1) 0.25s both;
+  pointer-events: none;
+}
+
+.mobile-entry-reveal {
+  animation: mobile-entry-rise 0.72s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.mobile-entry-grid {
+  animation-delay: 0.12s;
+  grid-auto-rows: clamp(30px, 4.4dvh, 38px);
+  align-content: start;
+}
+
+.mobile-entry-modal {
+  animation: mobile-entry-rise 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @keyframes typing-dot-bounce {
   0%,
   80%,
@@ -778,6 +863,13 @@ th {
   .typing-dots > span {
     animation: none !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .mobile-entry-stage::before,
+  .mobile-entry-shine::after,
+  .mobile-entry-reveal,
+  .mobile-entry-modal {
+    animation: none !important;
   }
 }
 

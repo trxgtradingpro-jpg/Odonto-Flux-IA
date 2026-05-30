@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -113,6 +115,7 @@ class PublicSiteQuickDemoInput(BaseModel):
     clinic_name: str = Field(min_length=2, max_length=255)
     owner_name: str = Field(min_length=2, max_length=180)
     phone: str = Field(min_length=8, max_length=30)
+    template_slug: str | None = Field(default=None, max_length=120)
 
 
 class ProspectUpdate(BaseModel):
@@ -175,6 +178,81 @@ class ProspectOutreachOutput(BaseModel):
     sender_tenant_id: UUID
     conversation_id: UUID
     outbound_message_id: UUID
+    transport: str | None = None
+
+
+class AdminOutreachRuntimeOutput(BaseModel):
+    transport: str
+    sender_tenant_slug: str
+    bridge_enabled: bool
+    bridge_configured: bool
+    bridge_pending: int
+    bridge_processing: int
+    bridge_failed: int
+    bridge_dead_letter: int
+    bridge_command: str | None = None
+
+
+class SalesOutreachAutomationEligibilityOutput(BaseModel):
+    eligible_count: int
+    preview: list["ProspectOutput"]
+    filters: dict
+
+
+class SalesOutreachAutomationBatchStartInput(BaseModel):
+    quantity: int = Field(default=10, ge=1, le=500)
+    status: str | None = Field(default=None, max_length=80)
+    temperature: str | None = Field(default=None, max_length=40)
+    demo_status: str | None = Field(default=None, max_length=40)
+    q: str | None = Field(default=None, max_length=120)
+    only_without_demo: bool = False
+    only_with_demo: bool = False
+
+
+class SalesOutreachAutomationBatchItemOutput(BaseModel):
+    id: UUID
+    prospect: ProspectOutput | None = None
+    status: str
+    current_step: str | None = None
+    last_reply_classification: str | None = None
+    pause_reason: str | None = None
+    last_message_preview: str | None = None
+    last_error_message: str | None = None
+    demo_generated_automatically: bool = False
+    conversation_id: UUID | None = None
+    last_outbound_message_id: UUID | None = None
+    last_inbound_message_id: UUID | None = None
+    sent_count: int = 0
+    received_count: int = 0
+    attempts: int = 0
+    started_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    finished_at: datetime | None = None
+    details: dict = Field(default_factory=dict)
+    open_adm_whatsapp_href: str | None = None
+
+
+class SalesOutreachAutomationBatchOutput(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    created_by_user_id: UUID | None = None
+    status: str
+    requested_count: int
+    selected_count: int
+    filters: dict = Field(default_factory=dict)
+    summary: dict = Field(default_factory=dict)
+    stop_reason: str | None = None
+    started_at: datetime | None = None
+    paused_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_processed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[SalesOutreachAutomationBatchItemOutput] = Field(default_factory=list)
+
+
+class SalesOutreachAutomationBatchListOutput(BaseModel):
+    data: list[SalesOutreachAutomationBatchOutput]
 
 
 class ProspectOutreachLabInput(BaseModel):
@@ -495,6 +573,32 @@ class SalesClinicMessageEventOutput(BaseModel):
     event: ProspectTimelineEventOutput
 
 
+class SalesOutreachClassificationRuleOutput(BaseModel):
+    class_name: str
+    priority: int
+    keywords: list[str]
+    next_step: str | None = None
+
+
+class SalesOutreachFlowConfigOutput(BaseModel):
+    initial_messages: list[str]
+    step_messages: dict[str, list[str]]
+    classifications: list[SalesOutreachClassificationRuleOutput]
+
+
+class SalesOutreachClassificationRuleInput(BaseModel):
+    class_name: str = Field(min_length=2, max_length=80)
+    priority: int = Field(default=0, ge=0, le=1000)
+    keywords: list[str] = Field(default_factory=list)
+    next_step: str | None = Field(default=None, max_length=80)
+
+
+class SalesOutreachFlowConfigInput(BaseModel):
+    initial_messages: list[str] = Field(min_length=1)
+    step_messages: dict[str, list[str]] = Field(default_factory=dict)
+    classifications: list[SalesOutreachClassificationRuleInput] = Field(default_factory=list)
+
+
 class DemoProvisionOutput(BaseModel):
     prospect: ProspectOutput
     access_token: str
@@ -519,6 +623,8 @@ class PublicSiteQuickDemoOutput(BaseModel):
     demo_login_url: str
     demo_booking_path: str | None = None
     demo_booking_url: str | None = None
+    selected_template_slug: str | None = None
+    site_template_preview_url: str | None = None
 
 
 class ProspectInsightsOutput(BaseModel):
@@ -558,3 +664,6 @@ class DemoGuideStateOutput(BaseModel):
 
 ProspectOutreachOutput.model_rebuild()
 SalesMessageTemplateOutput.model_rebuild()
+SalesOutreachAutomationEligibilityOutput.model_rebuild()
+SalesOutreachAutomationBatchItemOutput.model_rebuild()
+SalesOutreachAutomationBatchOutput.model_rebuild()

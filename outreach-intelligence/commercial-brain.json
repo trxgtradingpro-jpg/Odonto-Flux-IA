@@ -1,0 +1,69 @@
+{
+  "best_opening_by_lead_type": {
+    "no_website": "Fonte Google + identidade comercial + pergunta de responsavel por WhatsApp/agendamentos.",
+    "weak_website": "Fonte Google + convite para auditoria simples de site, WhatsApp e prova de confianca.",
+    "strong_website": "Fonte Google + ClinicFlux AI como camada de resposta, controle e agenda.",
+    "reception_autoreply": "Clarificar que o contato e comercial, nao atendimento de paciente."
+  },
+  "best_offer_by_website_status": {
+    "none": "website_seo",
+    "weak": "audit",
+    "average": "clinicflux_ai",
+    "good": "clinicflux_ai",
+    "strong": "clinicflux_ai"
+  },
+  "best_followup_by_objection": {
+    "source": "Responder como encontrou a clinica antes de pedir o responsavel.",
+    "price": "Enviar resumo de valor sem promessa garantida e oferecer demo curta.",
+    "already_has_system": "Posicionar ClinicFlux AI como camada de atendimento e organizacao, nao troca imediata.",
+    "not_responsible": "Pedir responsavel por WhatsApp, agenda ou recepcao em uma pergunta.",
+    "no_interest": "Encerrar com respeito e evitar novo contato sem sinal futuro."
+  },
+  "winning_patterns": [
+    "Identidade comercial aparece no primeiro contato.",
+    "Mensagem usa contexto real do Google Places.",
+    "Uma unica proxima acao por mensagem.",
+    "Perguntas diretas da clinica sao respondidas antes do pitch."
+  ],
+  "losing_patterns": [
+    "Repetir abertura depois de resposta real.",
+    "Parecer paciente ou atendimento da propria clinica.",
+    "Prometer resultado garantido, agenda cheia ou faturamento.",
+    "Vender site e SaaS no mesmo primeiro pitch sem sinal de interesse."
+  ],
+  "worst_messages": [
+    {
+      "label": "patient_like_opening",
+      "reason": "Parece paciente e confunde a recepcao.",
+      "example": "Ola, gostaria de agendar uma consulta?"
+    },
+    {
+      "label": "hype_promise",
+      "reason": "Cria promessa comercial nao comprovada.",
+      "example": "Vamos lotar sua agenda com pacientes garantidos."
+    }
+  ],
+  "pricing_resistance_patterns": [
+    "Pedir preco antes de entender se e site, auditoria ou ClinicFlux AI.",
+    "Comparar com ferramenta generica sem ver fluxo de WhatsApp.",
+    "Recepcao pedir valor sem decisor envolvido."
+  ],
+  "best_campaigns": [
+    {
+      "name": "google_no_website_v1",
+      "lead_type": "no_website",
+      "note": "Campanha inicial ficticia para baseline de testes."
+    }
+  ],
+  "recommended_strategy_next_week": [
+    "Separar campanhas por status do site: sem site, site fraco, site forte.",
+    "Medir reply_rate e demo_click_rate por message_variant.",
+    "Testar resposta curta de origem quando a clinica pergunta como foi encontrada."
+  ],
+  "data_quality_guardrails": [
+    "Nao registrar telefone completo nos exemplos.",
+    "Nao salvar secrets ou dados privados no JSONL.",
+    "Nao transformar sugestao de skill em mudanca automatica."
+  ],
+  "last_updated_at": "2026-05-29T12:10:00Z"
+}

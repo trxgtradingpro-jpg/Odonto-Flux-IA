@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clinicflux.ai/schemas/outreach/campaign-summary.schema.json",
+  "title": "ClinicFlux AI Outreach Campaign Summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "week_start",
+    "week_end",
+    "analysis_mode",
+    "token_efficiency_mode",
+    "token_budget_level",
+    "should_use_elite_mode",
+    "elite_mode_reason",
+    "estimated_token_cost_level",
+    "data_loading_strategy",
+    "large_context_allowed",
+    "total_leads_contacted",
+    "reply_rate",
+    "demo_click_rate",
+    "whatsapp_test_rate",
+    "meeting_rate",
+    "close_rate",
+    "best_opening",
+    "worst_opening",
+    "best_lead_type",
+    "worst_lead_type",
+    "top_objections",
+    "lost_reasons",
+    "recommended_next_strategy",
+    "stop_doing",
+    "continue_doing",
+    "test_next",
+    "generated_at"
+  ],
+  "properties": {
+    "week_start": { "type": "string" },
+    "week_end": { "type": "string" },
+    "analysis_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_efficiency_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_budget_level": { "type": "string", "enum": ["low", "medium", "high"] },
+    "should_use_elite_mode": { "type": "boolean" },
+    "elite_mode_reason": { "type": "string" },
+    "estimated_token_cost_level": { "type": "string", "enum": ["low", "medium", "high", "very_high"] },
+    "data_loading_strategy": {
+      "type": "string",
+      "enum": ["minimal", "lead_profile_only", "recent_events_only", "aggregated_summary", "full_campaign_analysis"]
+    },
+    "large_context_allowed": { "type": "boolean" },
+    "total_leads_contacted": { "type": "integer", "minimum": 0 },
+    "reply_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "demo_click_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "whatsapp_test_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "meeting_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "close_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "best_opening": { "type": "string" },
+    "worst_opening": { "type": "string" },
+    "best_lead_type": { "type": "string" },
+    "worst_lead_type": { "type": "string" },
+    "top_objections": { "type": "array", "items": { "$ref": "#/$defs/count_item" } },
+    "lost_reasons": { "type": "array", "items": { "$ref": "#/$defs/count_item" } },
+    "recommended_next_strategy": { "type": "string" },
+    "stop_doing": { "type": "array", "items": { "type": "string" } },
+    "continue_doing": { "type": "array", "items": { "type": "string" } },
+    "test_next": { "type": "array", "items": { "type": "string" } },
+    "generated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "count_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "count"],
+      "properties": {
+        "name": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

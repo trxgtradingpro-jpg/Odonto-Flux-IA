@@ -1,0 +1,26 @@
+{
+  "lead_id": "lead-demo-001",
+  "clinic_name": "Clinica Aurora Ficticia",
+  "source": "google_places",
+  "first_contact_date": "2026-05-29T12:00:00Z",
+  "last_contact_date": "2026-05-29T12:34:00Z",
+  "current_stage": "replied",
+  "lead_temperature": "warm",
+  "responsible_person": null,
+  "detected_personas": [
+    "reception"
+  ],
+  "known_objections": [
+    "source"
+  ],
+  "preferred_angle": "website_seo",
+  "do_not_repeat": [
+    "Nao repetir a abertura sobre ter encontrado a clinica no Google sem responder a fonte",
+    "Nao perguntar novamente quem cuida da agenda antes de responder como encontrou"
+  ],
+  "next_best_action": "send_message",
+  "notes": [
+    "Exemplo ficticio para testes e documentacao",
+    "Nao contem telefone, email ou dado privado real"
+  ]
+}

@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     conversations,
     dashboards,
     documents,
+    internal_whatsapp_web,
     leads,
     messages,
     onboarding,
@@ -63,3 +64,4 @@ api_router.include_router(public_site.router)
 api_router.include_router(webhooks_whatsapp.router)
 api_router.include_router(admin_platform.router)
 api_router.include_router(admin_sales.router)
+api_router.include_router(internal_whatsapp_web.router)

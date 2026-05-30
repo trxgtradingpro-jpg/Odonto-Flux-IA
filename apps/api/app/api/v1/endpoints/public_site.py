@@ -26,6 +26,7 @@ def create_public_site_quick_demo(
         clinic_name=payload.clinic_name,
         owner_name=payload.owner_name,
         phone=payload.phone,
+        template_slug=payload.template_slug,
         base_url=_base_url(request),
     )
     return {
@@ -34,4 +35,6 @@ def create_public_site_quick_demo(
         "demo_login_url": result["demo_login_url"],
         "demo_booking_path": result["demo_booking_path"],
         "demo_booking_url": result["demo_booking_url"],
+        "selected_template_slug": result.get("selected_template_slug"),
+        "site_template_preview_url": result.get("site_template_preview_url"),
     }

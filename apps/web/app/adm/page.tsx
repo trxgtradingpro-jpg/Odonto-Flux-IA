@@ -14,6 +14,7 @@ import {
   Eye,
   FileText,
   Flame,
+  Globe2,
   KeyRound,
   Lock,
   MapPin,
@@ -370,6 +371,7 @@ type AdmWhatsappConversation = {
   channel: string;
   status: string;
   tags: string[];
+  internal_simulation?: boolean;
   ai_summary?: string | null;
   ai_autoresponder_enabled?: boolean | null;
   last_message_at?: string | null;
@@ -976,14 +978,18 @@ function ChangePasswordPanel({ onDone }: { onDone: () => void }) {
 
 function admWhatsappSourceLabel(source: string) {
   if (source === "demo") return "Demo";
+  if (source === "demo_webchat") return "Demo webchat";
   if (source === "comercial") return "Comercial";
   return humanize(source);
 }
 
-function messageAuthorLabel(message: AdmWhatsappMessage, conversationSource: string, simulated: boolean) {
+function messageAuthorLabel(message: AdmWhatsappMessage, conversationSource: string) {
+  const simulatedClinic = Boolean(message.payload?.simulated_clinic);
+  const simulatedPatient = Boolean(message.payload?.simulated_patient);
   if (message.direction === "inbound") {
+    if (simulatedClinic) return "Clinica simulada";
     if (message.sender_type === "patient") {
-      if (simulated) return "Paciente simulado";
+      if (simulatedPatient) return "Paciente simulado";
       return conversationSource === "comercial" ? "Cliente" : "Paciente";
     }
     return "Cliente";
@@ -1000,9 +1006,11 @@ function AdmWhatsAppInbox({
   selectedProspectId: string | null;
   onClearProspectFilter: () => void;
 }) {
+  const queryClient = useQueryClient();
   const threadRef = useRef<HTMLDivElement | null>(null);
   const [search, setSearch] = useState("");
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [draftMessage, setDraftMessage] = useState("");
 
   useEffect(() => {
     setSelectedConversationId(null);
@@ -1021,6 +1029,7 @@ function AdmWhatsAppInbox({
         })
       ).data,
     retry: false,
+    refetchInterval: 2500,
   });
 
   const conversations = useMemo(() => conversationsQuery.data?.data ?? [], [conversationsQuery.data?.data]);
@@ -1039,9 +1048,48 @@ function AdmWhatsAppInbox({
       (await api.get(`/admin/whatsapp/conversations/${selectedConversation?.id}/messages`, { params: { limit: 300 } })).data,
     enabled: Boolean(selectedConversation?.id),
     retry: false,
+    refetchInterval: selectedConversation?.id ? 2000 : false,
   });
 
   const messages = messagesQuery.data?.data ?? [];
+  const selectedConversationIsInternalSimulation = Boolean(
+    selectedConversation?.internal_simulation || selectedConversation?.tags?.includes("adm_whatsapp_internal_simulation"),
+  );
+  const testContactProspectId = selectedConversation?.prospect_id ?? selectedProspectId;
+
+  const createTestContactMutation = useMutation({
+    mutationFn: async (prospectId: string) =>
+      (
+        await api.post("/admin/whatsapp/test-contact", {
+          prospect_id: prospectId,
+        })
+      ).data as { conversation_id: string; contact_name?: string | null; contact_phone?: string | null; internal_simulation?: boolean },
+    onSuccess: (data) => {
+      toast.success("Simulador interno pronto.");
+      setSelectedConversationId(data.conversation_id);
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations", selectedProspectId, search] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-messages", data.conversation_id] });
+    },
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel abrir o simulador interno.")),
+  });
+
+  const simulateInboundMutation = useMutation({
+    mutationFn: async (body: string) => {
+      if (!selectedConversation?.id) {
+        throw new Error("Conversa nao selecionada.");
+      }
+      return (await api.post(`/admin/whatsapp/conversations/${selectedConversation.id}/simulate-inbound`, { body })).data;
+    },
+    onSuccess: () => {
+      setDraftMessage("");
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations", selectedProspectId, search] });
+      if (selectedConversation?.id) {
+        queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-messages", selectedConversation.id] });
+      }
+      toast.success("Resposta simulada processada pelo fluxo interno.");
+    },
+    onError: (error) => toast.error(extractApiErrorMessage(error, "Nao foi possivel simular a resposta da clinica.")),
+  });
 
   useEffect(() => {
     const node = threadRef.current;
@@ -1050,17 +1098,30 @@ function AdmWhatsAppInbox({
   }, [messages.length, selectedConversation?.id]);
 
   return (
-    <Card className="overflow-hidden border-stone-200 bg-white">
-      <CardContent className="p-0">
-        <div className="grid min-h-[720px] lg:grid-cols-[360px_1fr]">
-          <aside className="border-b border-stone-200 bg-stone-50/70 lg:border-b-0 lg:border-r">
+    <Card className="h-full overflow-hidden border-stone-200 bg-white">
+      <CardContent className="h-full p-0">
+        <div className="grid h-full min-h-0 lg:grid-cols-[360px_1fr]">
+          <aside className="flex min-h-0 flex-col border-b border-stone-200 bg-stone-50/70 lg:border-b-0 lg:border-r">
             <div className="space-y-3 border-b border-stone-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">Inbox /adm</p>
                   <h2 className="mt-1 text-2xl font-black text-stone-950">WhatsApp</h2>
                 </div>
-                <Badge className="bg-emerald-100 text-emerald-800">{conversationsQuery.data?.meta?.total ?? conversations.length}</Badge>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge className="bg-emerald-100 text-emerald-800">{conversationsQuery.data?.meta?.total ?? conversations.length}</Badge>
+                  <Button
+                    className="h-9 border-violet-200 bg-violet-600 px-3 text-xs text-white hover:bg-violet-700"
+                    onClick={() => {
+                      if (!testContactProspectId) return;
+                      createTestContactMutation.mutate(testContactProspectId);
+                    }}
+                    disabled={!testContactProspectId || createTestContactMutation.isPending}
+                  >
+                    <MessageSquareText size={14} />
+                    {createTestContactMutation.isPending ? "Abrindo..." : "Abrir simulador"}
+                  </Button>
+                </div>
               </div>
 
               <div className="relative">
@@ -1074,21 +1135,29 @@ function AdmWhatsAppInbox({
               </div>
 
               {selectedProspectId ? (
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-                  <span className="font-semibold">Clinica selecionada</span>
-                  <Button className="h-8 px-3 text-xs" variant="outline" onClick={onClearProspectFilter}>
-                    Ver todos
-                  </Button>
+                <div className="flex flex-col gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <span className="font-semibold">Clinica selecionada</span>
+                    <p className="mt-1 text-[11px] leading-4 text-emerald-800">
+                      Abra o simulador interno para responder como a clinica sem acionar WhatsApp real.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="h-8 px-3 text-xs" variant="outline" onClick={onClearProspectFilter}>
+                      Ver todos
+                    </Button>
+                  </div>
                 </div>
               ) : null}
             </div>
 
-            <div className="max-h-[610px] space-y-2 overflow-y-auto p-3">
+            <div className="flex-1 min-h-0 space-y-2 overflow-y-auto p-3">
               {conversationsQuery.isLoading ? (
                 <div className="rounded-lg border border-stone-200 bg-white p-4 text-sm text-stone-500">Carregando conversas...</div>
               ) : conversations.length ? (
                 conversations.map((conversation) => {
                   const active = selectedConversation?.id === conversation.id;
+                  const demoSource = conversation.source === "demo" || conversation.source === "demo_webchat";
                   return (
                     <button
                       key={conversation.id}
@@ -1117,12 +1186,20 @@ function AdmWhatsAppInbox({
                             {conversation.last_message_preview || conversation.ai_summary || "Sem mensagens ainda."}
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1">
-                            <Badge className={conversation.source === "demo" ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
+                            <Badge className={demoSource ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
                               {admWhatsappSourceLabel(conversation.source)}
                             </Badge>
+                            <Badge className="bg-white text-stone-600">{conversation.channel === "webchat" ? "Webchat" : "WhatsApp"}</Badge>
+                            {conversation.internal_simulation || conversation.tags?.includes("adm_whatsapp_internal_simulation") ? (
+                              <Badge className="bg-violet-100 text-violet-800">Simulador interno</Badge>
+                            ) : conversation.tags?.includes("adm_whatsapp_test_contact") ? (
+                              <Badge className="bg-violet-100 text-violet-800">Contato de teste</Badge>
+                            ) : null}
                             <Badge className="bg-white text-stone-600">{humanize(conversation.status)}</Badge>
                             {conversation.simulated_patient_messages ? (
-                              <Badge className="bg-violet-100 text-violet-800">Paciente simulado</Badge>
+                              <Badge className="bg-violet-100 text-violet-800">
+                                {conversation.internal_simulation || conversation.tags?.includes("adm_whatsapp_internal_simulation") ? "Clinica simulada" : "Paciente simulado"}
+                              </Badge>
                             ) : null}
                           </div>
                         </div>
@@ -1138,7 +1215,7 @@ function AdmWhatsAppInbox({
             </div>
           </aside>
 
-          <section className="flex min-h-[720px] flex-col bg-[#f7f8f5]">
+          <section className="flex h-full min-h-0 flex-col bg-[#f7f8f5]">
             {selectedConversation ? (
               <>
                 <div className="flex flex-col gap-3 border-b border-stone-200 bg-white p-4 md:flex-row md:items-center md:justify-between">
@@ -1157,9 +1234,15 @@ function AdmWhatsAppInbox({
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge className={selectedConversation.source === "demo" ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
+                    <Badge className={selectedConversation.source === "demo" || selectedConversation.source === "demo_webchat" ? "bg-cyan-100 text-cyan-800" : "bg-emerald-100 text-emerald-800"}>
                       {admWhatsappSourceLabel(selectedConversation.source)}
                     </Badge>
+                    <Badge className="bg-white text-stone-700">{selectedConversation.channel === "webchat" ? "Webchat" : "WhatsApp"}</Badge>
+                    {selectedConversation.internal_simulation || selectedConversation.tags?.includes("adm_whatsapp_internal_simulation") ? (
+                      <Badge className="bg-violet-100 text-violet-800">Simulador interno</Badge>
+                    ) : selectedConversation.tags?.includes("adm_whatsapp_test_contact") ? (
+                      <Badge className="bg-violet-100 text-violet-800">Contato de teste</Badge>
+                    ) : null}
                     <Badge className="bg-white text-stone-700">{numberFormatter.format(selectedConversation.message_count)} mensagens</Badge>
                     <Badge className="bg-white text-stone-700">{humanize(selectedConversation.status)}</Badge>
                   </div>
@@ -1171,13 +1254,12 @@ function AdmWhatsAppInbox({
                   </div>
                 ) : null}
 
-                <div ref={threadRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-5 md:px-8">
+                <div ref={threadRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto px-4 py-5 md:px-8">
                   {messagesQuery.isLoading ? (
                     <div className="rounded-lg border border-stone-200 bg-white p-4 text-sm text-stone-500">Carregando mensagens...</div>
                   ) : messages.length ? (
                     messages.map((message) => {
                       const outbound = message.direction === "outbound";
-                      const simulated = Boolean(message.payload?.simulated_patient);
                       return (
                         <div key={message.id} className={cn("flex", outbound ? "justify-end" : "justify-start")}>
                           <div
@@ -1189,7 +1271,7 @@ function AdmWhatsAppInbox({
                             )}
                           >
                             <div className={cn("mb-1 text-[11px] font-bold uppercase tracking-wide", outbound ? "text-white/75" : "text-stone-500")}>
-                              {messageAuthorLabel(message, selectedConversation.source, simulated)}
+                              {messageAuthorLabel(message, selectedConversation.source)}
                             </div>
                             <p className="whitespace-pre-wrap leading-6">{message.body}</p>
                             <div className={cn("mt-2 text-right text-[11px]", outbound ? "text-white/75" : "text-stone-500")}>
@@ -1207,10 +1289,42 @@ function AdmWhatsAppInbox({
                 </div>
 
                 <div className="border-t border-stone-200 bg-white p-4">
-                  <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-sm text-stone-500">
-                    <MessageSquareText size={16} />
-                    Visualizacao do /adm. O envio continua sendo feito nos fluxos comerciais e nas demos das clinicas.
-                  </div>
+                  {selectedConversationIsInternalSimulation ? (
+                    <form
+                      className="space-y-3"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const body = draftMessage.trim();
+                        if (!body) return;
+                        simulateInboundMutation.mutate(body);
+                      }}
+                    >
+                      <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-900">
+                        Simulador interno: a mensagem abaixo entra como se fosse resposta da clinica e a IA responde no mesmo thread, sem telefone de teste e sem envio externo.
+                      </div>
+                      <textarea
+                        className="min-h-[92px] w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm outline-none transition placeholder:text-stone-400 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                        placeholder="Escreva a mensagem que a clinica enviaria..."
+                        value={draftMessage}
+                        onChange={(event) => setDraftMessage(event.target.value)}
+                        disabled={simulateInboundMutation.isPending}
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs leading-5 text-stone-500">
+                          Nada sai para WhatsApp oficial ou bridge. O sistema grava inbound simulado, aplica a logica comercial e mostra a resposta da IA.
+                        </p>
+                        <Button type="submit" disabled={!draftMessage.trim() || simulateInboundMutation.isPending}>
+                          <Send size={16} />
+                          {simulateInboundMutation.isPending ? "Simulando..." : "Simular resposta da clinica"}
+                        </Button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-3 text-sm text-stone-500">
+                      <MessageSquareText size={16} />
+                      Visualizacao do /adm. Abra o simulador interno para responder como a clinica sem usar WhatsApp real.
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -2058,10 +2172,13 @@ export default function AdmPage() {
   const canCreateCrm = canAccessAdmPage(admPermissions, "adm_crm", "create");
   const canEditCrm = canAccessAdmPage(admPermissions, "adm_crm", "edit");
   const canViewMessages = canAccessAdmPage(admPermissions, "adm_messages", "view");
+  const canViewSiteTemplates = canAccessAdmPage(admPermissions, "adm_site_templates", "view");
+  const canViewOutreachAutomation = canAccessAdmPage(admPermissions, "adm_outreach_automation", "view");
   const canCreateMessages = canAccessAdmPage(admPermissions, "adm_messages", "create");
   const canViewImportPlaces = canAccessAdmPage(admPermissions, "adm_import_places", "view");
   const canViewAdmWhatsapp = canAccessAdmPage(admPermissions, "adm_whatsapp", "view");
   const canViewWhatsappSettings = canAccessAdmPage(admPermissions, "adm_whatsapp_settings", "view");
+  const canViewAgentSettings = canAccessAdmPage(admPermissions, "adm_agent_settings", "view");
   const canViewImplementations = canAccessAdmPage(admPermissions, "adm_implementations", "view");
   const canViewAffiliates = canAccessAdmPage(admPermissions, "adm_affiliates", "view");
   const sessionReady = hasToken && !forcePasswordChange && Boolean(admSessionQuery.data);
@@ -2080,6 +2197,18 @@ export default function AdmPage() {
       setActiveSection("whatsapp_settings");
     }
   }, [activeSection, canViewAdmWhatsapp, canViewCrm, canViewWhatsappSettings, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const section = params.get("section");
+    const prospectId = params.get("prospect_id");
+    if (section === "adm_whatsapp" && canViewAdmWhatsapp) {
+      setActiveSection("adm_whatsapp");
+      if (prospectId) setAdmWhatsappProspectId(prospectId);
+    }
+  }, [canViewAdmWhatsapp, sessionReady]);
 
   const overviewQuery = useQuery<Overview>({
     queryKey: ["adm-overview"],
@@ -2436,6 +2565,7 @@ export default function AdmPage() {
       !canViewAdmWhatsapp &&
       !canViewWhatsappSettings &&
       !canViewMessages &&
+      !canViewSiteTemplates &&
       !canViewImportPlaces &&
       !canViewImplementations &&
       !canViewAffiliates)
@@ -2516,9 +2646,11 @@ export default function AdmPage() {
     window.open(`https://wa.me/${number}?text=${message}`, "_blank", "noopener,noreferrer");
   }
 
+  const isAdmWhatsappView = activeSection === "adm_whatsapp" && canViewAdmWhatsapp;
+
   return (
-    <main className="min-h-screen overflow-x-hidden bg-stone-100 text-stone-950">
-      <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
+    <main className={cn("overflow-x-hidden bg-stone-100 text-stone-950", isAdmWhatsappView ? "flex h-screen flex-col overflow-y-hidden" : "min-h-screen")}>
+      <header className="sticky top-0 z-20 shrink-0 border-b border-stone-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="flex items-center gap-3">
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-stone-950 text-sm font-black text-white">CF</div>
@@ -2550,7 +2682,7 @@ export default function AdmPage() {
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-[1600px] space-y-4 px-4 py-5 sm:px-5">
+      <div className={cn("mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-5", isAdmWhatsappView ? "flex flex-1 min-h-0 flex-col gap-4 overflow-hidden" : "space-y-4")}>
         <Card className="border-stone-200 bg-white">
           <CardContent className="p-4">
             <div className="flex items-center justify-between gap-3 lg:hidden">
@@ -2565,11 +2697,14 @@ export default function AdmPage() {
                 activeSection={activeSection}
                 canCreateCrm={canCreateCrm}
                 canViewAdmWhatsapp={canViewAdmWhatsapp}
+                canViewAgentSettings={canViewAgentSettings}
                 canViewAffiliates={canViewAffiliates}
                 canViewCrm={canViewCrm}
                 canViewImportPlaces={canViewImportPlaces}
                 canViewImplementations={canViewImplementations}
                 canViewMessages={canViewMessages}
+                canViewSiteTemplates={canViewSiteTemplates}
+                canViewOutreachAutomation={canViewOutreachAutomation}
                 canViewWhatsappSettings={canViewWhatsappSettings}
                 onOpenCreateProspect={() => {
                   setActiveSection("crm");
@@ -2586,7 +2721,9 @@ export default function AdmPage() {
         </Card>
 
         {activeSection === "adm_whatsapp" && canViewAdmWhatsapp ? (
-          <AdmWhatsAppInbox selectedProspectId={admWhatsappProspectId} onClearProspectFilter={() => setAdmWhatsappProspectId(null)} />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <AdmWhatsAppInbox selectedProspectId={admWhatsappProspectId} onClearProspectFilter={() => setAdmWhatsappProspectId(null)} />
+          </div>
         ) : null}
 
         {activeSection === "whatsapp_settings" && canViewWhatsappSettings ? <PlatformWhatsAppSettings /> : null}
@@ -2929,11 +3066,14 @@ export default function AdmPage() {
               activeSection={activeSection}
               canCreateCrm={canCreateCrm}
               canViewAdmWhatsapp={canViewAdmWhatsapp}
+              canViewAgentSettings={canViewAgentSettings}
               canViewAffiliates={canViewAffiliates}
               canViewCrm={canViewCrm}
               canViewImportPlaces={canViewImportPlaces}
               canViewImplementations={canViewImplementations}
               canViewMessages={canViewMessages}
+              canViewSiteTemplates={canViewSiteTemplates}
+              canViewOutreachAutomation={canViewOutreachAutomation}
               canViewWhatsappSettings={canViewWhatsappSettings}
               onOpenCreateProspect={() => {
                 setActiveSection("crm");
@@ -3023,11 +3163,14 @@ function AdmMenuButtons({
   activeSection,
   canCreateCrm,
   canViewAdmWhatsapp,
+  canViewAgentSettings,
   canViewAffiliates,
   canViewCrm,
   canViewImportPlaces,
   canViewImplementations,
   canViewMessages,
+  canViewSiteTemplates,
+  canViewOutreachAutomation,
   canViewWhatsappSettings,
   onOpenCreateProspect,
   onSelectAdmWhatsapp,
@@ -3037,11 +3180,14 @@ function AdmMenuButtons({
   activeSection: AdmSection;
   canCreateCrm: boolean;
   canViewAdmWhatsapp: boolean;
+  canViewAgentSettings: boolean;
   canViewAffiliates: boolean;
   canViewCrm: boolean;
   canViewImportPlaces: boolean;
   canViewImplementations: boolean;
   canViewMessages: boolean;
+  canViewSiteTemplates: boolean;
+  canViewOutreachAutomation: boolean;
   canViewWhatsappSettings: boolean;
   onOpenCreateProspect: () => void;
   onSelectAdmWhatsapp: () => void;
@@ -3107,6 +3253,18 @@ function AdmMenuButtons({
           Mensagens prontas
         </Link>
       ) : null}
+      {canViewSiteTemplates ? (
+        <Link href="/adm/modelos-sites" className={cn(linkClassName, "border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100")}>
+          <Globe2 size={16} />
+          Modelos de sites
+        </Link>
+      ) : null}
+      {canViewOutreachAutomation ? (
+        <Link href="/adm/automacao-comercial" className={cn(linkClassName, "border-cyan-200 bg-cyan-50 text-cyan-900 hover:bg-cyan-100")}>
+          <Send size={16} />
+          Automacao comercial
+        </Link>
+      ) : null}
       {canViewImportPlaces ? (
         <Link
           href="/adm/importar-clinicas"
@@ -3117,6 +3275,12 @@ function AdmMenuButtons({
         >
           <MapPin size={16} />
           Importar Places
+        </Link>
+      ) : null}
+      {canViewAgentSettings ? (
+        <Link href="/adm/configuracoes" className={linkClassName}>
+          <SlidersHorizontal size={16} />
+          Configuracoes
         </Link>
       ) : null}
       {canViewImplementations ? (
@@ -3472,6 +3636,7 @@ function ProspectDetail({
   const automationLabel = outreachAutomationLabel(outreach);
   const automationTransport = outreach.dispatch_transport || outreachRuntime?.transport || "official_api";
   const usesWhatsAppWebBridge = automationTransport === "whatsapp_web_bridge";
+  const hasMissingWhatsAppTag = prospect.tags.includes("sem_whatsapp");
   const automationButtonLabel = outreach.automation_active
     ? usesWhatsAppWebBridge
       ? "Automacao ativa no WhatsApp Web local"
@@ -3526,6 +3691,15 @@ function ProspectDetail({
               {prospect.main_pain || "Dor principal ainda nao preenchida"}
             </p>
           </div>
+
+          {hasMissingWhatsAppTag ? (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+              <p className="font-semibold">Numero sem WhatsApp</p>
+              <p className="mt-1 leading-6">
+                Este prospect foi removido do lote comercial porque o numero verificado nao possui WhatsApp ativo. O CRM marcou esse contato como nao acionavel nesse canal.
+              </p>
+            </div>
+          ) : null}
 
           <div className="grid gap-2 sm:grid-cols-2">
             <Button onClick={onGenerateDemo} disabled={!canEdit}>

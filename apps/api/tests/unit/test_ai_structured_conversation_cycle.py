@@ -367,6 +367,63 @@ def _patient_conversation_with_inbound(db_session, *, tenant_id, inbound_text: s
     return patient, conversation, inbound
 
 
+def _webchat_placeholder_conversation_with_inbound(db_session, *, tenant_id, inbound_text: str):
+    suffix = uuid4().hex[:10]
+    patient = Patient(
+        tenant_id=tenant_id,
+        full_name="Paciente Webchat",
+        phone=f"webchat{suffix}",
+        normalized_phone=f"webchat{suffix}",
+        email=None,
+        status="ativo",
+        origin="link_flow_webchat",
+        lgpd_consent=True,
+        marketing_opt_in=False,
+        tags_cache=["entry_webchat"],
+    )
+    db_session.add(patient)
+    db_session.flush()
+    conversation = Conversation(
+        tenant_id=tenant_id,
+        patient_id=patient.id,
+        channel="webchat",
+        status="aberta",
+        tags=["entry_webchat"],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    inbound = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="webchat",
+        sender_type="patient",
+        body=inbound_text,
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(inbound)
+    db_session.commit()
+    return patient, conversation, inbound
+
+
+def _enable_elite_config(db_session, *, tenant_id, **overrides):
+    config = _base_structured_config()
+    config.update(
+        {
+            "conversation_flow_mode": "structured_elite",
+            "structured_flow_enabled": True,
+            "pre_send_review_enabled": True,
+            "repetition_guard_enabled": True,
+            "conversation_memory_enabled": True,
+            "auto_save_patient_data_enabled": True,
+        }
+    )
+    config.update(overrides)
+    _upsert_setting(db_session, tenant_id=tenant_id, key="ai_autoresponder.global", value=config)
+
+
 def _install_llm(monkeypatch, *scripted_outputs):
     from app.services import ai_structured_flow
     from app.services import whatsapp_service
@@ -764,3 +821,138 @@ def test_5_invalid_json_and_forbidden_data_are_blocked(monkeypatch, seeded_db, d
     assert outbound is not None
     assert "qual unidade e período" in outbound.body.lower()
     assert db_session.scalar(select(OutboxMessage).where(OutboxMessage.tenant_id == tenant_id)) is not None
+
+
+def test_6_elite_flow_saves_patient_data_and_state_from_webchat(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _prepare_tenant(db_session, tenant_id=tenant_id)
+    _enable_elite_config(db_session, tenant_id=tenant_id)
+    patient, conversation, inbound = _webchat_placeholder_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Meu WhatsApp e (11) 99999-1111 e meu nome e Joao Silva.",
+    )
+    _install_llm(
+        monkeypatch,
+        _decision_payload(
+            intent="informar_dados_pessoais",
+            confidence=0.91,
+            message_summary="Paciente informou telefone e nome para cadastro.",
+            extracted_data=_extracted(patient_name="Joao Silva", phone="5511999991111"),
+            system_action={"required": False, "action": "none", "params": _params()},
+            reply_control={
+                "should_reply_now": True,
+                "reply_after_system_action": False,
+                "next_expected_field": "procedimento",
+                "missing_fields": ["procedimento"],
+                "suggested_next_question": "Qual procedimento voce quer agendar?",
+            },
+        ),
+        _reply_payload("Obrigado, Joao. Ja salvei seus dados. Qual procedimento voce quer agendar?"),
+    )
+
+    result = _process(db_session, tenant_id=tenant_id, conversation=conversation, inbound=inbound)
+
+    db_session.refresh(patient)
+    db_session.refresh(conversation)
+    outbound = _latest_outbound(db_session, conversation_id=conversation.id)
+    assert result["status"] == "responded"
+    assert patient.full_name == "Joao Silva"
+    assert patient.normalized_phone == "5511999991111"
+    assert conversation.ai_summary
+    assert conversation.ai_state["booking"]["nome"] == "Joao Silva"
+    assert conversation.ai_state["booking"]["telefone"] == "5511999991111"
+    assert conversation.ai_state["booking"]["ultima_pergunta_feita"] == "Qual procedimento voce quer agendar?"
+    assert conversation.ai_state["booking"]["ultima_resposta_enviada"] == outbound.body
+    assert outbound.status == "sent"
+
+
+def test_7_elite_flow_repairs_repeated_reply_before_dispatch(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _prepare_tenant(db_session, tenant_id=tenant_id)
+    _enable_elite_config(db_session, tenant_id=tenant_id)
+    _patient, conversation, inbound = _patient_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero continuar o agendamento.",
+    )
+    repeated_text = "Perfeito, qual e o seu nome completo?"
+    db_session.add(
+        Message(
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.OUTBOUND.value,
+            channel="whatsapp",
+            sender_type="ai",
+            body=repeated_text,
+            message_type="text",
+            payload={},
+            status="sent",
+        )
+    )
+    db_session.commit()
+    _install_llm(
+        monkeypatch,
+        _decision_payload(
+            intent="agendar_consulta",
+            confidence=0.9,
+            message_summary="Paciente quer continuar o agendamento.",
+            appointment_intent=_appointment_intent(wants_booking=True),
+            system_action={"required": False, "action": "none", "params": _params()},
+            reply_control={
+                "should_reply_now": True,
+                "reply_after_system_action": False,
+                "next_expected_field": "unidade",
+                "missing_fields": ["unidade"],
+                "suggested_next_question": "Qual unidade voce prefere?",
+            },
+        ),
+        _reply_payload(repeated_text),
+    )
+
+    result = _process(db_session, tenant_id=tenant_id, conversation=conversation, inbound=inbound)
+
+    outbound = _latest_outbound(db_session, conversation_id=conversation.id)
+    decision = _decision(db_session, tenant_id=tenant_id, inbound_id=inbound.id)
+    review = decision.metadata_json["pre_send_review"]
+    assert result["status"] == "responded"
+    assert review["parece_repetida"] is True
+    assert review["repaired"] is True
+    assert outbound.body != repeated_text
+    assert "unidade" in outbound.body.lower()
+
+
+def test_8_elite_review_blocks_final_confirmation_without_saved_appointment(monkeypatch, seeded_db, db_session):
+    tenant_id = seeded_db["tenant_a"].id
+    _prepare_tenant(db_session, tenant_id=tenant_id)
+    _enable_elite_config(db_session, tenant_id=tenant_id)
+    _patient, conversation, inbound = _patient_conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Pode confirmar para mim?",
+    )
+    _install_llm(
+        monkeypatch,
+        _decision_payload(
+            intent="confirmar_agendamento",
+            confidence=0.92,
+            message_summary="Paciente pediu confirmacao do agendamento.",
+            appointment_intent=_appointment_intent(wants_booking=True),
+            system_action={"required": False, "action": "none", "params": _params()},
+            reply_control={
+                "should_reply_now": True,
+                "reply_after_system_action": False,
+                "next_expected_field": None,
+                "missing_fields": [],
+                "suggested_next_question": None,
+            },
+        ),
+        _reply_payload("Agendamento confirmado para amanha as 18h. Pode comparecer."),
+    )
+
+    result = _process(db_session, tenant_id=tenant_id, conversation=conversation, inbound=inbound)
+
+    outbound = _latest_outbound(db_session, conversation_id=conversation.id)
+    assert result["status"] == "responded"
+    assert "agendamento confirmado" not in outbound.body.lower()
+    assert db_session.scalar(select(func.count()).select_from(Appointment).where(Appointment.tenant_id == tenant_id)) == 0

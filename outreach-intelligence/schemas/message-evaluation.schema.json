@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clinicflux.ai/schemas/outreach/message-evaluation.schema.json",
+  "title": "ClinicFlux AI Outreach Message Evaluation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "message_quality_score",
+    "commercial_clarity_score",
+    "context_match_score",
+    "one_objective_score",
+    "repetition_score",
+    "whatsapp_naturalness_score",
+    "risk_score",
+    "burn_risk",
+    "approved_to_send",
+    "rewrite_suggestion",
+    "corrected_message",
+    "judges",
+    "digital_twin",
+    "blocked_reasons",
+    "analysis_mode",
+    "token_efficiency_mode",
+    "token_budget_level",
+    "should_use_elite_mode",
+    "elite_mode_reason",
+    "estimated_token_cost_level",
+    "data_loading_strategy",
+    "large_context_allowed",
+    "evaluated_at"
+  ],
+  "properties": {
+    "message_quality_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "commercial_clarity_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "context_match_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "one_objective_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "repetition_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "whatsapp_naturalness_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "burn_risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "approved_to_send": { "type": "boolean" },
+    "rewrite_suggestion": { "type": "string" },
+    "corrected_message": { "type": "string" },
+    "judges": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sales_judge": { "$ref": "#/$defs/judge" },
+        "local_seo_judge": { "$ref": "#/$defs/judge" },
+        "whatsapp_judge": { "$ref": "#/$defs/judge" },
+        "persuasion_judge": { "$ref": "#/$defs/judge" },
+        "risk_judge": { "$ref": "#/$defs/judge" }
+      }
+    },
+    "digital_twin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "busy_receptionist": { "$ref": "#/$defs/persona_reaction" },
+        "skeptical_owner": { "$ref": "#/$defs/persona_reaction" },
+        "busy_dentist": { "$ref": "#/$defs/persona_reaction" },
+        "cold_lead": { "$ref": "#/$defs/persona_reaction" },
+        "interested_lead": { "$ref": "#/$defs/persona_reaction" }
+      }
+    },
+    "blocked_reasons": { "type": "array", "items": { "type": "string" } },
+    "analysis_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_efficiency_mode": { "type": "string", "enum": ["economico", "profissional", "elite_300"] },
+    "token_budget_level": { "type": "string", "enum": ["low", "medium", "high"] },
+    "should_use_elite_mode": { "type": "boolean" },
+    "elite_mode_reason": { "type": "string" },
+    "estimated_token_cost_level": { "type": "string", "enum": ["low", "medium", "high", "very_high"] },
+    "data_loading_strategy": {
+      "type": "string",
+      "enum": ["minimal", "lead_profile_only", "recent_events_only", "aggregated_summary", "full_campaign_analysis"]
+    },
+    "large_context_allowed": { "type": "boolean" },
+    "evaluated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "reason"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "reason": { "type": "string" }
+      }
+    },
+    "persona_reaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reaction", "risk", "suggestion"],
+      "properties": {
+        "reaction": { "type": "string" },
+        "risk": { "type": "string" },
+        "suggestion": { "type": "string" }
+      }
+    }
+  }
+}

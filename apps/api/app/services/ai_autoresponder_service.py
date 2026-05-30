@@ -22,6 +22,7 @@ from app.models import (
     Appointment,
     AppointmentEvent,
     Conversation,
+    FeatureFlag,
     Lead,
     LinkFlowEvent,
     LinkFlowSession,
@@ -83,6 +84,7 @@ AI_LAB_HISTORY_KEY = "ai_lab.history"
 AI_LAB_MAX_PROMPT_EXAMPLES = 5
 CLINIC_PROFILE_SETTING_KEY = "clinic.profile"
 CLINIC_TIMEZONE_SETTING_KEY = "clinic.timezone"
+AI_AUTORESPONDER_PLATFORM_CONFIG_KEY = "platform.ai_autoresponder.global"
 
 AI_ALLOWED_NEXT_ACTIONS = {
     "none",
@@ -245,10 +247,23 @@ VISIT_GUIDANCE_OVERVIEW_PATTERNS = (
 
 AI_AUTORESPONDER_DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
+    "conversation_flow_mode": "legacy",
     "structured_flow_enabled": False,
     "channels": {
         "whatsapp": True,
         "webchat": True,
+    },
+    "llm_model": "",
+    "pre_send_review_enabled": False,
+    "repetition_guard_enabled": True,
+    "conversation_memory_enabled": True,
+    "auto_save_patient_data_enabled": True,
+    "handoff_triggers": {
+        "low_confidence": True,
+        "urgency": True,
+        "patient_irritated": True,
+        "schedule_error": True,
+        "review_failed": True,
     },
     "interactive_booking_options_enabled": True,
     "business_hours": {
@@ -598,11 +613,28 @@ def _normalize_config(value: dict[str, Any] | None) -> dict[str, Any]:
     merged = _deep_merge(AI_AUTORESPONDER_DEFAULT_CONFIG, value or {})
 
     merged["enabled"] = bool(merged.get("enabled", False))
-    merged["structured_flow_enabled"] = bool(merged.get("structured_flow_enabled", False))
+    flow_mode = str(merged.get("conversation_flow_mode") or "").strip().lower()
+    if flow_mode not in {"legacy", "structured_elite"}:
+        flow_mode = "structured_elite" if bool(merged.get("structured_flow_enabled", False)) else "legacy"
+    merged["conversation_flow_mode"] = flow_mode
+    merged["structured_flow_enabled"] = flow_mode == "structured_elite" or bool(merged.get("structured_flow_enabled", False))
     channels = merged.get("channels") or {}
     merged["channels"] = {
         "whatsapp": bool(channels.get("whatsapp", True)),
         "webchat": bool(channels.get("webchat", True)),
+    }
+    merged["llm_model"] = str(merged.get("llm_model") or "").strip()[:80]
+    merged["pre_send_review_enabled"] = bool(merged.get("pre_send_review_enabled", False))
+    merged["repetition_guard_enabled"] = bool(merged.get("repetition_guard_enabled", True))
+    merged["conversation_memory_enabled"] = bool(merged.get("conversation_memory_enabled", True))
+    merged["auto_save_patient_data_enabled"] = bool(merged.get("auto_save_patient_data_enabled", True))
+    handoff_triggers = merged.get("handoff_triggers") if isinstance(merged.get("handoff_triggers"), dict) else {}
+    merged["handoff_triggers"] = {
+        "low_confidence": bool(handoff_triggers.get("low_confidence", True)),
+        "urgency": bool(handoff_triggers.get("urgency", True)),
+        "patient_irritated": bool(handoff_triggers.get("patient_irritated", True)),
+        "schedule_error": bool(handoff_triggers.get("schedule_error", True)),
+        "review_failed": bool(handoff_triggers.get("review_failed", True)),
     }
     merged["interactive_booking_options_enabled"] = bool(merged.get("interactive_booking_options_enabled", True))
 
@@ -1210,9 +1242,63 @@ def _upsert_setting(db: Session, *, tenant_id: UUID, key: str, value: dict[str, 
     return item
 
 
+def _platform_config_rows(db: Session) -> list[FeatureFlag]:
+    return (
+        db.execute(
+            select(FeatureFlag)
+            .where(
+                FeatureFlag.tenant_id.is_(None),
+                FeatureFlag.key == AI_AUTORESPONDER_PLATFORM_CONFIG_KEY,
+            )
+            .order_by(FeatureFlag.updated_at.desc(), FeatureFlag.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+
+
+def get_platform_global_config(db: Session) -> dict[str, Any]:
+    rows = _platform_config_rows(db)
+    row = rows[0] if rows else None
+    raw_config = row.config if row and isinstance(row.config, dict) else None
+    return _normalize_config(raw_config)
+
+
+def set_platform_global_config(db: Session, *, payload: dict[str, Any]) -> dict[str, Any]:
+    config = _normalize_config(payload)
+    rows = _platform_config_rows(db)
+    row = rows[0] if rows else None
+    if row is None:
+        row = FeatureFlag(
+            tenant_id=None,
+            key=AI_AUTORESPONDER_PLATFORM_CONFIG_KEY,
+            description="Configuracao global do agente de atendimento da plataforma.",
+            enabled=True,
+            config=config,
+        )
+        db.add(row)
+    else:
+        row.enabled = True
+        row.description = "Configuracao global do agente de atendimento da plataforma."
+        row.config = config
+        db.add(row)
+
+    for duplicate in rows[1:]:
+        duplicate.enabled = True
+        duplicate.description = row.description
+        duplicate.config = config
+        db.add(duplicate)
+
+    db.commit()
+    db.refresh(row)
+    return config
+
+
 def get_global_config(db: Session, *, tenant_id: UUID) -> dict[str, Any]:
     item = db.scalar(select(Setting).where(Setting.tenant_id == tenant_id, Setting.key == "ai_autoresponder.global"))
-    return _normalize_config(item.value if item else None)
+    platform_config = get_platform_global_config(db)
+    tenant_config = item.value if item and isinstance(item.value, dict) else None
+    return _normalize_config(_deep_merge(platform_config, tenant_config))
 
 
 def set_global_config(db: Session, *, tenant_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
@@ -9945,8 +10031,14 @@ def _build_metadata(*, config: dict[str, Any], extra: dict[str, Any] | None = No
     return {
         "config": {
             "enabled": config.get("enabled"),
+            "conversation_flow_mode": config.get("conversation_flow_mode"),
             "structured_flow_enabled": config.get("structured_flow_enabled"),
             "channels": config.get("channels"),
+            "llm_model": config.get("llm_model"),
+            "pre_send_review_enabled": config.get("pre_send_review_enabled"),
+            "repetition_guard_enabled": config.get("repetition_guard_enabled"),
+            "conversation_memory_enabled": config.get("conversation_memory_enabled"),
+            "auto_save_patient_data_enabled": config.get("auto_save_patient_data_enabled"),
             "outside_business_hours_mode": config.get("outside_business_hours_mode"),
             "max_consecutive_auto_replies": config.get("max_consecutive_auto_replies"),
             "confidence_threshold": config.get("confidence_threshold"),
@@ -10488,6 +10580,28 @@ def process_inbound_message(
     if not (config.get("channels") or {}).get(conversation.channel, False):
         return finish_without_reply(final_decision=DECISION_IGNORED, reason="channel_disabled", handoff=False)
 
+    if config.get("auto_save_patient_data_enabled", True):
+        _maybe_rebind_webchat_patient_from_inbound(
+            db,
+            conversation=conversation,
+            inbound_text=inbound_text,
+        )
+        captured_profile = _capture_contact_profile_from_inbound(
+            db,
+            tenant_id=tenant_id,
+            conversation=conversation,
+            inbound_text=inbound_text,
+        )
+        captured_registration = _capture_patient_registration_from_inbound(
+            db,
+            conversation=conversation,
+            inbound_text=inbound_text,
+            allow_loose_name=False,
+            allow_unlabeled_birth_date=False,
+        )
+        if captured_registration:
+            captured_profile = {**captured_profile, **captured_registration}
+
     if config.get("structured_flow_enabled"):
         from app.services.ai_structured_flow import process_structured_inbound_message
 
@@ -10522,26 +10636,6 @@ def process_inbound_message(
             handoff=False,
         )
 
-    _maybe_rebind_webchat_patient_from_inbound(
-        db,
-        conversation=conversation,
-        inbound_text=inbound_text,
-    )
-    captured_profile = _capture_contact_profile_from_inbound(
-        db,
-        tenant_id=tenant_id,
-        conversation=conversation,
-        inbound_text=inbound_text,
-    )
-    captured_registration = _capture_patient_registration_from_inbound(
-        db,
-        conversation=conversation,
-        inbound_text=inbound_text,
-        allow_loose_name=False,
-        allow_unlabeled_birth_date=False,
-    )
-    if captured_registration:
-        captured_profile = {**captured_profile, **captured_registration}
     inbound_payload = inbound_message.payload if isinstance(inbound_message.payload, dict) else {}
     interactive_reply = inbound_payload.get("interactive_reply") if isinstance(inbound_payload.get("interactive_reply"), dict) else {}
     interactive_reply_id = str(interactive_reply.get("id") or "").strip().lower()

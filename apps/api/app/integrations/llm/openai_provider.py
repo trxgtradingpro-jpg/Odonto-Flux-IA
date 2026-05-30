@@ -58,12 +58,13 @@ class OpenAILLMProvider(LLMProvider):
             )
         return (response.json() if response.content else {}), request_id
 
-    def complete(self, *, task: str, prompt: str) -> dict:
+    def complete(self, *, task: str, prompt: str, model: str | None = None) -> dict:
         if not self.api_key:
             raise RuntimeError('LLM_API_KEY ausente para provider openai.')
+        resolved_model = (model or self.model or 'gpt-4.1-mini').strip()
 
         payload: dict = {
-            'model': self.model,
+            'model': resolved_model,
             'messages': [
                 {
                     'role': 'system',
@@ -83,7 +84,7 @@ class OpenAILLMProvider(LLMProvider):
             'auto_responder',
             'auto_responder_structured_extract',
             'auto_responder_structured_reply',
-        }:
+        } or task.startswith('sales_outreach_'):
             payload['response_format'] = {'type': 'json_object'}
 
         data, request_id = self._post(payload)
@@ -108,7 +109,7 @@ class OpenAILLMProvider(LLMProvider):
             'output': output,
             'metadata': {
                 'provider': 'openai',
-                'model': data.get('model') if isinstance(data, dict) else self.model,
+                'model': data.get('model') if isinstance(data, dict) else resolved_model,
                 'task': task,
                 'request_id': request_id,
                 'prompt_tokens': prompt_tokens if isinstance(prompt_tokens, int) else None,

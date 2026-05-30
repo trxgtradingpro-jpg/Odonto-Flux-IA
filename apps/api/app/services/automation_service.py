@@ -14,6 +14,7 @@ from app.models import (
     PatientTag,
 )
 from app.models.enums import OutboxStatus, RunStatus
+from app.services.whatsapp_bridge_support import payload_uses_whatsapp_web_bridge
 from app.utils.phone import normalize_phone
 
 SCHEDULER_ONLY_CONDITIONS = {'window_minutes'}
@@ -501,9 +502,10 @@ def run_time_triggers(db: Session) -> int:
 
 def pending_jobs_for_dispatch(db: Session):
     now = datetime.now(UTC)
-    return db.execute(
+    items = db.execute(
         select(OutboxMessage).where(
             OutboxMessage.status.in_([OutboxStatus.PENDING.value, OutboxStatus.FAILED.value]),
             or_(OutboxMessage.next_retry_at.is_(None), OutboxMessage.next_retry_at <= now),
         )
     ).scalars().all()
+    return [item for item in items if not payload_uses_whatsapp_web_bridge(item.payload if isinstance(item.payload, dict) else {})]

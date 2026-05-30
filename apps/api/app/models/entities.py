@@ -384,6 +384,7 @@ class Conversation(UUIDTimestampMixin, Base):
     ai_autoresponder_last_reason: Mapped[str | None] = mapped_column(String(255))
     ai_autoresponder_last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_autoresponder_consecutive_count: Mapped[int] = mapped_column(Integer, default=0)
+    ai_state: Mapped[dict] = mapped_column(JSONB, default=dict)
     tags: Mapped[list[str]] = mapped_column(JSONB, default=list)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -590,6 +591,51 @@ class AutomationRun(UUIDTimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retries: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SalesOutreachAutomationBatch(UUIDTimestampMixin, Base):
+    __tablename__ = "sales_outreach_automation_batches"
+
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    requested_count: Mapped[int] = mapped_column(Integer, default=0)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    filters_json: Mapped[dict] = mapped_column("filters", JSONB, default=dict)
+    summary_json: Mapped[dict] = mapped_column("summary", JSONB, default=dict)
+    stop_reason: Mapped[str | None] = mapped_column(String(120))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SalesOutreachAutomationBatchItem(UUIDTimestampMixin, Base):
+    __tablename__ = "sales_outreach_automation_batch_items"
+
+    batch_id: Mapped[UUID] = mapped_column(ForeignKey("sales_outreach_automation_batches.id", ondelete="CASCADE"), index=True)
+    prospect_account_id: Mapped[UUID] = mapped_column(ForeignKey("prospect_accounts.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
+    last_outbound_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), index=True)
+    last_inbound_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    current_step: Mapped[str | None] = mapped_column(String(80), index=True)
+    last_reply_classification: Mapped[str | None] = mapped_column(String(80), index=True)
+    pause_reason: Mapped[str | None] = mapped_column(String(120))
+    last_message_preview: Mapped[str | None] = mapped_column(Text)
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    details_json: Mapped[dict] = mapped_column("details", JSONB, default=dict)
+    demo_generated_automatically: Mapped[bool] = mapped_column(Boolean, default=False)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    received_count: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "prospect_account_id", name="uq_sales_outreach_batch_prospect"),
+    )
 
 
 class Campaign(UUIDTimestampMixin, Base):

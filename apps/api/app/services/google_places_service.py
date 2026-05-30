@@ -205,6 +205,18 @@ def search_google_places(
     places = data.get("places") if isinstance(data.get("places"), list) else []
     place_ids = [_place_id(str(place.get("id") or place.get("name") or "")) for place in places if isinstance(place, dict)]
     duplicates = _known_place_ids(db, place_ids)
+    seen_place_ids: set[str] = set()
+    filtered_places: list[dict[str, Any]] = []
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        place_id = _place_id(str(place.get("id") or place.get("name") or ""))
+        if not place_id or place_id in seen_place_ids:
+            continue
+        seen_place_ids.add(place_id)
+        if place_id in duplicates:
+            continue
+        filtered_places.append(place)
 
     return {
         "query": clean_query,
@@ -212,9 +224,8 @@ def search_google_places(
         "field_mask": PLACES_SEARCH_FIELD_MASK,
         "cost_mode": "search_basic_only",
         "results": [
-            _serialize_place_preview(place, duplicate=duplicates.get(_place_id(str(place.get("id") or place.get("name") or ""))))
-            for place in places
-            if isinstance(place, dict)
+            _serialize_place_preview(place, duplicate=None)
+            for place in filtered_places
         ],
     }
 

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clinicflux.ai/schemas/outreach/objection.schema.json",
+  "title": "ClinicFlux AI Outreach Objection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "objection_type",
+    "raw_objection",
+    "response_variant",
+    "times_used",
+    "reply_rate",
+    "demo_conversion_rate",
+    "meeting_conversion_rate",
+    "close_rate",
+    "status",
+    "notes"
+  ],
+  "properties": {
+    "objection_type": {
+      "type": "string",
+      "enum": ["price", "timing", "already_has_system", "no_interest", "not_responsible", "trust", "source", "privacy", "other"]
+    },
+    "raw_objection": { "type": "string" },
+    "response_variant": { "type": "string" },
+    "times_used": { "type": "integer", "minimum": 0 },
+    "reply_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "demo_conversion_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "meeting_conversion_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "close_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "status": { "type": "string", "enum": ["testing", "active", "retired"] },
+    "notes": { "type": "string" }
+  }
+}

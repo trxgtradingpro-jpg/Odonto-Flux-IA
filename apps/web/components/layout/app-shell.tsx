@@ -5,6 +5,7 @@ import { flushSync } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 
 import { FullscreenWorkspaceShell } from "./fullscreen-workspace-shell";
+import { MobileEntryGateway } from "./mobile-entry-gateway";
 import { QuickAccessPill } from "./quick-access-pill";
 import { QuickFullscreenWorkspace } from "./quick-fullscreen-workspace";
 import { QUICK_FOCUS_PAGE_KEYS, QuickFocusPageKey } from "./quick-focus-pages";
@@ -273,6 +274,7 @@ export function AppShell({ children, onLogout }: { children: React.ReactNode; on
         </div>
       ) : (
         <div className={`branded-app-shell flex h-dvh w-full overflow-hidden ${surfaceClass}`}>
+          <MobileEntryGateway pages={accessiblePages} branding={branding} session={sessionQuery.data} />
           <Sidebar
             collapsed={collapsed}
             autoHide={hideSidebarForGuide || hideDashboardChrome}

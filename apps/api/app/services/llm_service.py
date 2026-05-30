@@ -15,10 +15,11 @@ def run_llm_task(
     conversation_id: UUID | None,
     task: str,
     prompt: str,
+    model_override: str | None = None,
 ) -> dict:
     provider = LLMProviderFactory.create()
     start = perf_counter()
-    response = provider.complete(task=task, prompt=prompt)
+    response = provider.complete(task=task, prompt=prompt, model=model_override)
     latency_ms = int((perf_counter() - start) * 1000)
 
     raw_output = response['output']

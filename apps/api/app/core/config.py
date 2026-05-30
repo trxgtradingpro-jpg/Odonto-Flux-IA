@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     sales_outreach_sender_tenant_slug: str | None = None
     sales_outreach_display_name: str = 'Time ClinicFlux AI'
     sales_outreach_video_url: str | None = None
+    sales_outreach_transport: str = 'official_api'
+    sales_outreach_ai_review_enabled: bool = True
+    sales_outreach_ai_min_confidence: float = 0.7
+    sales_outreach_ai_context_messages: int = 12
+    sales_outreach_llm_model: str | None = None
+    sales_outreach_skill_enabled: bool = True
+    sales_outreach_send_gate_enabled: bool = True
+    sales_outreach_send_gate_min_wait_minutes: int = 120
+    whatsapp_web_bridge_token: str | None = None
+    whatsapp_web_bridge_claim_seconds: int = 120
     google_places_api_key: str | None = None
     google_places_timeout_seconds: int = 12
 

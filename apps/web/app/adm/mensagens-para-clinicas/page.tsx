@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -77,6 +77,30 @@ type TemplateDraft = {
   messages: SalesTemplateMessage[];
 };
 
+type OutreachClassificationRule = {
+  class_name: string;
+  priority: number;
+  keywords: string[];
+  next_step?: string | null;
+};
+
+type OutreachFlowConfig = {
+  initial_messages: string[];
+  step_messages: Record<string, string[]>;
+  classifications: OutreachClassificationRule[];
+};
+
+type OutreachFlowDraft = {
+  initial_messages_text: string;
+  step_messages: Record<string, string[]>;
+  classifications: Array<{
+    class_name: string;
+    priority: number;
+    keywords_text: string;
+    next_step: string;
+  }>;
+};
+
 type ClinicMessageItem = {
   prospect: Prospect;
   suggested_template_key: string;
@@ -133,6 +157,58 @@ const STATUS_OPTIONS = [
 
 const TEMPERATURE_OPTIONS = ["frio", "morno", "quente", "muito_quente"];
 const DEMO_STATUS_OPTIONS = ["rascunho", "criada", "enviada", "acessada", "expirada"];
+const OUTREACH_STEP_LABELS: Record<string, string> = {
+  reception_intro: "Contato inicial com a recepcao",
+  reception_triage: "Descoberta do responsavel pelo WhatsApp",
+  reception_cta: "CTA para chegar no decisor",
+  clarification_reply: "Resposta curta para duvida inicial",
+  clarification_cta: "CTA apos esclarecer a duvida",
+  direct_demo_offer: "Oferta de demo ou resumo direto",
+  decision_maker_pitch: "Apresentacao curta com demo",
+  video_followup: "Follow-up com video",
+  timing_followup: "Retorno em melhor horario",
+  routing_followup: "Tentativa de identificar o canal correto",
+  access_request: "Pedido de encaminhamento interno",
+};
+const OUTREACH_NEXT_STEP_OPTIONS = [
+  "decision_maker_pitch",
+  "reception_triage",
+  "reception_cta",
+  "clarification_reply",
+  "clarification_cta",
+  "direct_demo_offer",
+  "timing_followup",
+  "routing_followup",
+  "access_request",
+  "video_followup",
+] as const;
+const OUTREACH_FLOW_MAP_ROWS = [
+  {
+    title: "Abertura",
+    description: "Primeiro toque enviado para validar o canal e descobrir quem cuida do WhatsApp/agendamento.",
+    nodes: ["reception_intro"],
+  },
+  {
+    title: "Se responder como recepcao",
+    description: "O fluxo tenta achar o responsavel, faz um CTA de encaminhamento e por fim oferece demo ou resumo direto.",
+    nodes: ["reception_triage", "reception_cta", "direct_demo_offer"],
+  },
+  {
+    title: "Se responder com duvida",
+    description: "O fluxo esclarece o contexto, faz um CTA curto e depois oferece demo ou resumo direto se ainda nao houver decisor.",
+    nodes: ["clarification_reply", "clarification_cta", "direct_demo_offer"],
+  },
+  {
+    title: "Se chegar no gestor",
+    description: "O fluxo entra no pitch curto com demo e, na sequencia, manda o video de apoio.",
+    nodes: ["decision_maker_pitch", "video_followup"],
+  },
+  {
+    title: "Se pedir outro caminho",
+    description: "Esses ramos normalmente resolvem a excecao e pausam o fluxo automatico.",
+    nodes: ["timing_followup", "routing_followup", "access_request"],
+  },
+] as const;
 
 function humanize(value?: string | null) {
   if (!value) return "-";
@@ -142,6 +218,18 @@ function humanize(value?: string | null) {
     .filter(Boolean)
     .map((part) => part[0].toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function outreachStepLabel(stepKey?: string | null) {
+  if (!stepKey) return "-";
+  return OUTREACH_STEP_LABELS[stepKey] || humanize(stepKey);
+}
+
+function classificationSummaryLabel(className: string, nextStep: string) {
+  if (className === "sem_interesse") return "Para o contato";
+  if (className === "automatica") return "Pausa em canal automatico";
+  if (nextStep) return outreachStepLabel(nextStep);
+  return "Segue fluxo padrao";
 }
 
 function extractApiErrorMessage(error: unknown, fallback: string) {
@@ -225,6 +313,50 @@ function draftToPayload(draft: TemplateDraft) {
   };
 }
 
+function outreachConfigToDraft(config?: OutreachFlowConfig | null): OutreachFlowDraft {
+  return {
+    initial_messages_text: (config?.initial_messages || []).join("\n"),
+    step_messages: Object.fromEntries(
+      Object.entries(config?.step_messages || {}).map(([key, value]) => [
+        key,
+        Array.from({ length: 5 }, (_, index) =>
+          (Array.isArray(value) ? value[index] : "")?.trim?.() || "",
+        ),
+      ]),
+    ),
+    classifications: (config?.classifications || []).map((item) => ({
+      class_name: item.class_name,
+      priority: item.priority,
+      keywords_text: (item.keywords || []).join(", "),
+      next_step: item.next_step || "",
+    })),
+  };
+}
+
+function outreachDraftToPayload(draft: OutreachFlowDraft): OutreachFlowConfig {
+  return {
+    initial_messages: draft.initial_messages_text
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    step_messages: Object.fromEntries(
+      Object.entries(draft.step_messages).map(([key, values]) => [
+        key,
+        values.map((value) => value.trim()).filter(Boolean).slice(0, 5),
+      ]),
+    ),
+    classifications: draft.classifications.map((item) => ({
+      class_name: item.class_name,
+      priority: Number(item.priority || 0),
+      keywords: item.keywords_text
+        .split(",")
+        .map((keyword) => keyword.trim())
+        .filter(Boolean),
+      next_step: item.next_step.trim() || null,
+    })),
+  };
+}
+
 function newTemplateMessage(index: number): SalesTemplateMessage {
   return {
     key: `mensagem_${index + 1}`,
@@ -246,9 +378,10 @@ export default function ClinicMessagesPage() {
   const [templateKey, setTemplateKey] = useState("");
   const [messageKey, setMessageKey] = useState("");
   const [preview, setPreview] = useState<MessagePreview | null>(null);
-  const [viewMode, setViewMode] = useState<"clinics" | "templates">("clinics");
+  const [viewMode, setViewMode] = useState<"clinics" | "templates" | "outreach">("clinics");
   const [editingTemplateKey, setEditingTemplateKey] = useState<string | null>(null);
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
+  const [outreachFlowDraft, setOutreachFlowDraft] = useState<OutreachFlowDraft | null>(null);
 
   useEffect(() => {
     setHasToken(Boolean(getAdminAccessToken()));
@@ -291,6 +424,13 @@ export default function ClinicMessagesPage() {
   const templatesQuery = useQuery<SalesTemplate[]>({
     queryKey: ["adm-clinic-message-templates"],
     queryFn: async () => (await api.get("/admin/clinic-messages/templates")).data,
+    enabled: hasToken && canViewMessages,
+    retry: false,
+  });
+
+  const outreachFlowQuery = useQuery<OutreachFlowConfig>({
+    queryKey: ["adm-outreach-flow"],
+    queryFn: async () => (await api.get("/admin/outreach/flow")).data,
     enabled: hasToken && canViewMessages,
     retry: false,
   });
@@ -344,6 +484,12 @@ export default function ClinicMessagesPage() {
       setTemplateDraft(templateToDraft(currentTemplate));
     }
   }, [editingTemplateKey, templateDraft, templates]);
+
+  useEffect(() => {
+    if (!outreachFlowDraft && outreachFlowQuery.data) {
+      setOutreachFlowDraft(outreachConfigToDraft(outreachFlowQuery.data));
+    }
+  }, [outreachFlowDraft, outreachFlowQuery.data]);
 
   const previewMutation = useMutation({
     mutationFn: async ({
@@ -444,6 +590,19 @@ export default function ClinicMessagesPage() {
     },
   });
 
+  const saveOutreachFlowMutation = useMutation({
+    mutationFn: async (draft: OutreachFlowDraft) =>
+      (await api.put<OutreachFlowConfig>("/admin/outreach/flow", outreachDraftToPayload(draft))).data,
+    onSuccess: (config) => {
+      toast.success("Fluxo comercial salvo.");
+      setOutreachFlowDraft(outreachConfigToDraft(config));
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-flow"] });
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel salvar o fluxo comercial."));
+    },
+  });
+
   const totals = useMemo(() => {
     const withDemo = items.filter((item) => item.demo_ready).length;
     const blocked = items.filter((item) => item.prospect.do_not_contact).length;
@@ -489,6 +648,46 @@ export default function ClinicMessagesPage() {
         messages: [...current.messages, newTemplateMessage(current.messages.length)],
       };
     });
+  }
+
+  function updateOutreachInitialMessages(value: string) {
+    setOutreachFlowDraft((current) => (current ? { ...current, initial_messages_text: value } : current));
+  }
+
+  function updateOutreachStepMessage(stepKey: string, variationIndex: number, value: string) {
+    setOutreachFlowDraft((current) =>
+      current
+        ? {
+            ...current,
+            step_messages: {
+              ...current.step_messages,
+              [stepKey]: Array.from({ length: 5 }, (_, index) =>
+                index === variationIndex ? value : current.step_messages[stepKey]?.[index] || "",
+              ),
+            },
+          }
+        : current,
+    );
+  }
+
+  function updateOutreachClassification(
+    index: number,
+    patch: Partial<OutreachFlowDraft["classifications"][number]>,
+  ) {
+    setOutreachFlowDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        classifications: current.classifications.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, ...patch } : item,
+        ),
+      };
+    });
+  }
+
+  function saveOutreachFlow() {
+    if (!outreachFlowDraft) return;
+    saveOutreachFlowMutation.mutate(outreachFlowDraft);
   }
 
   function removeTemplateMessage(index: number) {
@@ -709,6 +908,14 @@ export default function ClinicMessagesPage() {
             <Save size={16} />
             Editar templates
           </Button>
+          <Button
+            variant={viewMode === "outreach" ? "default" : "ghost"}
+            className={cn(viewMode === "outreach" && "bg-cyan-600 text-white hover:bg-cyan-500")}
+            onClick={() => setViewMode("outreach")}
+          >
+            <PhoneCall size={16} />
+            Fluxo comercial
+          </Button>
           <Button variant="outline" onClick={startNewTemplate} disabled={!canCreateMessages}>
             <Plus size={16} />
             Novo template
@@ -733,6 +940,16 @@ export default function ClinicMessagesPage() {
             canCreate={canCreateMessages}
             canEdit={canEditMessages}
             canDelete={canDeleteMessages}
+          />
+        ) : viewMode === "outreach" ? (
+          <OutreachFlowEditorPanel
+            draft={outreachFlowDraft}
+            onInitialMessagesChange={updateOutreachInitialMessages}
+            onStepMessageChange={updateOutreachStepMessage}
+            onClassificationChange={updateOutreachClassification}
+            onSave={saveOutreachFlow}
+            saving={saveOutreachFlowMutation.isPending}
+            canEdit={canEditMessages}
           />
         ) : (
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_560px]">
@@ -1006,6 +1223,190 @@ export default function ClinicMessagesPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function OutreachFlowEditorPanel({
+  draft,
+  onInitialMessagesChange,
+  onStepMessageChange,
+  onClassificationChange,
+  onSave,
+  saving,
+  canEdit,
+}: {
+  draft: OutreachFlowDraft | null;
+  onInitialMessagesChange: (value: string) => void;
+  onStepMessageChange: (stepKey: string, variationIndex: number, value: string) => void;
+  onClassificationChange: (index: number, patch: Partial<OutreachFlowDraft["classifications"][number]>) => void;
+  onSave: () => void;
+  saving: boolean;
+  canEdit: boolean;
+}) {
+  const stepMessageEntries = Object.entries(draft?.step_messages || {});
+  return (
+    <section className="space-y-4">
+      <Card className="border-stone-200 bg-white">
+        <CardContent className="space-y-4 p-5">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Mapa do fluxo</p>
+            <h3 className="mt-1 text-2xl font-black text-stone-950">Jornada completa da conversa</h3>
+            <p className="mt-2 text-sm leading-6 text-stone-600">
+              Este mapa resume como o outreach avanca da primeira mensagem ate os ramos de pitch, encaminhamento e pausa.
+            </p>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {OUTREACH_FLOW_MAP_ROWS.map((row) => (
+              <div key={row.title} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <p className="text-sm font-black text-stone-950">{row.title}</p>
+                <p className="mt-1 text-sm leading-6 text-stone-600">{row.description}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  {row.nodes.map((stepKey, index) => (
+                    <Fragment key={`${row.title}-${stepKey}-${index}`}>
+                      {index > 0 ? <span className="text-stone-300">→</span> : null}
+                      <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-bold text-cyan-800">
+                        {outreachStepLabel(stepKey)}
+                      </span>
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Classificacao para proxima etapa</p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {(draft?.classifications || []).map((item) => (
+                <div key={`summary-${item.class_name}`} className="rounded-2xl border border-stone-200 bg-white p-3">
+                  <p className="text-sm font-black text-stone-950">{humanize(item.class_name)}</p>
+                  <p className="mt-1 text-xs text-stone-500">Prioridade {item.priority}</p>
+                  <p className="mt-3 text-sm font-semibold text-cyan-800">
+                    {classificationSummaryLabel(item.class_name, item.next_step)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <Card className="border-stone-200 bg-white">
+        <CardContent className="space-y-5 p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Outreach comercial</p>
+              <h2 className="mt-1 text-2xl font-black">Fluxo de conversa com clinicas</h2>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                Edite as 10 mensagens iniciais, as 5 variacoes de cada etapa e as palavras-chave usadas na classificacao automatica.
+              </p>
+            </div>
+            <Button className="bg-cyan-600 text-white hover:bg-cyan-500" onClick={onSave} disabled={!canEdit || saving || !draft}>
+              <Save size={16} />
+              {saving ? "Salvando..." : "Salvar fluxo"}
+            </Button>
+          </div>
+
+          {draft ? (
+            <>
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-stone-500">10 mensagens iniciais</span>
+                <textarea
+                  className="min-h-[240px] w-full resize-y rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-800 outline-none transition focus:border-cyan-400 focus:bg-white"
+                  value={draft.initial_messages_text}
+                  onChange={(event) => onInitialMessagesChange(event.target.value)}
+                  disabled={!canEdit}
+                />
+                <span className="block text-xs text-stone-500">Use uma linha por mensagem.</span>
+              </label>
+
+              <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Mensagens por etapa</p>
+                <div className="mt-4 space-y-4">
+                  {stepMessageEntries.map(([stepKey, values]) => (
+                    <div key={stepKey} className="space-y-3">
+                      <span className="text-xs font-bold uppercase tracking-wide text-stone-500">{outreachStepLabel(stepKey)}</span>
+                      <div className="grid gap-3">
+                        {Array.from({ length: 5 }, (_, variationIndex) => (
+                          <label key={`${stepKey}-${variationIndex}`} className="block space-y-2">
+                            <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">
+                              Variacao {variationIndex + 1}
+                            </span>
+                            <textarea
+                              className="min-h-[120px] w-full resize-y rounded-2xl border border-stone-200 bg-white p-4 text-sm leading-6 text-stone-800 outline-none transition focus:border-cyan-400"
+                              value={values?.[variationIndex] || ""}
+                              onChange={(event) => onStepMessageChange(stepKey, variationIndex, event.target.value)}
+                              disabled={!canEdit}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="py-16 text-center text-stone-500">Carregando fluxo comercial...</div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-stone-200 bg-white">
+        <CardContent className="space-y-4 p-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Classificacao</p>
+            <h3 className="text-xl font-black text-stone-950">Regras por resposta</h3>
+          </div>
+          <div className="space-y-4">
+            {(draft?.classifications || []).map((item, index) => (
+              <div key={item.class_name} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-black text-stone-950">{humanize(item.class_name)}</p>
+                  <Input
+                    className="w-24"
+                    value={String(item.priority)}
+                    onChange={(event) => onClassificationChange(index, { priority: Number(event.target.value || 0) })}
+                    disabled={!canEdit}
+                  />
+                </div>
+                <label className="mt-3 block space-y-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Palavras-chave</span>
+                  <textarea
+                    className="min-h-[120px] w-full resize-y rounded-2xl border border-stone-200 bg-white p-4 text-sm leading-6 text-stone-800 outline-none transition focus:border-cyan-400"
+                    value={item.keywords_text}
+                    onChange={(event) => onClassificationChange(index, { keywords_text: event.target.value })}
+                    disabled={!canEdit}
+                  />
+                </label>
+                <label className="mt-3 block space-y-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-stone-500">Proxima etapa</span>
+                  <select
+                    className="h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none transition focus:border-cyan-400"
+                    value={item.next_step}
+                    onChange={(event) => onClassificationChange(index, { next_step: event.target.value })}
+                    disabled={!canEdit}
+                  >
+                    <option value="">Usar fluxo padrao</option>
+                    {OUTREACH_NEXT_STEP_OPTIONS.map((stepKey) => (
+                      <option key={stepKey} value={stepKey}>
+                        {outreachStepLabel(stepKey)}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="block text-xs text-stone-500">
+                    {item.next_step ? outreachStepLabel(item.next_step) : "Deixe vazio para usar o fluxo padrao."}
+                  </span>
+                </label>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      </section>
+    </section>
   );
 }
 

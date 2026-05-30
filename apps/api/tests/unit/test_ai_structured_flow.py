@@ -1054,12 +1054,18 @@ def test_process_inbound_message_uses_recent_availability_window_for_end_of_morn
             "metadata": {"provider": "test", "task": task, "latency_ms": 1},
         }
 
-    def _fake_run_reply_generator(db, *, tenant_id, conversation_id, context, decision, plan, system_action_result):
+    def _fake_run_reply_generator(db, *, tenant_id, conversation_id, context, decision, plan, system_action_result, **kwargs):
+        labels = [slot.get("label") for slot in system_action_result.get("slots") or [] if slot.get("label")]
+        reply = "Tenho estes horarios disponiveis: " + ", ".join(labels[:3])
         return (
-            ai_structured_flow._fallback_patient_reply(
-                decision=decision,
-                system_action_result=system_action_result,
-                context=context,
+            ai_structured_flow.PatientReplyOutput(
+                schema_version="1.0",
+                message=reply,
+                message_type="text",
+                interactive_payload=None,
+                confidence=0.91,
+                final_decision="reply",
+                decision_reason="availability_options_returned",
             ),
             {"output": "{}", "metadata": {"provider": "test", "task": "reply", "latency_ms": 1}},
         )
@@ -1092,6 +1098,293 @@ def test_process_inbound_message_uses_recent_availability_window_for_end_of_morn
     assert outbound is not None
     assert "10:30" in outbound.body
     assert "08:00" not in outbound.body
+
+
+def test_process_inbound_message_corrects_weekday_date_and_keeps_period(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+    from app.services import whatsapp_service
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(
+        db_session,
+        tenant_id=tenant_id,
+        key="ai_autoresponder.global",
+        value=_structured_config(),
+    )
+    target_date = _next_python_weekday(1)
+    previous_date = target_date - timedelta(days=1)
+    unit, professional = _create_schedule_unit_and_professional(
+        db_session,
+        tenant_id=tenant_id,
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    _patient, _lead, conversation, inbound = _conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="Quero para terca-feira na parte da tarde.",
+    )
+    conversation.unit_id = unit.id
+    db_session.add(conversation)
+    db_session.commit()
+    _seed_previous_availability_decision(
+        db_session,
+        tenant_id=tenant_id,
+        conversation=conversation,
+        inbound_message=inbound,
+        unit=unit,
+        professional=professional,
+        target_date=previous_date,
+        offered_times=["12:00", "12:30", "13:00"],
+        period="tarde",
+    )
+    follow_up = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body=f"terca feira e dia {target_date.day}",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(follow_up)
+    db_session.commit()
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        return {
+            "output": json.dumps(
+                _decision_payload(
+                    intent="consultar_horarios",
+                    message_summary="Paciente corrigiu o dia da semana.",
+                    system_action={
+                        "required": True,
+                        "action": "query_availability",
+                        "params": {
+                            "unit_id": None,
+                            "unit_name": None,
+                            "service_id": None,
+                            "procedure_type": None,
+                            "professional_id": None,
+                            "date": previous_date.isoformat(),
+                            "time_after": None,
+                            "time_before": None,
+                            "period": None,
+                            "slot_id": None,
+                            "appointment_id": None,
+                            "hold_minutes": 10,
+                            "limit": 3,
+                        },
+                    },
+                    reply_control={
+                        "should_reply_now": False,
+                        "reply_after_system_action": True,
+                        "next_expected_field": None,
+                        "missing_fields": [],
+                        "suggested_next_question": None,
+                    },
+                ),
+                ensure_ascii=False,
+            ),
+            "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+        }
+
+    def _fake_run_reply_generator(db, *, tenant_id, conversation_id, context, decision, plan, system_action_result):
+        return (
+            ai_structured_flow._fallback_patient_reply(
+                decision=decision,
+                system_action_result=system_action_result,
+                context=context,
+            ),
+            {"output": "{}", "metadata": {"provider": "test", "task": "reply", "latency_ms": 1}},
+        )
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+    monkeypatch.setattr(ai_structured_flow, "_run_reply_generator", _fake_run_reply_generator)
+    monkeypatch.setattr(whatsapp_service, "_dispatch_outbox_item_inline", lambda *args, **kwargs: None)
+
+    result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=follow_up.id,
+    )
+
+    outbound = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation.id, Message.direction == "outbound")
+        .order_by(Message.created_at.desc())
+    )
+    decision = db_session.scalar(
+        select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{follow_up.id}")
+    )
+    params = decision.metadata_json["decision"]["system_action"]["params"]
+    slots = decision.metadata_json["system_action_result"]["slots"]
+    assert result["status"] == "responded"
+    assert params["date"] == target_date.isoformat()
+    assert params["period"] == "tarde"
+    assert slots
+    assert slots[0]["label"].startswith(target_date.strftime("%d/%m/%Y"))
+    assert slots[0]["label"].endswith("12:00")
+    assert outbound is not None
+    assert target_date.strftime("%d/%m/%Y") in outbound.body
+
+
+def test_process_inbound_message_reproduces_weekday_correction_thread(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+    from app.services import whatsapp_service
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(
+        db_session,
+        tenant_id=tenant_id,
+        key="ai_autoresponder.global",
+        value=_structured_config(),
+    )
+    target_date = _next_python_weekday(1)
+    previous_date = target_date - timedelta(days=1)
+    unit, _professional = _create_schedule_unit_and_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_name="Unidade principal",
+        professional_name="Dr. Rafael Campos",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    _patient, _lead, conversation, _opening = _conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="quero fazer um agendamento",
+    )
+    conversation.unit_id = unit.id
+    db_session.add(conversation)
+    db_session.commit()
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        return {
+            "output": json.dumps(
+                _decision_payload(
+                    intent="consultar_horarios",
+                    message_summary="Paciente quer horarios para terca a tarde.",
+                    system_action={
+                        "required": True,
+                        "action": "query_availability",
+                        "params": {
+                            "unit_id": None,
+                            "unit_name": unit.name,
+                            "service_id": None,
+                            "procedure_type": "Avaliacao odontologica",
+                            "professional_id": None,
+                            "date": previous_date.isoformat(),
+                            "time_after": None,
+                            "time_before": None,
+                            "period": None,
+                            "slot_id": None,
+                            "appointment_id": None,
+                            "hold_minutes": 10,
+                            "limit": 3,
+                        },
+                    },
+                    reply_control={
+                        "should_reply_now": False,
+                        "reply_after_system_action": True,
+                        "next_expected_field": None,
+                        "missing_fields": [],
+                        "suggested_next_question": None,
+                    },
+                ),
+                ensure_ascii=False,
+            ),
+            "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+        }
+
+    def _fake_run_reply_generator(db, *, tenant_id, conversation_id, context, decision, plan, system_action_result, **kwargs):
+        labels = [slot.get("label") for slot in system_action_result.get("slots") or [] if slot.get("label")]
+        reply = "Tenho estes horarios disponiveis: " + ", ".join(labels[:3])
+        return (
+            ai_structured_flow.PatientReplyOutput(
+                schema_version="1.0",
+                message=reply,
+                message_type="text",
+                interactive_payload=None,
+                confidence=0.91,
+                final_decision="reply",
+                decision_reason="availability_options_returned",
+            ),
+            {"output": "{}", "metadata": {"provider": "test", "task": "reply", "latency_ms": 1}},
+        )
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+    monkeypatch.setattr(ai_structured_flow, "_run_reply_generator", _fake_run_reply_generator)
+    monkeypatch.setattr(whatsapp_service, "_dispatch_outbox_item_inline", lambda *args, **kwargs: None)
+
+    first_request = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body="quero para a terca feira na parte da tarde",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(first_request)
+    db_session.commit()
+
+    first_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=first_request.id,
+    )
+    first_decision = db_session.scalar(
+        select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{first_request.id}")
+    )
+    first_slots = first_decision.metadata_json["system_action_result"]["slots"]
+    assert first_result["status"] == "responded"
+    assert first_decision.metadata_json["decision"]["system_action"]["params"]["date"] == target_date.isoformat()
+    assert first_decision.metadata_json["decision"]["system_action"]["params"]["period"] == "tarde"
+    assert first_slots[0]["label"].startswith(target_date.strftime("%d/%m/%Y"))
+    assert not first_slots[0]["label"].startswith(previous_date.strftime("%d/%m/%Y"))
+
+    correction = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body=f"terca feira e dia {target_date.day}",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(correction)
+    db_session.commit()
+
+    correction_result = process_inbound_message(
+        db_session,
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        inbound_message_id=correction.id,
+    )
+    correction_decision = db_session.scalar(
+        select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{correction.id}")
+    )
+    correction_slots = correction_decision.metadata_json["system_action_result"]["slots"]
+    correction_outbound = db_session.scalar(
+        select(Message)
+        .where(Message.conversation_id == conversation.id, Message.direction == "outbound")
+        .order_by(Message.created_at.desc())
+    )
+    assert correction_result["status"] == "responded"
+    assert correction_decision.metadata_json["decision"]["system_action"]["params"]["date"] == target_date.isoformat()
+    assert correction_decision.metadata_json["decision"]["system_action"]["params"]["period"] == "tarde"
+    assert correction_slots[0]["label"].startswith(target_date.strftime("%d/%m/%Y"))
+    assert correction_slots[0]["label"].endswith("12:00")
+    assert correction_outbound is not None
+    assert previous_date.strftime("%d/%m/%Y") not in correction_outbound.body
 
 
 def test_process_inbound_message_skips_repeated_slots_when_patient_requests_other_options(monkeypatch, seeded_db, db_session):

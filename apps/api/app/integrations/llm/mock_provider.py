@@ -283,7 +283,7 @@ def _format_catalog_row(row: str) -> str:
 
 
 class MockLLMProvider(LLMProvider):
-    def complete(self, *, task: str, prompt: str) -> dict:
+    def complete(self, *, task: str, prompt: str, model: str | None = None) -> dict:
         lower_prompt = _normalize(prompt)
         if task == "classify_intent":
             intent = "agendamento"

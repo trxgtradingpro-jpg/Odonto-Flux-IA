@@ -10,9 +10,12 @@ export type AdmPagePermissionFlags = {
 export type AdmPageKey =
   | "adm_crm"
   | "adm_messages"
+  | "adm_site_templates"
+  | "adm_outreach_automation"
   | "adm_import_places"
   | "adm_whatsapp"
   | "adm_whatsapp_settings"
+  | "adm_agent_settings"
   | "adm_implementations"
   | "adm_affiliates";
 
@@ -46,6 +49,18 @@ export const ADM_MANAGED_PAGES: AdmManagedPageDefinition[] = [
     description: "Biblioteca de templates e mensagens para clinicas.",
   },
   {
+    key: "adm_site_templates",
+    href: "/adm/modelos-sites",
+    label: "Modelos de sites",
+    description: "Studio de templates, catalogo publico e selecao por prospect.",
+  },
+  {
+    key: "adm_outreach_automation",
+    href: "/adm/automacao-comercial",
+    label: "Automacao comercial",
+    description: "Controle de lotes automaticos de outreach comercial.",
+  },
+  {
     key: "adm_import_places",
     href: "/adm/importar-clinicas",
     label: "Importar Google Places",
@@ -62,6 +77,12 @@ export const ADM_MANAGED_PAGES: AdmManagedPageDefinition[] = [
     href: "/adm",
     label: "WhatsApp do sistema",
     description: "Configuracao dos numeros oficiais da plataforma.",
+  },
+  {
+    key: "adm_agent_settings",
+    href: "/adm/configuracoes",
+    label: "Configuracoes do agente",
+    description: "Fluxo de conversa, modelo e guardrails do agente de agenda.",
   },
   {
     key: "adm_implementations",
@@ -90,6 +111,8 @@ export const ADM_AFFILIATE_ROLE = "sales_affiliate";
 export const DEFAULT_AFFILIATE_ADM_PERMISSIONS: Partial<AdmPagePermissionMap> = {
   adm_crm: { view: true, create: true, edit: true, delete: false },
   adm_messages: { view: true, create: true, edit: true, delete: false },
+  adm_site_templates: { view: true, create: true, edit: true, delete: false },
+  adm_outreach_automation: { view: true, create: false, edit: false, delete: false },
 };
 
 function cloneFlags(source?: Partial<AdmPagePermissionFlags> | null): AdmPagePermissionFlags {
@@ -130,7 +153,7 @@ export function normalizeAdmPagePermissions(
     });
   }
   if ((roles ?? []).includes("sales_viewer")) {
-    (["adm_crm", "adm_messages", "adm_whatsapp"] as AdmPageKey[]).forEach((pageKey) => {
+    (["adm_crm", "adm_messages", "adm_site_templates", "adm_outreach_automation", "adm_whatsapp"] as AdmPageKey[]).forEach((pageKey) => {
       combined[pageKey] = { view: true, create: false, edit: false, delete: false };
     });
   }

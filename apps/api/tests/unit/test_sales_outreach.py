@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -7,10 +8,22 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.exceptions import ApiError
-from app.models import Appointment, Conversation, Message, OutboxMessage, ProspectAccount, Setting, Tenant, User, WhatsAppAccount
+from app.models import (
+    Appointment,
+    Conversation,
+    Message,
+    OutboxMessage,
+    ProspectAccount,
+    SalesOutreachAutomationBatchItem,
+    Setting,
+    Tenant,
+    User,
+    WhatsAppAccount,
+)
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
 from app.schemas.admin_sales import ProspectCreate, ProspectUpdate
 from app.services import sales_demo_service
+from app.services import sales_outreach_automation_service
 from app.services.whatsapp_service import process_outbox_batch, queue_outbound_message
 
 
@@ -55,6 +68,228 @@ def _create_prospect(db_session):
     return prospect
 
 
+def test_admin_internal_whatsapp_simulator_does_not_require_test_phone(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+    prospect.test_phone_number = None
+    db_session.add(prospect)
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    conversation = sales_demo_service.ensure_admin_whatsapp_test_contact(db_session, prospect=prospect)
+
+    messages = db_session.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation.id)
+        .order_by(Message.created_at.asc())
+    ).scalars().all()
+    outbox_count = db_session.scalar(select(func.count()).select_from(OutboxMessage)) or 0
+
+    assert sales_demo_service.ADM_INTERNAL_WHATSAPP_SIMULATION_TAG in (conversation.tags or [])
+    assert "adm_whatsapp_test_contact" in (conversation.tags or [])
+    assert conversation.ai_autoresponder_enabled is False
+    assert len(messages) == 1
+    assert messages[0].direction == MessageDirection.OUTBOUND.value
+    assert messages[0].status == MessageStatus.SENT.value
+    assert messages[0].payload["source"] == sales_demo_service.ADM_INTERNAL_WHATSAPP_SIMULATION_SOURCE
+    assert messages[0].payload["internal_delivery"] is True
+    assert outbox_count == 0
+
+
+def test_admin_internal_whatsapp_simulator_creates_clinic_reply_and_ai_response_without_outbox(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    conversation = sales_demo_service.ensure_admin_whatsapp_test_contact(db_session, prospect=prospect)
+    result = sales_demo_service.simulate_admin_internal_whatsapp_inbound(
+        db_session,
+        prospect=prospect,
+        conversation=conversation,
+        body="Bom dia, sou da recepcao. Como posso ajudar?",
+        actor_id=seeded_db["admin"].id,
+    )
+
+    inbound = result["inbound_message"]
+    outbound = result["outbound_message"]
+    outbox_count = db_session.scalar(select(func.count()).select_from(OutboxMessage)) or 0
+
+    assert inbound.direction == MessageDirection.INBOUND.value
+    assert inbound.payload["simulated_clinic"] is True
+    assert inbound.payload["internal_delivery"] is True
+    assert outbound.direction == MessageDirection.OUTBOUND.value
+    assert outbound.sender_type == "ai"
+    assert outbound.status == MessageStatus.SENT.value
+    assert outbound.payload["source"] == sales_demo_service.ADM_INTERNAL_WHATSAPP_SIMULATION_SOURCE
+    assert outbound.payload["reply_to_message_id"] == str(inbound.id)
+    assert outbound.payload["internal_delivery"] is True
+    assert result["internal_delivery"] is True
+    assert outbox_count == 0
+
+
+def test_admin_internal_whatsapp_simulator_keeps_context_and_blocks_localhost_links(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+    prospect.clinic_name = "SAC Dental Family"
+    prospect.owner_name = None
+    prospect.manager_name = None
+    db_session.add(prospect)
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    conversation = sales_demo_service.ensure_admin_whatsapp_test_contact(db_session, prospect=prospect)
+    replies = []
+    for body in [
+        "Sim o gerente sou eu",
+        "nao entendi",
+        "entendi eu sou o dono da clinica",
+        "gostei",
+    ]:
+        result = sales_demo_service.simulate_admin_internal_whatsapp_inbound(
+            db_session,
+            prospect=prospect,
+            conversation=conversation,
+            body=body,
+            actor_id=seeded_db["admin"].id,
+        )
+        replies.append(result["outbound_message"].body)
+
+    normalized_replies = [sales_demo_service._normalized_lookup_text(item) for item in replies]
+
+    assert all("localhost" not in item.lower() for item in replies)
+    assert all("demonstracao rapida:" not in item.lower() for item in replies)
+    assert all("sac!" not in item.lower() for item in replies)
+    assert len(set(normalized_replies)) == len(normalized_replies)
+    assert "explicando de forma simples" in normalized_replies[1]
+    assert "falo direto contigo" in normalized_replies[2]
+    assert "demo curta" in normalized_replies[3]
+    assert db_session.scalar(select(func.count()).select_from(OutboxMessage)) == 0
+
+
+def test_admin_internal_whatsapp_simulator_passes_ten_contextual_conversation_scenarios(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    scenarios = [
+        {
+            "clinic": "Sorriso Centro",
+            "turns": [
+                {"body": "Sou o gerente, pode falar comigo", "expect": ["falo direto contigo", "demo curta"]},
+                {"body": "nao entendi", "expect": ["explicando de forma simples", "whatsapp"]},
+                {"body": "gostei", "expect": ["demo curta", "whatsapp"]},
+            ],
+        },
+        {
+            "clinic": "Clarear Odonto",
+            "turns": [
+                {"body": "Bom dia, sou da recepcao. Como posso ajudar?", "expect": ["meu contato e comercial", "quem cuida"]},
+            ],
+        },
+        {
+            "clinic": "Implante Norte",
+            "turns": [
+                {"body": "Como voces acharam nosso numero?", "expect": ["google", "meu contato e comercial"]},
+            ],
+        },
+        {
+            "clinic": "Dental Prime",
+            "turns": [
+                {"body": "Quanto custa?", "expect": ["valores", "fluxo"]},
+            ],
+        },
+        {
+            "clinic": "Oral Vita",
+            "turns": [
+                {"body": "Ja temos sistema de agenda", "expect": ["nao e trocar", "sistema atual"]},
+            ],
+        },
+        {
+            "clinic": "Doctor Smile",
+            "turns": [
+                {"body": "Integra com Doctoralia?", "expect": ["nao quero prometer integracao", "qual sistema"]},
+            ],
+        },
+        {
+            "clinic": "Odonto Jardim",
+            "turns": [
+                {"body": "Pode mandar proposta?", "expect": ["proposta curta", "principal problema"]},
+            ],
+        },
+        {
+            "clinic": "Raiz Dental",
+            "turns": [
+                {"body": "A gente nao tem site ainda", "expect": ["site com servicos", "base de seo"]},
+            ],
+        },
+        {
+            "clinic": "Sorria Mais",
+            "turns": [
+                {"body": "Quero agendar consulta", "expect": ["meu contato e comercial", "nao sou paciente"]},
+            ],
+        },
+        {
+            "clinic": "Alvo Odonto",
+            "turns": [
+                {"body": "Nao temos interesse, obrigado", "expect": ["parar o contato", "nao insistir"], "allow_no_question": True},
+            ],
+        },
+    ]
+    forbidden_fragments = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "demonstracao rapida:",
+        "clinicflux ai da clinicflux ai",
+        "resultado garantido",
+        "agenda cheia",
+        "x pacientes",
+        "faturamento garantido",
+    ]
+
+    for index, scenario in enumerate(scenarios, start=1):
+        prospect = ProspectAccount(
+            clinic_name=scenario["clinic"],
+            whatsapp_phone=f"+55 11 98888-{index:04d}",
+            city="Sao Paulo",
+            state="SP",
+            main_pain="demora no WhatsApp",
+            legal_basis="interesse_legitimo_b2b",
+        )
+        db_session.add(prospect)
+        db_session.commit()
+        db_session.refresh(prospect)
+
+        conversation = sales_demo_service.ensure_admin_whatsapp_test_contact(db_session, prospect=prospect)
+        normalized_replies: list[str] = []
+        for turn in scenario["turns"]:
+            result = sales_demo_service.simulate_admin_internal_whatsapp_inbound(
+                db_session,
+                prospect=prospect,
+                conversation=conversation,
+                body=turn["body"],
+                actor_id=seeded_db["admin"].id,
+            )
+            outbound = result["outbound_message"]
+            response = outbound.body
+            normalized_response = sales_demo_service._normalized_lookup_text(response)
+            normalized_replies.append(normalized_response)
+
+            assert outbound.payload["internal_delivery"] is True
+            assert outbound.payload["source"] == sales_demo_service.ADM_INTERNAL_WHATSAPP_SIMULATION_SOURCE
+            assert len(response) <= 520
+            assert all(fragment not in normalized_response for fragment in forbidden_fragments), response
+            assert all(expected in normalized_response for expected in turn["expect"]), response
+            if not turn.get("allow_no_question"):
+                assert "?" in response
+
+        assert len(set(normalized_replies)) == len(normalized_replies)
+
+    assert db_session.scalar(select(func.count()).select_from(OutboxMessage)) == 0
+
+
 def test_send_sales_outreach_step_creates_transparent_whatsapp_message(monkeypatch, seeded_db, db_session):
     sender_tenant = _create_sender_tenant(db_session)
     prospect = _create_prospect(db_session)
@@ -77,7 +312,7 @@ def test_send_sales_outreach_step_creates_transparent_whatsapp_message(monkeypat
 
     assert result["step"] == "reception_intro"
     assert result["destination"] == "+55 11 98888-1111"
-    assert "de forma comercial e transparente" in result["message_text"].lower()
+    assert "time comercial da ClinicFlux AI" in result["message_text"]
     assert prospect.status == "contato_iniciado"
     assert conversation is not None
     assert "prospect_outreach" in (conversation.tags or [])
@@ -89,6 +324,143 @@ def test_send_sales_outreach_step_creates_transparent_whatsapp_message(monkeypat
     assert outbox is not None
     assert ((outbox.payload or {}).get("metadata") or {}).get("step") == "reception_intro"
     assert (prospect.proposal_snapshot or {}).get("outreach", {}).get("last_step") == "reception_intro"
+
+
+def test_send_sales_outreach_step_uses_ai_reviewed_message(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "llm_provider", "openai")
+    monkeypatch.setattr(sales_demo_service.settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_ai_review_enabled", True)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_ai_min_confidence", 0.7)
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt, model_override=None):
+        assert task == "sales_outreach_outbound_review"
+        return {
+            "output": json.dumps(
+                {
+                    "approved": True,
+                    "final_message": "Perfeito. Esse WhatsApp costuma ficar com a recepcao, gerente ou dono(a)?",
+                    "confidence": 0.91,
+                    "reason": "Mensagem mais curta e aderente ao contexto de recepcao.",
+                }
+            ),
+            "metadata": {"provider": "openai", "model": "gpt-4.1-mini", "task": task},
+        }
+
+    monkeypatch.setattr(sales_demo_service, "run_llm_task", _fake_run_llm_task)
+
+    result = sales_demo_service.send_sales_outreach_step(
+        db_session,
+        prospect=prospect,
+        step="reception_triage",
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    outbox = db_session.scalar(select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id))
+
+    assert result["message_text"] == "Perfeito. Esse WhatsApp costuma ficar com a recepcao, gerente ou dono(a)?"
+    assert outbox is not None
+    assert (outbox.payload or {}).get("body") == result["message_text"]
+    assert (((outbox.payload or {}).get("metadata") or {}).get("ai_review") or {}).get("approved") is True
+
+
+def test_sales_outreach_initial_message_uses_google_places_no_website_offer(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = ProspectAccount(
+        clinic_name="Clinica Sem Site",
+        whatsapp_phone="+55 11 97777-3333",
+        city="Sao Paulo",
+        state="SP",
+        lead_source="google_places",
+        tags=["google_places", "importado_google_places"],
+        proposal_snapshot={
+            "source": "google_places",
+            "google_places": {
+                "place_id": "places/teste-sem-site",
+                "types": ["dentist"],
+                "rating": 4.8,
+                "user_rating_count": 32,
+            },
+        },
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    result = sales_demo_service.send_sales_outreach_step(
+        db_session,
+        prospect=prospect,
+        step="reception_intro",
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    assert "Encontrei a clinica no Google" in result["message_text"]
+    assert "nao aparece um site vinculado" in result["message_text"]
+    assert "time comercial da ClinicFlux AI" in result["message_text"]
+
+
+def test_sales_outreach_initial_message_uses_google_places_with_website_saas_route(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = ProspectAccount(
+        clinic_name="Clinica Com Site",
+        whatsapp_phone="+55 11 96666-4444",
+        website="https://clinicacomsite.example",
+        city="Sao Paulo",
+        state="SP",
+        lead_source="google_places",
+        tags=["google_places", "importado_google_places"],
+        proposal_snapshot={"source": "google_places", "google_places": {"place_id": "places/teste-com-site"}},
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add(prospect)
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    result = sales_demo_service.send_sales_outreach_step(
+        db_session,
+        prospect=prospect,
+        step="reception_intro",
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    assert "Encontrei a clinica no Google" in result["message_text"]
+    assert "nao aparece um site vinculado" not in result["message_text"]
+    assert "WhatsApp e dos agendamentos" in result["message_text"]
+
+
+def test_sales_outreach_llm_tasks_use_dedicated_model(monkeypatch, seeded_db, db_session):
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_llm_model", "gpt-5.2")
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt, model_override=None):
+        captured["task"] = task
+        captured["model_override"] = model_override
+        return {"output": json.dumps({"ok": True}), "metadata": {"model": model_override}}
+
+    monkeypatch.setattr(sales_demo_service, "run_llm_task", _fake_run_llm_task)
+
+    sales_demo_service._run_sales_outreach_llm_task(
+        db_session,
+        tenant_id=None,
+        conversation_id=None,
+        task="sales_outreach_outbound_review",
+        prompt="teste",
+    )
+
+    assert captured["task"] == "sales_outreach_outbound_review"
+    assert captured["model_override"] == "gpt-5.2"
 
 
 def test_sync_prospect_outreach_reply_updates_timeline_and_status(seeded_db, db_session):
@@ -134,7 +506,541 @@ def test_sync_prospect_outreach_reply_updates_timeline_and_status(seeded_db, db_
     assert prospect.status == "respondeu"
     assert (prospect.proposal_snapshot or {}).get("outreach", {}).get("last_reply_preview")
     assert timeline
-    assert timeline[0].event_type == "prospect.outreach.reply_received"
+    assert any(event.event_type == "prospect.outreach.reply_received" for event in timeline)
+    assert (prospect.proposal_snapshot or {}).get("outreach", {}).get("last_reply_classification") == "gestor"
+
+
+def test_sync_prospect_outreach_reply_starts_handoff_for_shared_contact(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_display_name", "Equipe OdontoFlux")
+
+    conversation = Conversation(
+        tenant_id=seeded_db["tenant_a"].id,
+        channel="whatsapp",
+        status="aberta",
+        ai_autoresponder_enabled=False,
+        tags=["prospect_outreach", f"prospect_id:{prospect.id}"],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    inbound_message = Message(
+        tenant_id=seeded_db["tenant_a"].id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Vou te passar o contato do nosso setor de convenios",
+        message_type="text",
+        payload={
+            "bridge_shared_contact_name": "SAC DENTAL FAMILY",
+            "bridge_shared_contact_phone": "+55 11 99999-2222",
+        },
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    shared_prospect = db_session.scalar(
+        select(ProspectAccount).where(ProspectAccount.clinic_name == "SAC DENTAL FAMILY")
+    )
+    shared_timeline = db_session.execute(
+        select(sales_demo_service.ProspectTimelineEvent)
+        .where(sales_demo_service.ProspectTimelineEvent.prospect_account_id == prospect.id)
+        .order_by(sales_demo_service.ProspectTimelineEvent.created_at.desc())
+    ).scalars().all()
+
+    assert shared_prospect is not None
+    assert shared_prospect.whatsapp_phone == "+55 11 99999-2222"
+    assert (shared_prospect.proposal_snapshot or {}).get("outreach", {}).get("automation_active") is True
+    assert (shared_prospect.proposal_snapshot or {}).get("outreach", {}).get("last_step") == "reception_intro"
+    assert (prospect.proposal_snapshot or {}).get("outreach", {}).get("automation_stop_reason") == "contact_shared"
+    assert any(event.event_type == "prospect.outreach.contact_handoff_started" for event in shared_timeline)
+
+
+def test_sync_prospect_outreach_reply_uses_ai_review_to_override_classification(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    conversation = Conversation(
+        tenant_id=seeded_db["tenant_a"].id,
+        channel="whatsapp",
+        status="aberta",
+        ai_autoresponder_enabled=False,
+        tags=["prospect_outreach", f"prospect_id:{prospect.id}"],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    inbound_message = Message(
+        tenant_id=seeded_db["tenant_a"].id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Bem-vindo(a)! Nosso horario de funcionamento e das 08h as 18h. Como podemos te ajudar?",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    monkeypatch.setattr(sales_demo_service.settings, "llm_provider", "openai")
+    monkeypatch.setattr(sales_demo_service.settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_ai_review_enabled", True)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_ai_min_confidence", 0.7)
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt, model_override=None):
+        assert task == "sales_outreach_inbound_review"
+        return {
+            "output": json.dumps(
+                {
+                    "classification": "recepcao",
+                    "confidence": 0.95,
+                    "reason": "Saudacao automatica de recepcao com horario de funcionamento.",
+                    "suggested_pause": False,
+                }
+            ),
+            "metadata": {"provider": "openai", "model": "gpt-4.1-mini", "task": task},
+        }
+
+    monkeypatch.setattr(sales_demo_service, "run_llm_task", _fake_run_llm_task)
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outreach = (prospect.proposal_snapshot or {}).get("outreach", {})
+    assert outreach.get("last_reply_classification") == "recepcao"
+    assert (outreach.get("last_reply_ai_review") or {}).get("classification") == "recepcao"
+
+
+def test_classify_sales_outreach_reply_prioritizes_expected_bucket():
+    assert sales_demo_service.classify_sales_outreach_reply("Pode me mandar a demo e o video.") == "gestor"
+    assert sales_demo_service.classify_sales_outreach_reply("Sou da recepção, posso ajudar?") == "recepcao"
+    assert sales_demo_service.classify_sales_outreach_reply("Agora não, me chama mais tarde.") == "pediu_tempo"
+
+
+def test_classify_sales_outreach_reply_detects_out_of_hours_autoreply():
+    body = "Agradecemos sua mensagem. Não estamos disponíveis no momento, mas responderemos assim que possível!"
+    assert sales_demo_service.classify_sales_outreach_reply(body) == "automatica"
+
+
+def test_sync_prospect_outreach_reply_pauses_on_out_of_hours_autoreply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    prospect.proposal_snapshot = {
+        "outreach": {
+            "automation_active": True,
+            "last_step": "reception_intro",
+        }
+    }
+    db_session.add(prospect)
+    db_session.flush()
+
+    conversation = Conversation(
+        tenant_id=sender_tenant.id,
+        channel="whatsapp",
+        status="aberta",
+        ai_autoresponder_enabled=False,
+        tags=["prospect_outreach", f"prospect_id:{prospect.id}"],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Agradecemos sua mensagem. Não estamos disponíveis no momento, mas responderemos assim que possível!",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outboxes = db_session.execute(
+        select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id).order_by(OutboxMessage.created_at.asc())
+    ).scalars().all()
+
+    assert outboxes == []
+    assert prospect.proposal_snapshot.get("outreach", {}).get("last_step") == "reception_intro"
+    assert prospect.proposal_snapshot.get("outreach", {}).get("automation_active") is False
+    assert prospect.proposal_snapshot.get("outreach", {}).get("automation_stop_reason") == "awaiting_human_reply"
+
+
+def test_looks_like_outreach_opt_out_accepts_natural_interest_refusals():
+    assert sales_demo_service._looks_like_outreach_opt_out("Nao temos interesse.")
+    assert sales_demo_service._looks_like_outreach_opt_out("No momento nao temos interesse.")
+    assert sales_demo_service._looks_like_outreach_opt_out(
+        "Guilherme, agradecemos seu contato, mas no momento nao temos interesse."
+    )
+
+
+def test_sync_prospect_outreach_reply_stops_automation_on_interest_refusal(seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+    prospect.proposal_snapshot = {
+        "outreach": {
+            "automation_active": True,
+            "last_step": "reception_triage",
+        }
+    }
+    db_session.add(prospect)
+    conversation = Conversation(
+        tenant_id=seeded_db["tenant_a"].id,
+        channel="whatsapp",
+        status="aberta",
+        ai_autoresponder_enabled=False,
+        tags=["prospect_outreach", f"prospect_id:{prospect.id}"],
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    inbound_message = Message(
+        tenant_id=seeded_db["tenant_a"].id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Guilherme, agradecemos seu contato, mas no momento nao temos interesse.",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outreach = (prospect.proposal_snapshot or {}).get("outreach", {})
+    assert prospect.do_not_contact is True
+    assert prospect.status == "fechado_perdido"
+    assert outreach.get("automation_active") is False
+    assert outreach.get("automation_stop_reason") == "opt_out"
+
+
+def test_send_sales_outreach_step_blocks_if_latest_inbound_refused_contact(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    conversation = sales_demo_service._ensure_outreach_conversation(
+        db_session,
+        sender_tenant=sender_tenant,
+        prospect=prospect,
+    )
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Agradecemos seu contato, mas no momento nao temos interesse.",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    with pytest.raises(ApiError) as exc:
+        sales_demo_service.send_sales_outreach_step(
+            db_session,
+            prospect=prospect,
+            step="access_request",
+            actor_id=None,
+            base_url="http://localhost:3000",
+        )
+
+    db_session.refresh(prospect)
+    assert exc.value.code == "SALES_OUTREACH_BLOCKED_OPT_OUT"
+    assert prospect.do_not_contact is True
+    assert prospect.status == "fechado_perdido"
+
+
+def test_review_sales_outreach_outbox_send_gate_blocks_if_latest_inbound_refused_contact(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation_id = started["conversation_id"]
+
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation_id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="No momento nao temos interesse.",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation_id,
+        to=prospect.whatsapp_phone,
+        body="Posso deixar um resumo rapido para depois?",
+        metadata={"source": "sales_outreach", "step": "access_request", "transport": "whatsapp_web_bridge"},
+        immediate_dispatch=False,
+        commit=True,
+    )
+
+    gate = sales_demo_service.review_sales_outreach_outbox_send_gate(db_session, outbox=outbox)
+    assert gate["decision"] == "block"
+    assert "recusou contato" in gate["reason"].lower()
+
+
+def test_live_gate_repairs_wrong_reception_persona(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+    inbound_body = "Boa tarde! Me chamo Juliana. Poderia me informar seu nome e de onde e seu contato?"
+    db_session.add(
+        Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.INBOUND.value,
+            channel="whatsapp",
+            sender_type="patient",
+            body=inbound_body,
+            message_type="text",
+            payload={},
+            status=MessageStatus.RECEIVED.value,
+        )
+    )
+    db_session.flush()
+
+    gate = sales_demo_service.review_sales_outreach_live_whatsapp_send_gate(
+        db_session,
+        conversation=conversation,
+        candidate_message="Ola Juliana, aqui e da recepcao. Como posso ajudar no agendamento hoje?",
+        live_messages=[{"direction": "in", "body": inbound_body, "visible_time": "21:01"}],
+        candidate_step="reception_intro",
+    )
+
+    final_message = gate.get("final_message") or ""
+    assert gate["decision"] == "send"
+    assert "ClinicFlux AI" in final_message
+    assert "recepcao" not in final_message.lower()
+    assert "agendamento hoje" not in final_message.lower()
+
+
+def test_live_gate_sends_fallback_when_ai_waits_after_clinic_reply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "llm_provider", "openai")
+    monkeypatch.setattr(sales_demo_service.settings, "llm_api_key", "test-key")
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+    inbound_body = "Ola! Como podemos ajudar?"
+    db_session.add(
+        Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.INBOUND.value,
+            channel="whatsapp",
+            sender_type="patient",
+            body=inbound_body,
+            message_type="text",
+            payload={},
+            status=MessageStatus.RECEIVED.value,
+        )
+    )
+    db_session.flush()
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "run_llm_task",
+        lambda *args, **kwargs: {
+            "output": json.dumps(
+                {
+                    "decision": "wait",
+                    "confidence": 0.95,
+                    "reason": "A mensagem candidata ignora a pergunta pendente.",
+                    "wait_minutes": 15,
+                    "final_message": "",
+                }
+            )
+        },
+    )
+
+    gate = sales_demo_service.review_sales_outreach_live_whatsapp_send_gate(
+        db_session,
+        conversation=conversation,
+        candidate_message="Entendi, obrigado pelo retorno. Quem cuida dos agendamentos por ai?",
+        live_messages=[
+            {"direction": "out", "body": "Oi! Tudo bem? Quem cuida dos agendamentos pelo WhatsApp da clinica?", "visible_time": "20:30"},
+            {"direction": "in", "body": inbound_body, "visible_time": "20:31"},
+        ],
+        candidate_step="reception_triage",
+    )
+
+    assert gate["decision"] == "send"
+    assert "ClinicFlux AI" in (gate.get("final_message") or "")
+    assert "nao e agendamento de paciente" in (gate.get("final_message") or "").lower()
+
+
+def test_live_gate_blocks_out_of_hours_autoreply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+    inbound_body = "No momento estamos ausentes, mas assim que possivel responderemos."
+    db_session.add(
+        Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.INBOUND.value,
+            channel="whatsapp",
+            sender_type="patient",
+            body=inbound_body,
+            message_type="text",
+            payload={},
+            status=MessageStatus.RECEIVED.value,
+        )
+    )
+    db_session.flush()
+
+    gate = sales_demo_service.review_sales_outreach_live_whatsapp_send_gate(
+        db_session,
+        conversation=conversation,
+        candidate_message="Entendi, quem cuida dos agendamentos por ai?",
+        live_messages=[
+            {"direction": "out", "body": "Oi! Tudo bem? Quem cuida dos agendamentos pelo WhatsApp da clinica?", "visible_time": "20:30"},
+            {"direction": "in", "body": inbound_body, "visible_time": "20:31"},
+        ],
+        candidate_step="reception_triage",
+    )
+
+    assert gate["decision"] == "block"
+    assert "automatica" in gate["reason"].lower()
+    assert gate.get("final_message") is None
+
+
+def test_outbox_gate_blocks_auto_reply_hold(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation_id = started["conversation_id"]
+    db_session.add(
+        Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation_id,
+            direction=MessageDirection.INBOUND.value,
+            channel="whatsapp",
+            sender_type="patient",
+            body="Agradecemos sua mensagem. Nao estamos disponiveis no momento.",
+            message_type="text",
+            payload={},
+            status=MessageStatus.RECEIVED.value,
+        )
+    )
+    db_session.flush()
+
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation_id,
+        to=prospect.whatsapp_phone,
+        body="Tudo bem, vou aguardar a proxima mensagem da clinica.",
+        metadata={"source": "sales_outreach", "step": "auto_reply_hold", "transport": "whatsapp_web_bridge"},
+        immediate_dispatch=False,
+        commit=True,
+    )
+
+    gate = sales_demo_service.review_sales_outreach_outbox_send_gate(db_session, outbox=outbox)
+
+    assert gate["decision"] == "block"
+    assert "automatica" in gate["reason"].lower()
+
+
+def test_classify_sales_outreach_reply_treats_welcome_autoreply_as_reception():
+    body = (
+        "Bem-vindo(a) a Clinica Harmony!\n\n"
+        "Estamos felizes em recebe-lo(a)! Nosso horario de funcionamento e das 08h00 as 18h00, "
+        "de segunda a sexta feira.\n"
+        "Como podemos te ajudar?"
+    )
+    assert sales_demo_service.classify_sales_outreach_reply(body) == "recepcao"
 
 
 def test_start_sales_outreach_automation_marks_snapshot_and_sends_first_step(monkeypatch, seeded_db, db_session):
@@ -158,6 +1064,92 @@ def test_start_sales_outreach_automation_marks_snapshot_and_sends_first_step(mon
     assert outreach.get("automation_mode") == "transparent_b2b"
     assert outreach.get("auto_progress") is True
     assert outreach.get("last_step") == "reception_intro"
+
+
+def test_outreach_batch_processes_demo_and_first_step(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    monkeypatch.setattr(sales_demo_service.settings, "whatsapp_web_bridge_token", "test-bridge-token")
+    monkeypatch.setattr(sales_outreach_automation_service, "_enqueue_batch_processing", lambda batch_id: None)
+
+    def _fake_generate_demo(db, current_prospect, *, actor_id, base_url):
+        current_prospect.demo_tenant_id = seeded_db["tenant_a"].id
+        current_prospect.demo_status = "criada"
+        db.add(current_prospect)
+        db.flush()
+        return {"prospect": current_prospect}
+
+    def _fake_start_sales_outreach_automation(db, *, prospect, actor_id, base_url):
+        conversation = sales_demo_service._ensure_outreach_conversation(
+            db,
+            sender_tenant=sender_tenant,
+            prospect=prospect,
+        )
+        outbound_message = Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation.id,
+            direction=MessageDirection.OUTBOUND.value,
+            channel="whatsapp",
+            sender_type="user",
+            body="Oi! Tudo bem?",
+            message_type="text",
+            payload={"source": "sales_outreach", "step": "reception_intro"},
+            status=MessageStatus.QUEUED.value,
+        )
+        db.add(outbound_message)
+        db.flush()
+        queue_outbound_message(
+            db,
+            tenant_id=sender_tenant.id,
+            conversation_id=conversation.id,
+            to=prospect.whatsapp_phone,
+            body="Oi! Tudo bem?",
+            metadata={"source": "sales_outreach", "step": "reception_intro", "transport": "whatsapp_web_bridge"},
+            immediate_dispatch=False,
+            commit=False,
+        )
+        sales_demo_service._update_outreach_snapshot(
+            prospect,
+            patch={
+                "automation_active": True,
+                "automation_mode": "transparent_b2b",
+                "last_step": "reception_intro",
+            },
+        )
+        prospect.status = "contato_iniciado"
+        db.add(prospect)
+        db.flush()
+        return {
+            "step": "reception_intro",
+            "conversation_id": conversation.id,
+            "outbound_message_id": outbound_message.id,
+            "message_text": "Oi! Tudo bem?",
+            "transport": "whatsapp_web_bridge",
+            "demo_login_url": None,
+        }
+
+    monkeypatch.setattr(sales_demo_service, "generate_demo", _fake_generate_demo)
+    monkeypatch.setattr(sales_demo_service, "start_sales_outreach_automation", _fake_start_sales_outreach_automation)
+
+    created = sales_outreach_automation_service.create_batch(
+        db_session,
+        quantity=1,
+        filters={},
+        actor_id=seeded_db["admin"].id,
+    )
+    processed = sales_outreach_automation_service.process_batch(db_session, batch_id=created["id"])
+
+    item = db_session.scalar(select(SalesOutreachAutomationBatchItem).where(SalesOutreachAutomationBatchItem.prospect_account_id == prospect.id))
+
+    assert created["selected_count"] == 1
+    assert processed["status"] in {"running", "completed"}
+    assert item is not None
+    assert item.demo_generated_automatically is True
+    assert item.status == "waiting_reply"
+    assert item.current_step == "reception_intro"
 
 
 def test_send_sales_outreach_step_raises_when_inline_dispatch_fails(monkeypatch, seeded_db, db_session):
@@ -335,6 +1327,242 @@ def test_sync_prospect_outreach_reply_advances_automation_sequence(monkeypatch, 
     assert any(event.event_type == "prospect.outreach.decision_maker_pitch" for event in timeline)
     assert any(event.event_type == "prospect.outreach.video_followup" for event in timeline)
     assert any(event.event_type == "prospect.outreach.automation_completed" for event in timeline)
+
+
+def test_sync_prospect_outreach_reply_sends_reception_triage_for_reception_reply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Sou da recepção. Posso ajudar.",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outboxes = db_session.execute(
+        select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id).order_by(OutboxMessage.created_at.asc())
+    ).scalars().all()
+    outreach = (prospect.proposal_snapshot or {}).get("outreach", {})
+
+    assert len(outboxes) == 2
+    assert ((outboxes[-1].payload or {}).get("metadata") or {}).get("step") == "reception_triage"
+    assert outreach.get("last_reply_classification") == "recepcao"
+    assert outreach.get("automation_active") is True
+
+
+def test_sync_prospect_outreach_reply_holds_when_clinic_promises_phone_handoff(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Oi, boa noite. Vou te passar o telefone da pessoa responsável.",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outboxes = db_session.execute(
+        select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id).order_by(OutboxMessage.created_at.asc())
+    ).scalars().all()
+    assert len(outboxes) == 2
+    assert ((outboxes[-1].payload or {}).get("metadata") or {}).get("step") == "contact_handoff_ack"
+
+
+def test_sync_prospect_outreach_reply_restarts_with_forwarded_phone_in_text(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+    original_outbox = db_session.scalar(
+        select(OutboxMessage)
+        .where(OutboxMessage.tenant_id == sender_tenant.id)
+        .order_by(OutboxMessage.created_at.asc())
+    )
+    assert original_outbox is not None
+    original_outbox.status = OutboxStatus.FAILED.value
+    original_outbox.next_retry_at = None
+    original_outbox.last_error = "Falha simulada para retry no numero antigo"
+    db_session.add(original_outbox)
+    db_session.flush()
+
+    inbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Oi boa noite, vou te passar o telefone da pessoa responsavel. (11)97649-7909 Lucas",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=inbound_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outboxes = db_session.execute(
+        select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id).order_by(OutboxMessage.created_at.asc())
+    ).scalars().all()
+    outreach = (prospect.proposal_snapshot or {}).get("outreach", {})
+
+    assert len(outboxes) == 2
+    assert outboxes[0].status == OutboxStatus.DEAD_LETTER.value
+    assert (outboxes[0].payload or {}).get("to") == "5511988881111"
+    assert ((outboxes[-1].payload or {}).get("metadata") or {}).get("step") == "reception_intro"
+    assert (outboxes[-1].payload or {}).get("to") == "5511976497909"
+    assert prospect.whatsapp_phone == "5511976497909"
+    assert prospect.owner_name == "Lucas"
+    assert outreach.get("automation_active") is True
+    assert any(
+        ((item.payload or {}).get("metadata") or {}).get("step") == "contact_handoff_ack"
+        for item in outboxes
+    ) is False
+
+
+def test_sync_prospect_outreach_reply_restarts_when_phone_arrives_in_followup_message(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    started = sales_demo_service.start_sales_outreach_automation(
+        db_session,
+        prospect=prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+    conversation = db_session.get(Conversation, started["conversation_id"])
+    original_outbox = db_session.scalar(
+        select(OutboxMessage)
+        .where(OutboxMessage.tenant_id == sender_tenant.id)
+        .order_by(OutboxMessage.created_at.asc())
+    )
+    assert original_outbox is not None
+    original_outbox.status = OutboxStatus.FAILED.value
+    original_outbox.next_retry_at = None
+    db_session.add(original_outbox)
+    db_session.flush()
+
+    handoff_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Oi boa noite, vou te passar o telefone da pessoa responsavel",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(handoff_message)
+    db_session.flush()
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=handoff_message,
+    )
+    db_session.flush()
+
+    forwarded_number_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="(11)97649-7909 Lucas",
+        message_type="text",
+        payload={},
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(forwarded_number_message)
+    db_session.flush()
+
+    sales_demo_service.sync_prospect_outreach_reply(
+        db_session,
+        conversation=conversation,
+        message=forwarded_number_message,
+    )
+    db_session.commit()
+    db_session.refresh(prospect)
+
+    outboxes = db_session.execute(
+        select(OutboxMessage).where(OutboxMessage.tenant_id == sender_tenant.id).order_by(OutboxMessage.created_at.asc())
+    ).scalars().all()
+
+    assert len(outboxes) == 3
+    assert ((outboxes[1].payload or {}).get("metadata") or {}).get("step") == "contact_handoff_ack"
+    assert outboxes[0].status == OutboxStatus.DEAD_LETTER.value
+    assert (outboxes[0].payload or {}).get("to") == "5511988881111"
+    assert ((outboxes[-1].payload or {}).get("metadata") or {}).get("step") == "reception_intro"
+    assert (outboxes[-1].payload or {}).get("to") == "5511976497909"
+    assert prospect.whatsapp_phone == "5511976497909"
+    assert prospect.owner_name == "Lucas"
 
 
 def test_generate_demo_keeps_single_catalog_setting_per_key(monkeypatch, seeded_db, db_session):

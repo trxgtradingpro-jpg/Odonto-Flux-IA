@@ -22,3 +22,14 @@ apps/web/playwright/.auth/
 *.log
 storage/
 postgres-data/
+chrome_profile/
+apps/api/celerybeat-schedule
+message_history.json
+sent_messages_history.json
+unopened_messages.json
+whatsapp_bridge.lock
+whatsapp_bridge_state.json
+message_capture_debug_*
+phone_capture_debug_*
+tmp_*.html
+*.code-workspace

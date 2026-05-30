@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clinicflux.ai/schemas/outreach/lead-profile.schema.json",
+  "title": "ClinicFlux AI Outreach Lead Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lead_id",
+    "clinic_name",
+    "source",
+    "first_contact_date",
+    "last_contact_date",
+    "current_stage",
+    "lead_temperature",
+    "responsible_person",
+    "detected_personas",
+    "known_objections",
+    "preferred_angle",
+    "do_not_repeat",
+    "next_best_action",
+    "notes"
+  ],
+  "properties": {
+    "lead_id": { "type": "string", "minLength": 1 },
+    "clinic_name": { "type": "string", "minLength": 1 },
+    "source": { "type": "string" },
+    "first_contact_date": { "type": ["string", "null"], "format": "date-time" },
+    "last_contact_date": { "type": ["string", "null"], "format": "date-time" },
+    "current_stage": {
+      "type": "string",
+      "enum": [
+        "researched",
+        "first_message",
+        "replied",
+        "responsible_identified",
+        "demo_sent",
+        "demo_clicked",
+        "whatsapp_tested",
+        "meeting_booked",
+        "proposal_sent",
+        "closed_sale",
+        "lost"
+      ]
+    },
+    "lead_temperature": { "type": "string", "enum": ["cold", "warm", "hot", "very_hot", "lost", "unknown"] },
+    "responsible_person": { "type": ["string", "null"] },
+    "detected_personas": { "type": "array", "items": { "type": "string" } },
+    "known_objections": { "type": "array", "items": { "type": "string" } },
+    "preferred_angle": { "type": "string" },
+    "do_not_repeat": { "type": "array", "items": { "type": "string" } },
+    "next_best_action": { "type": "string" },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "week_start": "2026-05-25",
+  "week_end": "2026-05-29",
+  "analysis_mode": "elite_300",
+  "token_efficiency_mode": "elite_300",
+  "token_budget_level": "high",
+  "should_use_elite_mode": true,
+  "elite_mode_reason": "weekly_report_uses_aggregated_campaign_analysis",
+  "estimated_token_cost_level": "high",
+  "data_loading_strategy": "aggregated_summary",
+  "large_context_allowed": true,
+  "total_leads_contacted": 1,
+  "reply_rate": 1.0,
+  "demo_click_rate": 0.0,
+  "whatsapp_test_rate": 0.0,
+  "meeting_rate": 0.0,
+  "close_rate": 0.0,
+  "best_opening": "google_no_website_v1",
+  "worst_opening": "google_no_website_v1",
+  "best_lead_type": "website_seo:none",
+  "worst_lead_type": "website_seo:none",
+  "top_objections": [
+    {
+      "name": "source",
+      "count": 1
+    }
+  ],
+  "lost_reasons": [],
+  "recommended_next_strategy": "Testar respostas mais diretas para pergunta de fonte antes de pedir o responsavel.",
+  "stop_doing": [
+    "Nao repetir a abertura original depois que a clinica pergunta a fonte"
+  ],
+  "continue_doing": [
+    "Usar identidade comercial clara",
+    "Usar contexto de Google Places sem julgamento"
+  ],
+  "test_next": [
+    "Comparar abertura com pergunta de responsavel versus permissao para enviar resumo curto"
+  ],
+  "generated_at": "2026-05-29T12:10:00Z"
+}

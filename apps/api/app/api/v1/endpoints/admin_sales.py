@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,14 +16,18 @@ from app.models import (
     DemoActivityEvent,
     Lead,
     Message,
+    OutboxMessage,
     Patient,
     ProspectAccount,
     ProspectNote,
     ProspectService,
     ProspectTimelineEvent,
     ProspectUnit,
+    Tenant,
 )
+from app.models.enums import OutboxStatus
 from app.schemas.admin_sales import (
+    AdminOutreachRuntimeOutput,
     AdminAffiliateListOutput,
     AdminAffiliateRegisterInput,
     AdminAffiliateUpdateInput,
@@ -70,16 +75,68 @@ from app.schemas.admin_sales import (
     SalesClinicMessageListOutput,
     SalesClinicMessagePreviewInput,
     SalesClinicMessagePreviewOutput,
+    SalesOutreachAutomationBatchListOutput,
+    SalesOutreachAutomationBatchOutput,
+    SalesOutreachAutomationBatchStartInput,
+    SalesOutreachAutomationEligibilityOutput,
+    SalesOutreachFlowConfigInput,
+    SalesOutreachFlowConfigOutput,
     SalesMessageTemplateInput,
     SalesMessageTemplateOutput,
 )
 from app.services import sales_demo_service as sales
 from app.services import google_places_service
+from app.services import sales_outreach_automation_service as outreach_automation
 from app.services import sales_message_service as sales_messages
+from app.services.ai_autoresponder_service import get_global_config as get_ai_agent_config
+from app.services.ai_autoresponder_service import get_platform_global_config as get_ai_agent_platform_config
+from app.services.ai_autoresponder_service import set_global_config as set_ai_agent_config
+from app.services.ai_autoresponder_service import set_platform_global_config as set_ai_agent_platform_config
+from app.services.audit_service import record_audit
+from app.services.whatsapp_bridge_support import WHATSAPP_WEB_BRIDGE_TRANSPORT, payload_uses_whatsapp_web_bridge, resolve_sales_outreach_transport
 
 router = APIRouter(tags=["admin_sales"])
 
 _login_attempts: dict[str, list[datetime]] = {}
+
+
+class AdminWhatsAppTestContactInput(BaseModel):
+    prospect_id: UUID
+
+
+class AdminWhatsAppSimulatedInboundInput(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class AdminAgentSettingsInput(BaseModel):
+    tenant_id: UUID | None = None
+    scope: str | None = None
+    config: dict = Field(default_factory=dict)
+
+
+def _serialize_sales_outreach_flow_config(raw_config: dict) -> dict:
+    classifications = []
+    rules = raw_config.get("classification_rules") if isinstance(raw_config.get("classification_rules"), dict) else {}
+    class_to_step = raw_config.get("class_to_step") if isinstance(raw_config.get("class_to_step"), dict) else {}
+    for class_name, config in rules.items():
+        classifications.append(
+            {
+                "class_name": class_name,
+                "priority": int(config.get("priority") or 0),
+                "keywords": list(config.get("keywords") or []),
+                "next_step": class_to_step.get(class_name),
+            }
+        )
+    classifications.sort(key=lambda item: (-item["priority"], item["class_name"]))
+    return {
+        "initial_messages": list(raw_config.get("initial_messages") or []),
+        "step_messages": {
+            key: list(value) if isinstance(value, list) else [str(value).strip()]
+            for key, value in dict(raw_config.get("step_messages") or {}).items()
+            if (isinstance(value, list) and value) or str(value).strip()
+        },
+        "classifications": classifications,
+    }
 
 
 def _client_key(request: Request, email: str) -> str:
@@ -175,6 +232,8 @@ def _serialize_admin_whatsapp_conversation(
     source: str,
 ) -> dict:
     contact = _conversation_contact(db, conversation)
+    tags = conversation.tags or []
+    internal_simulation = sales.ADM_INTERNAL_WHATSAPP_SIMULATION_TAG in tags
     latest_message = db.scalar(
         select(Message)
         .where(Message.tenant_id == conversation.tenant_id, Message.conversation_id == conversation.id)
@@ -201,13 +260,18 @@ def _serialize_admin_whatsapp_conversation(
         "prospect_id": str(prospect.id),
         "prospect_name": prospect.clinic_name,
         "demo_tenant_id": str(prospect.demo_tenant_id) if prospect.demo_tenant_id else None,
-        "contact_name": contact["name"] or prospect.owner_name or prospect.manager_name or prospect.clinic_name,
-        "contact_phone": contact["phone"] or prospect.whatsapp_phone or prospect.phone,
+        "contact_name": (
+            f"Simulador interno - {prospect.clinic_name}"
+            if internal_simulation
+            else contact["name"] or prospect.owner_name or prospect.manager_name or prospect.clinic_name
+        ),
+        "contact_phone": None if internal_simulation else contact["phone"] or prospect.whatsapp_phone or prospect.phone,
         "patient_id": str(conversation.patient_id) if conversation.patient_id else None,
         "lead_id": str(conversation.lead_id) if conversation.lead_id else None,
         "channel": conversation.channel,
         "status": conversation.status,
-        "tags": conversation.tags or [],
+        "tags": tags,
+        "internal_simulation": internal_simulation,
         "ai_summary": conversation.ai_summary,
         "ai_autoresponder_enabled": conversation.ai_autoresponder_enabled,
         "last_message_at": conversation.last_message_at,
@@ -237,6 +301,48 @@ def _resolve_admin_whatsapp_conversation(db: Session, conversation_id: UUID) -> 
                 return prospect, conversation, "comercial"
 
     raise ApiError(status_code=404, code="ADM_WHATSAPP_CONVERSATION_NOT_FOUND", message="Conversa nao vinculada a um prospect do /adm")
+
+
+def _resolve_agent_settings_tenant(db: Session, *, principal, tenant_id: UUID | None) -> Tenant:
+    target_tenant_id = principal.tenant_id or tenant_id
+    if not target_tenant_id:
+        raise ApiError(
+            status_code=422,
+            code="ADM_AGENT_SETTINGS_TENANT_REQUIRED",
+            message="Selecione uma clinica para configurar o agente.",
+        )
+    if principal.tenant_id and tenant_id and tenant_id != principal.tenant_id and "admin_platform" not in set(principal.roles):
+        raise ApiError(
+            status_code=403,
+            code="ADM_AGENT_SETTINGS_TENANT_FORBIDDEN",
+            message="Seu usuario nao pode alterar configuracoes de outro tenant.",
+        )
+    tenant = db.get(Tenant, target_tenant_id)
+    if not tenant:
+        raise ApiError(status_code=404, code="TENANT_NOT_FOUND", message="Clinica nao encontrada.")
+    return tenant
+
+
+def _serialize_agent_settings_tenant(tenant: Tenant) -> dict:
+    return {
+        "id": str(tenant.id),
+        "name": tenant.trade_name or tenant.legal_name,
+        "slug": tenant.slug,
+        "subscription_status": tenant.subscription_status,
+    }
+
+
+def _is_platform_scope_requested(*, principal, scope: str | None) -> bool:
+    normalized = str(scope or "").strip().lower()
+    if normalized != "platform":
+        return False
+    if "admin_platform" not in set(principal.roles):
+        raise ApiError(
+            status_code=403,
+            code="ADM_AGENT_SETTINGS_PLATFORM_FORBIDDEN",
+            message="Somente admin da plataforma pode alterar o padrao global do sistema.",
+        )
+    return True
 
 
 @router.post("/admin/auth/login", response_model=AdminLoginOutput)
@@ -274,6 +380,129 @@ def list_affiliates(principal=Depends(get_current_principal), db: Session = Depe
     sales.require_adm_page_permission(principal, "adm_affiliates", "view")
     data = sales.list_adm_affiliates(db)
     return {"data": data, "total": len(data)}
+
+
+@router.get("/admin/agent-settings/tenants")
+def list_agent_settings_tenants(
+    search: str | None = Query(default=None, max_length=80),
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_agent_settings", "view")
+    if principal.tenant_id:
+        tenant = db.get(Tenant, principal.tenant_id)
+        return {"data": [_serialize_agent_settings_tenant(tenant)] if tenant else []}
+
+    filters = []
+    if search:
+        pattern = f"%{search.strip()}%"
+        filters.append((Tenant.trade_name.ilike(pattern)) | (Tenant.legal_name.ilike(pattern)) | (Tenant.slug.ilike(pattern)))
+    query = select(Tenant).order_by(Tenant.trade_name.asc(), Tenant.legal_name.asc()).limit(200)
+    if filters:
+        query = query.where(*filters)
+    rows = db.execute(query).scalars().all()
+    return {"data": [_serialize_agent_settings_tenant(row) for row in rows]}
+
+
+@router.get("/admin/agent-settings")
+def get_agent_settings(
+    tenant_id: UUID | None = Query(default=None),
+    scope: str | None = Query(default=None),
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_agent_settings", "view")
+    if _is_platform_scope_requested(principal=principal, scope=scope):
+        return {
+            "scope": "platform",
+            "tenant": None,
+            "config": get_ai_agent_platform_config(db),
+            "model_options": [
+                {"value": "", "label": "Padrao do ambiente"},
+                {"value": "gpt-4.1-mini", "label": "gpt-4.1-mini"},
+                {"value": "gpt-4.1", "label": "gpt-4.1"},
+                {"value": "gpt-4o-mini", "label": "gpt-4o-mini"},
+                {"value": "gpt-4o", "label": "gpt-4o"},
+            ],
+        }
+    tenant = _resolve_agent_settings_tenant(db, principal=principal, tenant_id=tenant_id)
+    return {
+        "scope": "tenant",
+        "tenant": _serialize_agent_settings_tenant(tenant),
+        "config": get_ai_agent_config(db, tenant_id=tenant.id),
+        "model_options": [
+            {"value": "", "label": "Padrao do ambiente"},
+            {"value": "gpt-4.1-mini", "label": "gpt-4.1-mini"},
+            {"value": "gpt-4.1", "label": "gpt-4.1"},
+            {"value": "gpt-4o-mini", "label": "gpt-4o-mini"},
+            {"value": "gpt-4o", "label": "gpt-4o"},
+        ],
+    }
+
+
+@router.put("/admin/agent-settings")
+def update_agent_settings(
+    payload: AdminAgentSettingsInput,
+    tenant_id: UUID | None = Query(default=None),
+    scope: str | None = Query(default=None),
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_agent_settings", "edit")
+    requested_scope = payload.scope or scope
+    if _is_platform_scope_requested(principal=principal, scope=requested_scope):
+        config = set_ai_agent_platform_config(db, payload=payload.config)
+        record_audit(
+            db,
+            action="admin.agent_settings.update",
+            entity_type="platform_agent_settings",
+            entity_id="platform.ai_autoresponder.global",
+            tenant_id=None,
+            user_id=principal.user.id,
+            metadata={
+                "scope": "platform",
+                "conversation_flow_mode": config.get("conversation_flow_mode"),
+                "structured_flow_enabled": config.get("structured_flow_enabled"),
+                "llm_model": config.get("llm_model"),
+                "pre_send_review_enabled": config.get("pre_send_review_enabled"),
+                "repetition_guard_enabled": config.get("repetition_guard_enabled"),
+                "conversation_memory_enabled": config.get("conversation_memory_enabled"),
+                "auto_save_patient_data_enabled": config.get("auto_save_patient_data_enabled"),
+            },
+        )
+        return {
+            "scope": "platform",
+            "tenant": None,
+            "config": config,
+        }
+    tenant = _resolve_agent_settings_tenant(
+        db,
+        principal=principal,
+        tenant_id=payload.tenant_id or tenant_id,
+    )
+    config = set_ai_agent_config(db, tenant_id=tenant.id, payload=payload.config)
+    record_audit(
+        db,
+        action="admin.agent_settings.update",
+        entity_type="tenant",
+        entity_id=str(tenant.id),
+        tenant_id=tenant.id,
+        user_id=principal.user.id,
+        metadata={
+            "conversation_flow_mode": config.get("conversation_flow_mode"),
+            "structured_flow_enabled": config.get("structured_flow_enabled"),
+            "llm_model": config.get("llm_model"),
+            "pre_send_review_enabled": config.get("pre_send_review_enabled"),
+            "repetition_guard_enabled": config.get("repetition_guard_enabled"),
+            "conversation_memory_enabled": config.get("conversation_memory_enabled"),
+            "auto_save_patient_data_enabled": config.get("auto_save_patient_data_enabled"),
+        },
+    )
+    return {
+        "scope": "tenant",
+        "tenant": _serialize_agent_settings_tenant(tenant),
+        "config": config,
+    }
 
 
 @router.patch("/admin/affiliates/{user_id}", response_model=AdminSessionOutput)
@@ -347,14 +576,15 @@ def list_admin_whatsapp_conversations(
             select(Conversation)
             .where(
                 Conversation.tenant_id.in_(tuple(prospect_by_demo_tenant.keys())),
-                Conversation.channel == "whatsapp",
+                Conversation.channel.in_(["whatsapp", "webchat"]),
             )
             .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
         ).scalars().all()
         for conversation in demo_conversations:
             prospect = prospect_by_demo_tenant.get(conversation.tenant_id)
             if prospect:
-                items.append(_serialize_admin_whatsapp_conversation(db, prospect=prospect, conversation=conversation, source="demo"))
+                source = "demo_webchat" if conversation.channel == "webchat" else "demo"
+                items.append(_serialize_admin_whatsapp_conversation(db, prospect=prospect, conversation=conversation, source=source))
 
     sender_tenant = sales.ensure_sales_outreach_sender_tenant(db)
     outreach_conversations = db.execute(
@@ -447,10 +677,228 @@ def list_admin_whatsapp_messages(
     }
 
 
+@router.post("/admin/whatsapp/conversations/{conversation_id}/simulate-inbound")
+def simulate_admin_whatsapp_inbound(
+    conversation_id: UUID,
+    payload: AdminWhatsAppSimulatedInboundInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
+    prospect, conversation, source = _resolve_admin_whatsapp_conversation(db, conversation_id)
+    if source != "comercial" or sales.ADM_INTERNAL_WHATSAPP_SIMULATION_TAG not in (conversation.tags or []):
+        raise ApiError(
+            status_code=400,
+            code="ADM_INTERNAL_SIMULATION_REQUIRED",
+            message="Abra o simulador interno comercial antes de enviar uma resposta simulada da clinica.",
+        )
+
+    result = sales.simulate_admin_internal_whatsapp_inbound(
+        db,
+        prospect=prospect,
+        conversation=conversation,
+        body=payload.body,
+        actor_id=principal.user.id,
+    )
+    inbound = result["inbound_message"]
+    outbound = result["outbound_message"]
+
+    def serialize_message(message: Message) -> dict:
+        return {
+            "id": str(message.id),
+            "tenant_id": str(message.tenant_id),
+            "conversation_id": str(message.conversation_id),
+            "direction": message.direction,
+            "provider_message_id": message.provider_message_id,
+            "status": message.status,
+            "body": message.body,
+            "message_type": message.message_type,
+            "sender_type": message.sender_type,
+            "payload": message.payload or {},
+            "sent_at": message.sent_at,
+            "delivered_at": message.delivered_at,
+            "read_at": message.read_at,
+            "created_at": message.created_at,
+        }
+
+    return {
+        "conversation_id": str(conversation.id),
+        "prospect_id": str(prospect.id),
+        "source": source,
+        "internal_simulation": True,
+        "reply_classification": result.get("reply_classification"),
+        "step": result.get("step"),
+        "inbound_message": serialize_message(inbound),
+        "outbound_message": serialize_message(outbound),
+        "conversation": _serialize_admin_whatsapp_conversation(db, prospect=prospect, conversation=conversation, source=source),
+    }
+
+
+@router.post("/admin/whatsapp/test-contact")
+def ensure_admin_whatsapp_test_contact(
+    payload: AdminWhatsAppTestContactInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
+    prospect = db.get(ProspectAccount, payload.prospect_id)
+    if not prospect:
+        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado.")
+    conversation = sales.ensure_admin_whatsapp_test_contact(db, prospect=prospect)
+    return {
+        "conversation_id": str(conversation.id),
+        "prospect_id": str(prospect.id),
+        "prospect_name": prospect.clinic_name,
+        "contact_name": f"Simulador interno - {prospect.clinic_name}",
+        "contact_phone": None,
+        "source": "comercial",
+        "test_contact": True,
+        "internal_simulation": True,
+    }
+
+
 @router.get("/admin/prospects/overview", response_model=ProspectOverviewOutput)
 def prospects_overview(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
     return sales.overview(db)
+
+
+@router.get("/admin/outreach/runtime", response_model=AdminOutreachRuntimeOutput)
+def outreach_runtime(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+
+    transport = resolve_sales_outreach_transport()
+    sender_tenant = sales.ensure_sales_outreach_sender_tenant(db)
+    bridge_pending = 0
+    bridge_processing = 0
+    bridge_failed = 0
+    bridge_dead_letter = 0
+
+    if transport == WHATSAPP_WEB_BRIDGE_TRANSPORT:
+        outboxes = db.execute(
+            select(OutboxMessage)
+            .where(OutboxMessage.tenant_id == sender_tenant.id)
+            .order_by(OutboxMessage.created_at.desc())
+            .limit(400)
+        ).scalars().all()
+        for item in outboxes:
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            if not payload_uses_whatsapp_web_bridge(payload):
+                continue
+            status = str(item.status or "").strip()
+            if status == OutboxStatus.PENDING.value:
+                bridge_pending += 1
+            elif status == OutboxStatus.PROCESSING.value:
+                bridge_processing += 1
+            elif status == OutboxStatus.FAILED.value:
+                bridge_failed += 1
+            elif status == OutboxStatus.DEAD_LETTER.value:
+                bridge_dead_letter += 1
+
+    return {
+        "transport": transport,
+        "sender_tenant_slug": sender_tenant.slug,
+        "bridge_enabled": transport == WHATSAPP_WEB_BRIDGE_TRANSPORT,
+        "bridge_configured": bool(str(settings.whatsapp_web_bridge_token or "").strip()),
+        "bridge_pending": bridge_pending,
+        "bridge_processing": bridge_processing,
+        "bridge_failed": bridge_failed,
+        "bridge_dead_letter": bridge_dead_letter,
+        "bridge_command": "python apps/msg/whatsapp_web.py bridge" if transport == WHATSAPP_WEB_BRIDGE_TRANSPORT else None,
+    }
+
+
+@router.get("/admin/outreach/automation/eligible", response_model=SalesOutreachAutomationEligibilityOutput)
+def outreach_automation_eligible(
+    quantity: int = 20,
+    status: str | None = None,
+    temperature: str | None = None,
+    demo_status: str | None = None,
+    q: str | None = None,
+    only_without_demo: bool = False,
+    only_with_demo: bool = False,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "view")
+    return outreach_automation.eligible_summary(
+        db,
+        filters={
+            "status": status,
+            "temperature": temperature,
+            "demo_status": demo_status,
+            "q": q,
+            "only_without_demo": only_without_demo,
+            "only_with_demo": only_with_demo,
+        },
+        limit=min(max(quantity, 1), 50),
+    )
+
+
+@router.get("/admin/outreach/automation/batches", response_model=SalesOutreachAutomationBatchListOutput)
+def list_outreach_automation_batches(
+    limit: int = 20,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "view")
+    return outreach_automation.list_batches(db, limit=min(max(limit, 1), 100))
+
+
+@router.get("/admin/outreach/automation/batches/{batch_id}", response_model=SalesOutreachAutomationBatchOutput)
+def get_outreach_automation_batch(
+    batch_id: UUID,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "view")
+    return outreach_automation.get_batch(db, batch_id)
+
+
+@router.post("/admin/outreach/automation/batches", response_model=SalesOutreachAutomationBatchOutput)
+def create_outreach_automation_batch(
+    payload: SalesOutreachAutomationBatchStartInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "create")
+    return outreach_automation.create_batch(
+        db,
+        quantity=payload.quantity,
+        filters=payload.model_dump(exclude={"quantity"}),
+        actor_id=principal.user.id,
+    )
+
+
+@router.post("/admin/outreach/automation/batches/{batch_id}/pause", response_model=SalesOutreachAutomationBatchOutput)
+def pause_outreach_automation_batch(
+    batch_id: UUID,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "edit")
+    return outreach_automation.pause_batch(db, batch_id=batch_id)
+
+
+@router.post("/admin/outreach/automation/batches/{batch_id}/resume", response_model=SalesOutreachAutomationBatchOutput)
+def resume_outreach_automation_batch(
+    batch_id: UUID,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "edit")
+    return outreach_automation.resume_batch(db, batch_id=batch_id)
+
+
+@router.delete("/admin/outreach/automation/batches/{batch_id}", status_code=204)
+def delete_outreach_automation_batch(
+    batch_id: UUID,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "delete")
+    outreach_automation.delete_batch(db, batch_id=batch_id)
+    return Response(status_code=204)
 
 
 @router.get("/admin/prospects", response_model=ProspectListOutput)
@@ -506,6 +954,40 @@ def list_clinic_message_templates(
 ):
     sales.require_adm_page_permission(principal, "adm_messages", "view")
     return sales_messages.list_sales_message_templates(db)
+
+
+@router.get("/admin/outreach/flow", response_model=SalesOutreachFlowConfigOutput)
+def get_sales_outreach_flow(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_messages", "view")
+    return _serialize_sales_outreach_flow_config(sales.get_sales_outreach_flow_config(db))
+
+
+@router.put("/admin/outreach/flow", response_model=SalesOutreachFlowConfigOutput)
+def update_sales_outreach_flow(
+    payload: SalesOutreachFlowConfigInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_messages", "edit")
+    config_payload = payload.model_dump()
+    classifications = config_payload.pop("classifications", [])
+    config_payload["classification_rules"] = {
+        item["class_name"]: {
+            "priority": int(item.get("priority") or 0),
+            "keywords": list(item.get("keywords") or []),
+        }
+        for item in classifications
+    }
+    config_payload["class_to_step"] = {
+        item["class_name"]: str(item.get("next_step") or "").strip()
+        for item in classifications
+        if str(item.get("next_step") or "").strip()
+    }
+    saved = sales.save_sales_outreach_flow_config(db, config_payload)
+    return _serialize_sales_outreach_flow_config(saved)
 
 
 @router.post("/admin/clinic-messages/templates", response_model=SalesMessageTemplateOutput)

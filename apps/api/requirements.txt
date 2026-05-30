@@ -23,3 +23,4 @@ pytest-asyncio==0.24.0
 faker==33.1.0
 factory-boy==3.3.1
 ruff==0.8.2
+selenium==4.31.0
