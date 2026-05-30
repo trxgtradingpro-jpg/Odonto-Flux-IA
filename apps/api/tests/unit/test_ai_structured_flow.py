@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, select, text
 
 from app.db.base import Base
-from app.models import AIAutoresponderDecision, Conversation, Lead, Message, OutboxMessage, Patient, Professional, Setting, Unit, WhatsAppAccount
+from app.models import AIAutoresponderDecision, Appointment, Conversation, Lead, Message, OutboxMessage, Patient, Professional, Setting, Unit, WhatsAppAccount
 from app.services.ai_autoresponder_service import process_inbound_message
 from app.services.ai_structured_flow import (
     AiDecisionOutput,
@@ -2251,3 +2251,259 @@ def test_process_inbound_message_offers_dates_before_times_when_no_date_selected
     assert outbound is not None
     assert "datas disponiveis" in outbound.body.lower()
     assert "Ã" not in outbound.body
+
+
+def test_process_inbound_message_recovers_typo_time_selection_from_recent_offers(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(db_session, tenant_id=tenant_id, key="ai_autoresponder.global", value=_structured_config())
+    target_date = _next_python_weekday(2)
+    unit, professional = _create_schedule_unit_and_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_name="Unidade principal",
+        professional_name="Dr. Rafael Campos",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    _patient, _lead, conversation, previous_inbound = _conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="quero para o dia 03",
+    )
+    conversation.unit_id = unit.id
+    db_session.add(conversation)
+    db_session.commit()
+    _seed_previous_availability_decision(
+        db_session,
+        tenant_id=tenant_id,
+        conversation=conversation,
+        inbound_message=previous_inbound,
+        unit=unit,
+        professional=professional,
+        target_date=target_date,
+        offered_times=["08:00", "08:30", "09:00"],
+    )
+    inbound = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body="Eu quera as 09",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add(inbound)
+    db_session.commit()
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        if task == "auto_responder_structured_extract":
+            return {
+                "output": json.dumps(_decision_payload(intent="outro", message_summary="Texto com erro de digitacao."), ensure_ascii=False),
+                "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+            }
+        return {
+            "output": json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "message": "Separei esse horario. Qual e o seu nome completo?",
+                    "message_type": "text",
+                    "interactive_payload": None,
+                    "confidence": 0.9,
+                    "final_decision": "reply",
+                    "decision_reason": "slot_validated",
+                },
+                ensure_ascii=False,
+            ),
+            "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+        }
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+
+    result = process_inbound_message(db_session, tenant_id=tenant_id, conversation_id=conversation.id, inbound_message_id=inbound.id)
+
+    selected_utc = datetime.combine(target_date, datetime.strptime("09:00", "%H:%M").time(), ZoneInfo("America/Sao_Paulo")).astimezone(UTC)
+    decision = db_session.scalar(select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{inbound.id}"))
+    assert result["status"] == "responded"
+    assert decision.metadata_json["decision"]["intent"] == "selecionar_horario"
+    assert decision.metadata_json["decision"]["extracted_data"]["selected_datetime"] == selected_utc.isoformat()
+    assert decision.metadata_json["system_action_result"]["status"] == "available"
+
+
+def test_process_inbound_message_keeps_slot_context_after_patient_name(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(db_session, tenant_id=tenant_id, key="ai_autoresponder.global", value=_structured_config())
+    target_date = _next_python_weekday(2)
+    unit, professional = _create_schedule_unit_and_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_name="Unidade principal",
+        professional_name="Dr. Rafael Campos",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    patient, _lead, conversation, _seed_inbound = _conversation_with_inbound(
+        db_session,
+        tenant_id=tenant_id,
+        inbound_text="quero as 09",
+    )
+    patient.full_name = "Paciente do agendamento"
+    patient.phone = "5511999991111"
+    patient.normalized_phone = "5511999991111"
+    selected_utc = datetime.combine(target_date, datetime.strptime("09:00", "%H:%M").time(), ZoneInfo("America/Sao_Paulo")).astimezone(UTC)
+    conversation.unit_id = unit.id
+    conversation.ai_state = {
+        "schema_version": "elite-agent-state-v1",
+        "booking": {
+            "slot_id": f"slot:{selected_utc.isoformat()}",
+            "horario_escolhido": selected_utc.isoformat(),
+            "unidade_id": str(unit.id),
+            "unidade_nome": unit.name,
+            "procedimento": "Avaliacao odontologica",
+            "profissional_id": str(professional.id),
+            "slot_validado": True,
+        },
+    }
+    db_session.add_all([patient, conversation])
+    db_session.flush()
+    outbound_prompt = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Perfeito, ja aproveitei os dados que voce passou. Para avancar com seguranca, ainda preciso confirmar seu nome completo.",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    inbound = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body="Guilherme Gomes",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add_all([outbound_prompt, inbound])
+    db_session.commit()
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        payload = _availability_decision_payload(target_date=_next_python_weekday(0), unit_name=unit.name)
+        payload["intent"] = "informar_dados_pessoais"
+        payload["extracted_data"]["patient_name"] = "Guilherme Gomes"
+        return {"output": json.dumps(payload, ensure_ascii=False), "metadata": {"provider": "test", "task": task, "latency_ms": 1}}
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+
+    result = process_inbound_message(db_session, tenant_id=tenant_id, conversation_id=conversation.id, inbound_message_id=inbound.id)
+
+    decision = db_session.scalar(select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{inbound.id}"))
+    latest_outbound = db_session.scalar(
+        select(Message).where(Message.conversation_id == conversation.id, Message.direction == "outbound").order_by(Message.created_at.desc())
+    )
+    assert result["status"] == "responded"
+    assert decision.metadata_json["system_action_result"]["action"] == "none"
+    assert decision.metadata_json["decision"]["extracted_data"]["selected_datetime"] == selected_utc.isoformat()
+    assert "WhatsApp" in latest_outbound.body
+    assert "01/06" not in latest_outbound.body
+
+
+def test_process_inbound_message_confirms_slot_after_phone_confirmation(monkeypatch, seeded_db, db_session):
+    from app.services import ai_structured_flow
+
+    tenant_id = seeded_db["tenant_a"].id
+    _ensure_valid_whatsapp_account(db_session, tenant_id=tenant_id)
+    _upsert_setting(db_session, tenant_id=tenant_id, key="ai_autoresponder.global", value=_structured_config())
+    target_date = _next_python_weekday(2)
+    unit, professional = _create_schedule_unit_and_professional(
+        db_session,
+        tenant_id=tenant_id,
+        unit_name="Unidade principal",
+        professional_name="Dr. Rafael Campos",
+        working_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    patient, _lead, conversation, _seed_inbound = _conversation_with_inbound(db_session, tenant_id=tenant_id, inbound_text="ok")
+    patient.full_name = "Guilherme Gomes"
+    selected_utc = datetime.combine(target_date, datetime.strptime("09:00", "%H:%M").time(), ZoneInfo("America/Sao_Paulo")).astimezone(UTC)
+    conversation.unit_id = unit.id
+    conversation.ai_state = {
+        "schema_version": "elite-agent-state-v1",
+        "booking": {
+            "slot_id": f"slot:{selected_utc.isoformat()}",
+            "horario_escolhido": selected_utc.isoformat(),
+            "unidade_id": str(unit.id),
+            "unidade_nome": unit.name,
+            "procedimento": "Avaliacao odontologica",
+            "profissional_id": str(professional.id),
+            "slot_validado": True,
+        },
+    }
+    db_session.add_all([patient, conversation])
+    db_session.flush()
+    outbound_prompt = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="outbound",
+        channel="whatsapp",
+        sender_type="ai",
+        body="Perfeito, Guilherme. Esse WhatsApp e o melhor numero para confirmacao?",
+        message_type="text",
+        payload={},
+        status="sent",
+    )
+    inbound = Message(
+        tenant_id=tenant_id,
+        conversation_id=conversation.id,
+        direction="inbound",
+        channel="whatsapp",
+        sender_type="patient",
+        body="sim",
+        message_type="text",
+        payload={},
+        status="received",
+    )
+    db_session.add_all([outbound_prompt, inbound])
+    db_session.commit()
+
+    def _fake_run_llm_task(db, *, tenant_id, conversation_id, task, prompt):
+        if task == "auto_responder_structured_extract":
+            return {
+                "output": json.dumps(_availability_decision_payload(target_date=_next_python_weekday(0), unit_name=unit.name), ensure_ascii=False),
+                "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+            }
+        return {
+            "output": json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "message": "Pronto, seu agendamento ficou confirmado.",
+                    "message_type": "text",
+                    "interactive_payload": None,
+                    "confidence": 0.92,
+                    "final_decision": "reply",
+                    "decision_reason": "appointment_confirmed",
+                },
+                ensure_ascii=False,
+            ),
+            "metadata": {"provider": "test", "task": task, "latency_ms": 1},
+        }
+
+    monkeypatch.setattr(ai_structured_flow, "run_llm_task", _fake_run_llm_task)
+
+    result = process_inbound_message(db_session, tenant_id=tenant_id, conversation_id=conversation.id, inbound_message_id=inbound.id)
+
+    decision = db_session.scalar(select(AIAutoresponderDecision).where(AIAutoresponderDecision.dedupe_key == f"inbound:{inbound.id}"))
+    appointment = db_session.scalar(select(Appointment).where(Appointment.conversation_id == conversation.id) if hasattr(Appointment, "conversation_id") else select(Appointment).where(Appointment.patient_id == patient.id))
+    assert result["status"] == "responded"
+    assert decision.metadata_json["system_action_result"]["action"] == "confirm_appointment"
+    assert decision.metadata_json["system_action_result"]["status"] == "created"
+    assert appointment is not None
+    assert appointment.starts_at == selected_utc

@@ -2775,6 +2775,29 @@ def _fallback_patient_reply(
             final_decision="ask_clarification",
             decision_reason="slot_not_available",
         )
+    if action == "confirm_appointment":
+        status = str(system_action_result.get("status") or "")
+        if status in {"created", "already_exists", "duplicate"}:
+            label = _slot_label_from_result(system_action_result, context=context)
+            message = f"Pronto, seu agendamento ficou confirmado para {label}."
+            return PatientReplyOutput(
+                schema_version=STRUCTURED_FLOW_SCHEMA_VERSION,
+                message=message,
+                message_type="text",
+                interactive_payload=None,
+                confidence=0.9,
+                final_decision="reply",
+                decision_reason="appointment_confirmed",
+            )
+        return PatientReplyOutput(
+            schema_version=STRUCTURED_FLOW_SCHEMA_VERSION,
+            message="Ainda não consegui confirmar esse horário com segurança. Vou verificar outras opções para você.",
+            message_type="text",
+            interactive_payload=None,
+            confidence=0.76,
+            final_decision="ask_clarification",
+            decision_reason="appointment_confirmation_failed",
+        )
     if decision.reply_control.suggested_next_question:
         message = decision.reply_control.suggested_next_question
     elif decision.intent == "urgencia":
@@ -3430,6 +3453,7 @@ def _can_replace_value(current: Any, new_value: Any, *, source_text: str | None)
         return True
     if (
         current_text.startswith("contato whatsapp ")
+        or current_text in {"paciente", "paciente do agendamento", "paciente webchat", "novo paciente"}
         or current_text.startswith("paciente teste ")
         or current_text.startswith("paciente ia lab")
         or current_text.startswith("lead ia lab")
@@ -4021,20 +4045,73 @@ def _resolve_slot_datetime(params: dict[str, Any], decision: AiDecisionOutput) -
 
 
 def _pending_slot_confirmation_request(context: AiConversationContext) -> dict[str, bool] | None:
+    has_pending_slot = _booking_state_has_selected_slot(context)
     for recent_message in reversed(context.conversation_context.recent_messages):
         if recent_message.direction != "outbound":
             continue
         normalized = _normalized_reply_guardrail_text(recent_message.body)
-        if "separei" not in normalized and "horario" not in normalized:
-            continue
         asked_name = "nome completo" in normalized or "seu nome" in normalized
         asked_phone = "whatsapp" in normalized or "telefone" in normalized or "numero para confirmacao" in normalized
+        if not asked_name and not asked_phone:
+            continue
+        if not has_pending_slot and "separei" not in normalized and "horario" not in normalized:
+            continue
         if asked_name or asked_phone:
             return {
                 "asked_name": asked_name,
                 "asked_phone": asked_phone,
             }
     return None
+
+
+def _booking_state_has_selected_slot(context: AiConversationContext) -> bool:
+    booking = context.conversation_memory.booking_state if isinstance(context.conversation_memory.booking_state, dict) else {}
+    return bool(
+        _first_text(
+            booking.get("slot_id"),
+            booking.get("horario_escolhido"),
+        )
+    )
+
+
+def _booking_slot_payload_from_context(context: AiConversationContext) -> dict[str, Any]:
+    booking = context.conversation_memory.booking_state if isinstance(context.conversation_memory.booking_state, dict) else {}
+    slot_id = _first_text(booking.get("slot_id"), booking.get("horario_escolhido"))
+    selected_datetime = _first_text(booking.get("horario_escolhido"), slot_id)
+    return {
+        "slot_id": slot_id or None,
+        "selected_datetime": _parse_slot_datetime(selected_datetime).isoformat() if _parse_slot_datetime(selected_datetime) else None,
+        "unit_id": _optional_text(booking.get("unidade_id")),
+        "unit_name": _optional_text(booking.get("unidade_nome")),
+        "service_id": _optional_text(booking.get("servico_id")),
+        "procedure_type": _optional_text(booking.get("procedimento")),
+        "professional_id": _optional_text(booking.get("profissional_id")),
+        "preferred_date": _optional_text(booking.get("data_desejada")),
+        "preferred_period": _optional_text(booking.get("periodo_desejado")),
+    }
+
+
+def _patient_context_has_real_phone(context: AiConversationContext) -> bool:
+    phone = str(context.patient_context.phone or "").strip()
+    return bool(phone and not phone.lower().startswith("webchat"))
+
+
+def _message_is_simple_affirmation(inbound_text: str) -> bool:
+    normalized = _normalized_reply_guardrail_text(inbound_text)
+    return normalized in {
+        "sim",
+        "s",
+        "isso",
+        "isso mesmo",
+        "correto",
+        "certo",
+        "ok",
+        "okay",
+        "pode",
+        "pode sim",
+        "confirmo",
+        "confirmado",
+    }
 
 
 def _extract_patient_name_hint(*, inbound_text: str) -> str | None:
@@ -4278,6 +4355,15 @@ def _extract_time_hint_from_message(text: str) -> time | None:
     return None
 
 
+def _extract_numeric_option_hint(text: str) -> int | None:
+    normalized = _normalized_reply_guardrail_text(text)
+    match = re.fullmatch(r"(?:opcao\s*)?(\d{1,2})", normalized)
+    if not match:
+        return None
+    value = int(match.group(1))
+    return value if value >= 1 else None
+
+
 def _availability_window_hints_from_message(text: str) -> dict[str, str]:
     normalized = _normalized_reply_guardrail_text(text)
     if "fim da manha" in normalized or "final da manha" in normalized:
@@ -4511,6 +4597,55 @@ def _recent_scheduling_memory(
     }
 
 
+def _recent_available_date_for_selection_hint(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    context: AiConversationContext,
+    inbound_text: str,
+) -> dict[str, Any] | None:
+    conversation_id = _parse_uuid(context.conversation_context.conversation_id)
+    if not conversation_id:
+        return None
+    rows = _recent_conversation_decisions(db, tenant_id=tenant_id, conversation_id=conversation_id)
+    timezone = _timezone(context.clinic_context.timezone)
+    explicit_date = _extract_preferred_date_hint(inbound_text=inbound_text, timezone=timezone)
+    option_index = _extract_numeric_option_hint(inbound_text)
+    normalized = _normalized_reply_guardrail_text(inbound_text)
+    day_match = re.search(r"\bdia\s+(\d{1,2})\b", normalized)
+    requested_day = int(day_match.group(1)) if day_match else None
+
+    for row in rows:
+        metadata = _decision_metadata_payload(row)
+        system_action_result = metadata.get("system_action_result") if isinstance(metadata.get("system_action_result"), dict) else {}
+        if str(system_action_result.get("action") or "") != "query_availability":
+            if str(system_action_result.get("action") or "") in {"validate_slot", "validate_and_hold_slot", "confirm_appointment"}:
+                return None
+            continue
+        if system_action_result.get("slots"):
+            return None
+        available_dates = system_action_result.get("available_dates") if isinstance(system_action_result.get("available_dates"), list) else []
+        if not system_action_result.get("date_first") or not available_dates:
+            continue
+        if option_index and option_index <= len(available_dates):
+            selected = available_dates[option_index - 1]
+            return selected if isinstance(selected, dict) else None
+        for item in available_dates:
+            if not isinstance(item, dict):
+                continue
+            date_text = str(item.get("date") or "").strip()
+            try:
+                item_date = date.fromisoformat(date_text)
+            except Exception:
+                continue
+            if explicit_date and date_text == explicit_date:
+                return item
+            if requested_day and item_date.day == requested_day:
+                return item
+        return None
+    return None
+
+
 def _parse_time_filter_minutes(value: Any, *, timezone: ZoneInfo) -> int | None:
     parsed_time = _parse_hhmm(value)
     if parsed_time:
@@ -4575,17 +4710,19 @@ def _recent_offered_slot_for_time_hint(
     inbound_text: str,
 ) -> dict[str, Any] | None:
     requested_time = _extract_time_hint_from_message(inbound_text)
-    if not requested_time:
-        return None
+    requested_option = _extract_numeric_option_hint(inbound_text)
     timezone = _timezone(context.clinic_context.timezone)
     memory = _recent_scheduling_memory(
         db,
         tenant_id=tenant_id,
         context=context,
     )
-    for slot in memory.get("offered_slots") or []:
-        if not isinstance(slot, dict):
-            continue
+    offered_slots = [slot for slot in (memory.get("offered_slots") or []) if isinstance(slot, dict)]
+    if requested_option and requested_option <= len(offered_slots):
+        return offered_slots[requested_option - 1]
+    if not requested_time:
+        return None
+    for slot in offered_slots:
         starts_at = _parse_slot_datetime(slot.get("starts_at") or slot.get("slot_id"))
         if not starts_at:
             continue
@@ -4666,8 +4803,27 @@ def _enrich_decision_with_selection_hints(
     inbound_text: str,
     context: AiConversationContext,
 ) -> AiDecisionOutput:
+    matched_recent_slot = _recent_offered_slot_for_time_hint(
+        db,
+        tenant_id=tenant_id,
+        context=context,
+        inbound_text=inbound_text,
+    )
     if decision.system_action.action not in {"validate_slot", "validate_and_hold_slot", "confirm_appointment", "reschedule_appointment"}:
-        return decision
+        if not matched_recent_slot:
+            return decision
+        decision = decision.model_copy(
+            update={
+                "intent": "selecionar_horario",
+                "appointment_intent": decision.appointment_intent.model_copy(update={"wants_booking": True}),
+                "system_action": decision.system_action.model_copy(
+                    update={
+                        "required": True,
+                        "action": "validate_slot",
+                    }
+                ),
+            }
+        )
     params_payload = decision.system_action.params.model_dump(mode="json")
     selected_slot = _resolve_slot_datetime(params_payload, decision)
     if not selected_slot:
@@ -4675,14 +4831,7 @@ def _enrich_decision_with_selection_hints(
             inbound_text=inbound_text,
             timezone=_timezone(context.clinic_context.timezone),
         )
-    matched_recent_slot = None
     if not selected_slot:
-        matched_recent_slot = _recent_offered_slot_for_time_hint(
-            db,
-            tenant_id=tenant_id,
-            context=context,
-            inbound_text=inbound_text,
-        )
         if matched_recent_slot:
             selected_slot = _parse_slot_datetime(matched_recent_slot.get("starts_at") or matched_recent_slot.get("slot_id"))
     if not selected_slot:
@@ -4865,22 +5014,41 @@ def _enrich_decision_with_recent_availability_hints(
     alternative_requested = _message_requests_alternative_slots(inbound_text)
     same_period_requested = _message_prefers_same_period(inbound_text)
     window_hints = _availability_window_hints_from_message(inbound_text)
-    deterministic_date = _extract_preferred_date_hint(
+    selected_available_date = _recent_available_date_for_selection_hint(
+        db,
+        tenant_id=tenant_id,
+        context=context,
+        inbound_text=inbound_text,
+    )
+    deterministic_date = (selected_available_date or {}).get("date") or _extract_preferred_date_hint(
         inbound_text=inbound_text,
         timezone=_timezone(context.clinic_context.timezone),
     )
     deterministic_period = _detect_preferred_period_from_message(inbound_text)
-    slot_selection_requested = bool(
-        _extract_slot_datetime_hint(
+    explicit_slot_selection = bool(
+        _resolve_slot_datetime(decision.system_action.params.model_dump(mode="json"), decision)
+        or _extract_slot_datetime_hint(
             inbound_text=inbound_text,
             timezone=_timezone(context.clinic_context.timezone),
         )
+    )
+    slot_selection_requested = bool(
+        explicit_slot_selection
     ) or decision.intent == "selecionar_horario" or decision.system_action.action in {
         "validate_slot",
         "validate_and_hold_slot",
         "confirm_appointment",
     }
-    if slot_selection_requested and not alternative_requested and not same_period_requested and not window_hints:
+    if explicit_slot_selection and not alternative_requested and not same_period_requested and not window_hints:
+        return decision
+    if (
+        slot_selection_requested
+        and not alternative_requested
+        and not same_period_requested
+        and not window_hints
+        and not deterministic_date
+        and not deterministic_period
+    ):
         return decision
     temporal_adjustment_requested = bool(deterministic_date or deterministic_period)
     if not alternative_requested and not same_period_requested and not window_hints and not temporal_adjustment_requested:
@@ -4906,12 +5074,12 @@ def _enrich_decision_with_recent_availability_hints(
 
     extracted_data = decision.extracted_data.model_copy(
         update={
-            "unit_id": decision.extracted_data.unit_id or memory.get("unit_id"),
-            "unit_requested_text": decision.extracted_data.unit_requested_text or memory.get("unit_name"),
+            "unit_id": decision.extracted_data.unit_id or (selected_available_date or {}).get("unit_id") or memory.get("unit_id"),
+            "unit_requested_text": decision.extracted_data.unit_requested_text or (selected_available_date or {}).get("unit_name") or memory.get("unit_name"),
             "service_id": decision.extracted_data.service_id or memory.get("service_id"),
             "service_requested_text": decision.extracted_data.service_requested_text or memory.get("procedure_type"),
             "procedure_type": decision.extracted_data.procedure_type or memory.get("procedure_type"),
-            "professional_id": decision.extracted_data.professional_id or memory.get("professional_id"),
+            "professional_id": decision.extracted_data.professional_id or (selected_available_date or {}).get("professional_id") or memory.get("professional_id"),
             "preferred_date": deterministic_date or decision.extracted_data.preferred_date or memory.get("preferred_date"),
             "preferred_period": window_hints.get("period") or deterministic_period or decision.extracted_data.preferred_period or inherited_period,
         }
@@ -4969,24 +5137,32 @@ def _enrich_decision_with_personal_data_hints(
     context: AiConversationContext,
 ) -> AiDecisionOutput:
     name_hint = _extract_patient_name_hint(inbound_text=inbound_text)
-    whatsapp_confirmed = _message_confirms_existing_whatsapp(inbound_text)
     pending_slot_confirmation = _pending_slot_confirmation_request(context)
+    whatsapp_confirmed = _message_confirms_existing_whatsapp(inbound_text) or (
+        bool(pending_slot_confirmation and pending_slot_confirmation.get("asked_phone"))
+        and _message_is_simple_affirmation(inbound_text)
+    )
     if not name_hint and not pending_slot_confirmation:
         return decision
 
     extracted_data = decision.extracted_data
+    appointment_intent = decision.appointment_intent
+    system_action = decision.system_action
     reply_control = decision.reply_control
     field_updates = list(decision.field_updates)
 
-    if name_hint and not extracted_data.patient_name:
-        extracted_data = extracted_data.model_copy(update={"patient_name": name_hint})
-    if name_hint:
+    captured_name = name_hint or extracted_data.patient_name
+    if captured_name and _looks_like_placeholder_name(captured_name):
+        captured_name = None
+    if captured_name and not extracted_data.patient_name:
+        extracted_data = extracted_data.model_copy(update={"patient_name": captured_name})
+    if captured_name:
         if not any(update.target == "patients" and update.field == "full_name" for update in field_updates):
             field_updates.append(
                 FieldUpdate(
                     target="patients",
                     field="full_name",
-                    value=name_hint,
+                    value=captured_name,
                     confidence=max(decision.confidence, 0.9),
                     source_text=inbound_text,
                     should_apply=True,
@@ -4998,7 +5174,7 @@ def _enrich_decision_with_personal_data_hints(
                 FieldUpdate(
                     target="leads",
                     field="name",
-                    value=name_hint,
+                    value=captured_name,
                     confidence=max(decision.confidence, 0.9),
                     source_text=inbound_text,
                     should_apply=True,
@@ -5007,10 +5183,34 @@ def _enrich_decision_with_personal_data_hints(
             )
 
     if pending_slot_confirmation:
+        slot_payload = _booking_slot_payload_from_context(context)
+        if slot_payload.get("slot_id") or slot_payload.get("selected_datetime"):
+            extracted_data = extracted_data.model_copy(
+                update={
+                    "unit_id": extracted_data.unit_id or slot_payload.get("unit_id"),
+                    "unit_requested_text": extracted_data.unit_requested_text or slot_payload.get("unit_name"),
+                    "service_id": extracted_data.service_id or slot_payload.get("service_id"),
+                    "procedure_type": extracted_data.procedure_type or slot_payload.get("procedure_type"),
+                    "professional_id": extracted_data.professional_id or slot_payload.get("professional_id"),
+                    "preferred_date": extracted_data.preferred_date or slot_payload.get("preferred_date"),
+                    "preferred_period": extracted_data.preferred_period or slot_payload.get("preferred_period"),
+                    "selected_slot_id": extracted_data.selected_slot_id or slot_payload.get("slot_id"),
+                    "selected_datetime": extracted_data.selected_datetime or slot_payload.get("selected_datetime"),
+                }
+            )
+            appointment_intent = appointment_intent.model_copy(
+                update={
+                    "wants_booking": True,
+                    "unit_id": appointment_intent.unit_id or extracted_data.unit_id,
+                    "procedure_type": appointment_intent.procedure_type or extracted_data.procedure_type,
+                    "professional_id": appointment_intent.professional_id or extracted_data.professional_id,
+                    "starts_at": appointment_intent.starts_at or extracted_data.selected_datetime,
+                }
+            )
         stored_name = context.patient_context.preferred_name or context.patient_context.full_name
         if _looks_like_placeholder_name(stored_name):
             stored_name = None
-        effective_name = name_hint or stored_name
+        effective_name = captured_name or stored_name
         first_name = (effective_name or "").split()[0] if effective_name else None
         suggested_next_question = reply_control.suggested_next_question
         next_expected_field = reply_control.next_expected_field
@@ -5019,14 +5219,40 @@ def _enrich_decision_with_personal_data_hints(
             suggested_next_question = "Perfeito. Para confirmar certinho, qual é o seu nome completo?"
             next_expected_field = "patient_name"
             missing_fields = ["patient_name"]
-        elif pending_slot_confirmation.get("asked_phone") and not whatsapp_confirmed:
+            system_action = system_action.model_copy(update={"required": False, "action": "none"})
+        elif not whatsapp_confirmed:
             suggested_next_question = (
                 f"Perfeito, {first_name}. Esse WhatsApp é o melhor número para confirmação?"
+                if first_name and _patient_context_has_real_phone(context)
+                else f"Perfeito, {first_name}. Qual WhatsApp é o melhor número para confirmação?"
                 if first_name
-                else "Perfeito. Esse WhatsApp é o melhor número para confirmação?"
+                else "Perfeito. Qual WhatsApp é o melhor número para confirmação?"
             )
             next_expected_field = "phone_confirmation"
             missing_fields = ["phone_confirmation"]
+            system_action = system_action.model_copy(update={"required": False, "action": "none"})
+        elif slot_payload.get("slot_id") or slot_payload.get("selected_datetime"):
+            suggested_next_question = None
+            next_expected_field = None
+            missing_fields = []
+            system_action = system_action.model_copy(
+                update={
+                    "required": True,
+                    "action": "confirm_appointment",
+                    "params": system_action.params.model_copy(
+                        update={
+                            "slot_id": slot_payload.get("slot_id") or extracted_data.selected_slot_id,
+                            "unit_id": extracted_data.unit_id,
+                            "unit_name": extracted_data.unit_requested_text,
+                            "service_id": extracted_data.service_id,
+                            "procedure_type": extracted_data.procedure_type,
+                            "professional_id": extracted_data.professional_id,
+                            "date": extracted_data.preferred_date,
+                            "period": extracted_data.preferred_period,
+                        }
+                    ),
+                }
+            )
         else:
             suggested_next_question = (
                 f"Perfeito, {first_name}. Anotei seus dados para seguir com esse horário. Se quiser, posso continuar a confirmação por aqui."
@@ -5035,10 +5261,11 @@ def _enrich_decision_with_personal_data_hints(
             )
             next_expected_field = None
             missing_fields = []
+            system_action = system_action.model_copy(update={"required": False, "action": "none"})
         reply_control = reply_control.model_copy(
             update={
                 "should_reply_now": True,
-                "reply_after_system_action": False,
+                "reply_after_system_action": system_action.action == "confirm_appointment",
                 "next_expected_field": next_expected_field,
                 "missing_fields": missing_fields,
                 "suggested_next_question": suggested_next_question,
@@ -5048,7 +5275,9 @@ def _enrich_decision_with_personal_data_hints(
     return decision.model_copy(
         update={
             "extracted_data": extracted_data,
+            "appointment_intent": appointment_intent,
             "field_updates": field_updates,
+            "system_action": system_action,
             "reply_control": reply_control,
         }
     )

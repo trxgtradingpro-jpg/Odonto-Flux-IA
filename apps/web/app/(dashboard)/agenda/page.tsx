@@ -40,7 +40,7 @@ import {
   ServiceCatalogItem,
   UnitItem,
 } from "@/lib/domain-types";
-import { formatCpfBR, formatDateBR, formatDateTimeBR, formatPhoneBR, numberFormatter } from "@/lib/formatters";
+import { formatCpfBR, formatDateBR, formatDateTimeBR, formatHourBR, formatPhoneBR, numberFormatter } from "@/lib/formatters";
 import { canAccessPage } from "@/lib/page-access";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@odontoflux/ui";
 
@@ -2511,8 +2511,8 @@ export default function AgendaPage() {
                                     <div className="flex h-full flex-col">
                                       {height >= 30 ? (
                                         <p className="truncate text-[11px] font-semibold text-stone-700">
-                                          {formatDateTimeBR(appointment.starts_at).slice(-5)}
-                                          {appointment.ends_at ? ` - ${formatDateTimeBR(appointment.ends_at).slice(-5)}` : ""}
+                                          {formatHourBR(appointment.starts_at)}
+                                          {appointment.ends_at ? ` - ${formatHourBR(appointment.ends_at)}` : ""}
                                         </p>
                                       ) : null}
                                       <p className="truncate text-xs font-semibold text-stone-900">{appointment.patient_name}</p>
