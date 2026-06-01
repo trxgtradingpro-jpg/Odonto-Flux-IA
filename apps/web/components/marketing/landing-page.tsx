@@ -90,7 +90,7 @@ const JOURNEY = [
     step: "04",
     title: "Recupera e reativa oportunidades",
     description:
-      "O sistema sinaliza faltas, retornos e leads antigos para a clinica vender melhor sem perder timing.",
+      "O sistema sinaliza faltas, retornos e leads antigos para a clinica retomar contato no momento certo.",
   },
 ];
 
@@ -135,9 +135,9 @@ const OFFER_BLOCKS = [
 
 const FAQS = [
   {
-    question: "A ClinicFlux AI deve ser posicionada como software barato de prateleira?",
+    question: "A ClinicFlux AI serve para clinicas que querem crescer com mais organizacao?",
     answer:
-      "Nao. O melhor posicionamento hoje e SaaS premium com implantacao consultiva, porque isso protege a promessa, acelera ativacao e aumenta taxa de fechamento.",
+      "Sim. A plataforma foi desenhada para clinicas que precisam elevar atendimento, agenda e conversao sem depender de improviso na recepcao.",
   },
   {
     question: "O que muda para a clinica na pratica?",
@@ -145,9 +145,9 @@ const FAQS = [
       "Muda a organizacao da recepcao, o controle das conversas, a disciplina da agenda e a capacidade de acompanhar o paciente do primeiro contato ate o retorno.",
   },
   {
-    question: "Por que apresentar como central operacional?",
+    question: "Por que a plataforma vai alem de um chatbot?",
     answer:
-      "Porque o valor nao esta em uma tela isolada. O valor esta em conectar atendimento, agenda, equipe, comparecimento e conversao em um unico fluxo.",
+      "Porque o valor esta em conectar atendimento, agenda, equipe, comparecimento e retorno em um unico fluxo operacional.",
   },
   {
     question: "Quanto tempo leva um piloto assistido?",
@@ -178,7 +178,7 @@ const SALES_EMAIL_LABEL = SALES_EMAIL || "Contato comercial por e-mail";
 
 const WHO_WE_ARE = [
   {
-    title: "SaaS premium para clinicas",
+    title: "Plataforma premium para clinicas",
     description:
       "A plataforma atende clinicas de diferentes especialidades que precisam automatizar atendimento, agendamento e recuperacao pelo WhatsApp.",
     icon: Building2,
@@ -198,7 +198,7 @@ const WHO_WE_ARE = [
   {
     title: "IA aplicada com responsabilidade",
     description:
-      "Em vez de prometer automacao vazia, a proposta combina tecnologia, processo, treinamento e controle operacional.",
+      "Em vez de prometer automacao vazia, a plataforma combina tecnologia, processo, treinamento e controle operacional.",
     icon: ShieldCheck,
   },
 ];
@@ -233,7 +233,7 @@ const PILOT_SCOPE = [
     bullets: [
       "Revisao do que melhorou na operacao e no atendimento.",
       "Plano de continuidade, expansao ou segunda fase da implantacao.",
-      "Base para proposta comercial seguinte com mais confianca.",
+      "Prioridades claras para a proxima fase da operacao.",
     ],
   },
 ];
@@ -261,13 +261,13 @@ const CASE_MODEL_STEPS = [
   "Semana 1: diagnostico da recepcao, da agenda e do fluxo comercial principal.",
   "Semana 2: implantacao guiada com cadastro, configuracao e treinamento do time.",
   "Semana 3: operacao acompanhada com ajustes nas rotinas de atendimento e agenda.",
-  "Semana 4: revisao final com baseline, aprendizados e proxima proposta de continuidade.",
+  "Semana 4: revisao final com baseline, aprendizados e plano claro de continuidade.",
 ];
 
 const PREMIUM_SIGNALS = [
-  "Interface comercial com narrativa de produto premium, nao tela generica de software.",
+  "Mensagem clara para clinicas que precisam atender melhor e organizar a operacao.",
   "Demonstracao com valor perceptivel antes mesmo do primeiro clique no sistema.",
-  "Fluxo pensado para vender criterio, confianca e operacao previsivel para clinicas.",
+  "Fluxo pensado para transmitir confianca, previsibilidade e cuidado com o paciente.",
 ];
 
 const EXECUTIVE_PULSE = [
@@ -279,12 +279,12 @@ const EXECUTIVE_PULSE = [
   {
     label: "Percepcao",
     value: "Produto maduro",
-    detail: "Visual, discurso e prova para vender mais do que automacao solta.",
+    detail: "Visual e discurso que transmitem confianca desde o primeiro contato.",
   },
   {
     label: "Experiencia",
     value: "Demo em minutos",
-    detail: "A clinica entra, sente o fluxo e entende o valor sem friccao.",
+    detail: "A clinica entende o fluxo e enxerga valor sem depender de explicacao longa.",
   },
 ];
 
@@ -417,14 +417,15 @@ export function LandingPage() {
           <div className="grid gap-6 lg:grid-cols-[1.08fr_0.92fr]">
             <div className="relative overflow-hidden rounded-[40px] border border-white/10 bg-[linear-gradient(145deg,rgba(5,16,14,0.98)_0%,rgba(10,34,30,0.96)_48%,rgba(32,20,12,0.94)_100%)] p-7 shadow-[0_38px_120px_rgba(0,0,0,0.32)] sm:p-9">
               <div className="pointer-events-none absolute inset-y-0 right-0 w-[42%] bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.18),_transparent_52%)]" />
-              <SectionTag>Premium launch surface</SectionTag>
+              <SectionTag>Experiencia premium para clinicas</SectionTag>
               <h1 className="mt-5 max-w-3xl font-heading text-4xl font-black leading-[0.94] text-white sm:text-5xl lg:text-[4.1rem]">
-                A home agora vende uma plataforma premium antes mesmo da demo abrir.
+                Sua clinica enxerga uma operacao mais organizada, mais rapida e mais premium desde a
+                primeira visita.
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-                A home da {BRAND_NAME} passou a parecer produto de alto valor: narrativa mais
-                editorial, contraste mais sofisticado e blocos que comunicam metodo, confianca e
-                conversao.
+                A {BRAND_NAME} apresenta atendimento, agenda e recuperacao de pacientes em uma
+                experiencia que transmite confianca, metodo e previsibilidade para a rotina da
+                clinica.
               </p>
 
               <div className="mt-8 grid gap-3 sm:grid-cols-3">
@@ -448,10 +449,10 @@ export function LandingPage() {
             <div className="grid gap-4">
               <div className="rounded-[34px] border border-white/10 bg-[#f2e8d9] p-6 text-stone-950 shadow-[0_24px_70px_rgba(0,0,0,0.14)]">
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">
-                  Direcao visual
+                  O que a clinica percebe
                 </p>
                 <h2 className="mt-4 font-heading text-3xl font-black leading-[0.98]">
-                  Mais luxo calmo, menos cara de template generico.
+                  Mais confianca, mais clareza e menos sensacao de software generico.
                 </h2>
                 <div className="mt-6 space-y-3">
                   {PREMIUM_SIGNALS.map((signal) => (
@@ -468,14 +469,15 @@ export function LandingPage() {
 
               <div className="rounded-[34px] border border-amber-200/20 bg-[linear-gradient(135deg,#1a1410_0%,#0b1715_100%)] p-6 shadow-[0_28px_80px_rgba(0,0,0,0.24)]">
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-100/70">
-                  Mensagem comercial
+                  Mensagem central
                 </p>
                 <p className="mt-4 font-heading text-3xl font-black leading-tight text-white">
-                  SaaS premium com implantacao consultiva, prova de operacao e ritmo de crescimento.
+                  Atendimento mais rapido, agenda mais organizada e menos oportunidades perdidas no
+                  WhatsApp.
                 </p>
                 <p className="mt-4 text-sm leading-7 text-white/68">
-                  A home deixou de parecer uma pagina institucional comum e passou a preparar melhor
-                  o terreno para demo, proposta e fechamento.
+                  A clinica entende com rapidez que a plataforma ajuda a responder melhor, organizar
+                  a recepcao e aumentar previsibilidade na operacao.
                 </p>
               </div>
             </div>
@@ -494,8 +496,8 @@ export function LandingPage() {
                   unica.
                 </h2>
                 <p className="mt-4 text-sm leading-7 text-white/70 sm:text-base">
-                  Em vez de vender telas soltas, voce apresenta uma rotina completa para clinicas
-                  que querem automatizar atendimento, agendamento e conversao no WhatsApp.
+                  Em um unico fluxo, a clinica ganha mais agilidade para atender pacientes,
+                  confirmar consultas, acompanhar retornos e recuperar oportunidades.
                 </p>
 
                 <div className="mt-8 space-y-4">
@@ -571,8 +573,8 @@ export function LandingPage() {
                 Mais chance de converter
               </h3>
               <p className="mt-3 text-sm leading-6 text-stone-600">
-                Quando o fluxo comercial fica visivel, a clinica perde menos oportunidades no meio
-                do caminho.
+                Quando atendimento e agenda seguem um fluxo claro, a clinica perde menos
+                oportunidades no meio do caminho.
               </p>
             </div>
             <div className="rounded-[30px] border border-stone-200/80 bg-white/92 p-6 backdrop-blur">
@@ -591,14 +593,14 @@ export function LandingPage() {
             <div className="rounded-[30px] border border-stone-200/80 bg-white/92 p-6 backdrop-blur">
               <BadgeCheck className="h-5 w-5 text-stone-950" />
               <p className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">
-                Apresentacao
+                Confianca
               </p>
               <h3 className="mt-2 font-heading text-3xl font-black text-stone-950">
-                Produto com cara profissional
+                Plataforma com presenca profissional
               </h3>
               <p className="mt-3 text-sm leading-6 text-stone-600">
-                Voce apresenta uma plataforma organizada, madura e orientada a operacao real da
-                clinica.
+                A clinica percebe uma plataforma organizada, madura e orientada a operacao real do
+                dia a dia.
               </p>
             </div>
           </div>
@@ -668,9 +670,8 @@ export function LandingPage() {
                 Uma narrativa simples para mostrar o sistema na demonstracao.
               </h2>
               <p className="mt-4 text-sm leading-7 text-white/72 sm:text-base">
-                A venda melhora quando a clinica enxerga o caminho completo do paciente. Use esta
-                ordem para apresentar o valor da {BRAND_NAME} de um jeito que faca sentido comercial
-                e operacional.
+                A decisao fica mais facil quando a clinica enxerga o caminho completo do paciente,
+                do primeiro contato ao retorno.
               </p>
             </div>
 
@@ -694,13 +695,12 @@ export function LandingPage() {
             <div className="rounded-[34px] border border-stone-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-8">
               <SectionTag>Piloto assistido</SectionTag>
               <h2 className="mt-4 text-3xl font-black text-stone-950 sm:text-4xl">
-                A melhor forma de comecar e implantar junto, e nao simplesmente entregar login e
-                senha.
+                A melhor forma de comecar e implantar junto, com acompanhamento real da operacao.
               </h2>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
                 Piloto assistido significa entrar na clinica, configurar o ambiente, treinar a
                 equipe, acompanhar os primeiros dias e ajustar o fluxo com base no uso real. Isso
-                aumenta o valor percebido e reduz o risco para o cliente.
+                reduz risco de implantacao e acelera resultado para a clinica.
               </p>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -727,7 +727,8 @@ export function LandingPage() {
                   <PhoneCall className="h-5 w-5 text-stone-950" />
                   <h3 className="mt-4 text-lg font-bold text-stone-950">Entrada consultiva</h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    Voce vende implantacao e acompanhamento, nao somente software.
+                    A clinica recebe implantacao acompanhada, e nao apenas acesso a mais uma
+                    ferramenta.
                   </p>
                 </div>
                 <div className="rounded-[24px] border border-stone-200 bg-[#eef6f2] p-5">
@@ -736,14 +737,16 @@ export function LandingPage() {
                     Menor risco para a clinica
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    O cliente sente que voce esta junto para fazer a operacao funcionar.
+                    A equipe sente mais seguranca porque o fluxo e ajustado com acompanhamento
+                    proximo.
                   </p>
                 </div>
                 <div className="rounded-[24px] border border-stone-200 bg-[#eef3f8] p-5">
                   <Sparkles className="h-5 w-5 text-stone-950" />
                   <h3 className="mt-4 text-lg font-bold text-stone-950">Aprendizado acelerado</h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    Cada implantacao mostra onde melhorar o produto para a proxima venda.
+                    Cada implantacao ajuda a refinar processos, rotina e padrao de atendimento da
+                    clinica.
                   </p>
                 </div>
                 <div className="rounded-[24px] border border-stone-200 bg-[#fff5e8] p-5">
@@ -752,7 +755,8 @@ export function LandingPage() {
                     Base para caso de sucesso
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    O piloto ajuda voce a coletar prova real para subir preco e escalar depois.
+                    O piloto ajuda a construir uma operacao mais previsivel, com indicadores e
+                    evolucao visivel.
                   </p>
                 </div>
               </div>
@@ -761,7 +765,7 @@ export function LandingPage() {
             <div className="rounded-[34px] border border-stone-200 bg-stone-950 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.18)] sm:p-8">
               <SectionTag>Escopo fechado</SectionTag>
               <h2 className="mt-4 text-3xl font-black sm:text-4xl">
-                O cliente precisa enxergar exatamente o que entra no primeiro ciclo.
+                A clinica precisa enxergar exatamente o que entra no primeiro ciclo.
               </h2>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -830,13 +834,11 @@ export function LandingPage() {
             <div className="rounded-[34px] border border-stone-200 bg-stone-950 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.18)] sm:p-8">
               <SectionTag>Prova inicial</SectionTag>
               <h2 className="mt-4 text-3xl font-black sm:text-4xl">
-                A melhor prova para os primeiros clientes e um plano de medicao claro, nao uma
-                promessa vaga.
+                A melhor prova para a clinica e um plano de medicao claro, nao uma promessa vaga.
               </h2>
               <p className="mt-4 text-sm leading-7 text-white/72 sm:text-base">
-                Antes de escalar, a pagina precisa mostrar que existe metodo. Os primeiros pilotos
-                entram com baseline, acompanhamento e revisao final para gerar prova operacional
-                documentada.
+                Desde o inicio, a clinica consegue entender que atendimento, agenda e retorno serao
+                acompanhados com metodo, baseline e revisao final.
               </p>
 
               <div className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -858,12 +860,11 @@ export function LandingPage() {
             <div className="rounded-[34px] border border-stone-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-8">
               <SectionTag>Caso modelo</SectionTag>
               <h2 className="mt-4 text-3xl font-black text-stone-950 sm:text-4xl">
-                Um caso de 30 dias que voce pode apresentar com clareza desde o primeiro contrato.
+                Um caso de 30 dias que ajuda a clinica a enxergar a evolucao com clareza.
               </h2>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                O cliente entende melhor quando voce mostra o formato do case antes mesmo de
-                acumular dezenas de depoimentos. Assim, a venda se apoia em processo, entrega e
-                medicao real.
+                A jornada fica mais concreta quando a clinica enxerga como o fluxo sera implantado,
+                acompanhado e medido nas primeiras semanas.
               </p>
 
               <div className="mt-8 rounded-[28px] border border-stone-200 bg-[#faf6ef] p-5">
@@ -896,11 +897,11 @@ export function LandingPage() {
                 </div>
                 <div className="rounded-[24px] border border-stone-200 bg-white p-5">
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
-                    O que voce ganha
+                    O que muda no dia a dia
                   </p>
                   <p className="mt-2 text-sm leading-6 text-stone-700">
-                    Material para proposta seguinte, depoimento futuro e argumentos mais fortes para
-                    precificar melhor.
+                    Mais organizacao na recepcao, mais visibilidade da agenda e mais clareza sobre o
+                    proximo passo de cada paciente.
                   </p>
                 </div>
               </div>
@@ -913,13 +914,11 @@ export function LandingPage() {
             <SectionTag>Oferta comercial</SectionTag>
             <div className="mt-4 max-w-3xl">
               <h2 className="text-3xl font-black text-stone-950 sm:text-4xl">
-                Comece com uma oferta forte o suficiente para vender valor, e simples o suficiente
-                para fechar.
+                Escolha o formato que melhor combina com o momento operacional da sua clinica.
               </h2>
               <p className="mt-4 text-sm leading-7 text-stone-600 sm:text-base">
-                Neste estagio, a {BRAND_NAME} faz mais sentido como SaaS premium com implantacao
-                consultiva do que como software barato de prateleira. Isso te ajuda a vender melhor
-                e aprender mais rapido com os primeiros clientes.
+                A {BRAND_NAME} foi desenhada para clinicas que querem implantar com seguranca,
+                organizar a equipe e evoluir atendimento e agenda com acompanhamento real.
               </p>
             </div>
 
@@ -1001,7 +1000,7 @@ export function LandingPage() {
                       )}
                     >
                       {plan.highlight
-                        ? "Quero automatizar minha clinica"
+                        ? "Quero ver a demo da minha clinica"
                         : "Falar com especialista"}
                     </ActionLink>
                   </div>
@@ -1041,12 +1040,11 @@ export function LandingPage() {
                 </p>
                 <h2 className="mt-4 max-w-3xl text-3xl font-black text-stone-950 sm:text-4xl">
                   Veja como a {BRAND_NAME} organiza o fluxo real da sua clinica e transforma
-                  WhatsApp em operacao.
+                  WhatsApp em atendimento mais organizado.
                 </h2>
                 <p className="mt-4 max-w-2xl text-sm leading-7 text-stone-600 sm:text-base">
-                  A demonstracao ideal nao mostra so tela. Ela parte do seu contexto, passa por
-                  atendimento, agenda, recuperacao e retorno, e termina com um plano claro para
-                  ativar a IA da sua clinica.
+                  A demonstracao parte da rotina da sua clinica, passa por atendimento, agenda,
+                  recuperacao e retorno, e mostra como a operacao pode ganhar mais previsibilidade.
                 </p>
 
                 <div className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -1056,8 +1054,8 @@ export function LandingPage() {
                     </div>
                     <h3 className="mt-4 text-lg font-bold text-stone-950">Ver demonstracao</h3>
                     <p className="mt-2 text-sm leading-6 text-stone-600">
-                      Veja o ambiente real, mapeie gargalos do atendimento e entenda como a IA
-                      melhora a conversao.
+                      Veja o ambiente real, identifique gargalos do atendimento e entenda como a IA
+                      ajuda a responder, agendar e acompanhar melhor.
                     </p>
                     <div className="mt-5">
                       <ActionLink href={SALES_DEMO_URL} className="w-full sm:w-auto">
@@ -1078,7 +1076,7 @@ export function LandingPage() {
                       Simular conversa no WhatsApp
                     </h3>
                     <p className="mt-2 text-sm leading-6 text-stone-600">
-                      Se preferir, fale direto com um especialista e compartilhe volume, equipe e
+                      Se preferir, fale direto com um especialista e compartilhe rotina, equipe e
                       gargalos para acelerar o diagnostico.
                     </p>
                     <div className="mt-5">
@@ -1140,7 +1138,7 @@ export function LandingPage() {
                     O que levar para a demo
                   </p>
                   <div className="mt-4 space-y-3 text-sm leading-6 text-stone-700">
-                    <p>1. Qual unidade ou operacao voce quer organizar primeiro.</p>
+                    <p>1. Qual unidade ou operacao da clinica precisa ser organizada primeiro.</p>
                     <p>2. Como o WhatsApp e a agenda funcionam hoje.</p>
                     <p>3. Onde a recepcao perde mais tempo, pacientes ou previsibilidade.</p>
                   </div>
@@ -1186,7 +1184,7 @@ export function LandingPage() {
                   </p>
                   <p>
                     <Link href="/login" className="transition hover:text-white">
-                      Ativar minha IA
+                      Entrar na plataforma
                     </Link>
                   </p>
                   <p>
