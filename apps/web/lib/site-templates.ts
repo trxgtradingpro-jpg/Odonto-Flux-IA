@@ -30,10 +30,704 @@ export type SiteTemplate = {
   faqs: Array<{ question: string; answer: string }>;
 };
 
-export const SITE_TEMPLATE_LIBRARY_VERSION = "2026.05.30-initial-10";
+export type SiteTemplateVisual = {
+  archetype: string;
+  heroImage: string;
+  heroImagePosition: string;
+  heroOverlay: string;
+  layout: "boutique" | "signature" | "access" | "editorial" | "clinical" | "calm" | "performance" | "active" | "profile";
+  catalogGradient: string;
+  proofTitle: string;
+  proofBody: string;
+  ctaLabel: string;
+  secondaryCtaLabel: string;
+  serviceIntro: string;
+  experienceTitle: string;
+  experienceBody: string;
+  experiencePoints: string[];
+  patientJourney: string[];
+};
+
+export type SiteTemplateEliteBlock = {
+  eyebrow: string;
+  title: string;
+  body: string;
+  items: string[];
+};
+
+export type SiteTemplateShowcaseItem = {
+  title: string;
+  body: string;
+};
+
+export type SiteTemplateSocialProof = {
+  title: string;
+  quote: string;
+  source: string;
+};
+
+export type SiteTemplateEliteDetails = {
+  motion: "cinematic" | "direct" | "editorial" | "calm" | "performance" | "clinical";
+  visualFocus: string;
+  authority: SiteTemplateEliteBlock;
+  showcase: {
+    title: string;
+    body: string;
+    items: SiteTemplateShowcaseItem[];
+  };
+  socialProof: SiteTemplateSocialProof;
+  localTrust: SiteTemplateEliteBlock;
+  finalCta: {
+    title: string;
+    body: string;
+  };
+};
+
+export type SiteTemplateSectionKey = "tratamentos" | "equipe" | "estrutura" | "contato";
+
+export const SITE_TEMPLATE_LIBRARY_VERSION = "2026.05.31-elite-v2";
 export const SITE_TEMPLATE_CATALOG_PATH = "/modelos-sites";
 
 const DEFAULT_HERO_IMAGE = "/images/dental-floss-smile-background.png";
+
+const CLINIC_HERO_IMAGE =
+  "https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=1800&q=82";
+const BEAUTY_HERO_IMAGE =
+  "https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1800&q=82";
+const MEDICAL_HERO_IMAGE =
+  "https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?auto=format&fit=crop&w=1800&q=82";
+const WELLNESS_HERO_IMAGE =
+  "https://images.unsplash.com/photo-1519823551278-64ac92734fb1?auto=format&fit=crop&w=1800&q=82";
+const PERFORMANCE_HERO_IMAGE =
+  "https://images.unsplash.com/photo-1571019613914-85f342c6a11e?auto=format&fit=crop&w=1800&q=82";
+
+export const SITE_TEMPLATE_VISUALS: Record<string, SiteTemplateVisual> = {
+  "clinica-odontologica-premium": {
+    archetype: "Boutique odontologica de alto ticket",
+    heroImage: CLINIC_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(250,250,247,0.97) 0%, rgba(250,250,247,0.88) 43%, rgba(250,250,247,0.24) 100%)",
+    layout: "boutique",
+    catalogGradient: "linear-gradient(135deg, rgba(15,118,110,0.92), rgba(217,119,6,0.72))",
+    proofTitle: "Percepcao de valor antes do WhatsApp",
+    proofBody: "A primeira dobra combina especialidade, tecnologia, avaliacao e prova local para vender tratamentos de maior decisao.",
+    ctaLabel: "Agendar avaliacao premium",
+    secondaryCtaLabel: "Ver tratamentos",
+    serviceIntro: "Tratamentos de alto valor aparecem com contexto, indicacao e uma chamada de avaliacao sem parecer panfleto.",
+    experienceTitle: "Experiencia de decisao premium",
+    experienceBody: "O paciente entende porque a clinica e diferente antes de comparar preco.",
+    experiencePoints: ["Especialistas e CRO visiveis", "Bloco de tecnologia e estrutura", "Prova social no fluxo de leitura"],
+    patientJourney: ["Busca no Google", "Confere autoridade", "Entende o tratamento", "Chama no WhatsApp"],
+  },
+  "clinica-odontologica-popular": {
+    archetype: "Unidade acessivel de alto volume",
+    heroImage: DEFAULT_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(248,250,252,0.98) 0%, rgba(248,250,252,0.9) 48%, rgba(248,250,252,0.45) 100%)",
+    layout: "access",
+    catalogGradient: "linear-gradient(135deg, rgba(37,99,235,0.9), rgba(249,115,22,0.74))",
+    proofTitle: "Rapido para entender e chamar",
+    proofBody: "A pagina prioriza servicos, horario, localizacao e CTA claro para pacientes que querem resolver logo.",
+    ctaLabel: "Chamar a clinica agora",
+    secondaryCtaLabel: "Ver servicos",
+    serviceIntro: "Cards objetivos reduzem duvida e deixam os principais procedimentos prontos para conversa.",
+    experienceTitle: "Jornada sem friccao",
+    experienceBody: "O visitante encontra preco percebido, endereco e atendimento sem precisar garimpar informacao.",
+    experiencePoints: ["Servicos populares acima da dobra", "Urgencia responsavel", "Endereco e horario em destaque"],
+    patientJourney: ["Sente dor ou procura limpeza", "Confere atendimento", "Ve como chegar", "Chama no WhatsApp"],
+  },
+  "estetica-facial-moderna": {
+    archetype: "Clinica visual e aspiracional",
+    heroImage: BEAUTY_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(255,247,247,0.98) 0%, rgba(255,247,247,0.86) 44%, rgba(255,247,247,0.28) 100%)",
+    layout: "editorial",
+    catalogGradient: "linear-gradient(135deg, rgba(190,18,60,0.88), rgba(8,145,178,0.72))",
+    proofTitle: "Desejo com responsabilidade",
+    proofBody: "O visual valoriza pele, cuidado e resultado possivel sem promessas exageradas.",
+    ctaLabel: "Avaliar meu caso",
+    secondaryCtaLabel: "Ver protocolos",
+    serviceIntro: "Cada procedimento ganha beneficio, indicacao e caminho para avaliacao profissional.",
+    experienceTitle: "Vitrine de protocolos",
+    experienceBody: "A estrutura permite mostrar antes/depois, depoimentos e orientacao sem perder elegancia.",
+    experiencePoints: ["Tratamentos explicados por objetivo", "Galeria controlada", "Agenda de manutencao"],
+    patientJourney: ["Deseja melhorar algo", "Compara protocolos", "Confere prova", "Agenda avaliacao"],
+  },
+  "dermatologia-premium": {
+    archetype: "Autoridade medica elegante",
+    heroImage: MEDICAL_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(250,250,255,0.98) 0%, rgba(250,250,255,0.88) 45%, rgba(250,250,255,0.25) 100%)",
+    layout: "clinical",
+    catalogGradient: "linear-gradient(135deg, rgba(124,58,237,0.88), rgba(14,116,144,0.72))",
+    proofTitle: "Tecnica sem esfriar a experiencia",
+    proofBody: "Consulta, tratamentos e tecnologia aparecem com linguagem medica acessivel.",
+    ctaLabel: "Marcar consulta",
+    secondaryCtaLabel: "Conhecer tratamentos",
+    serviceIntro: "A pagina separa queixas, tratamentos e orientacoes para pacientes que pesquisam antes de marcar.",
+    experienceTitle: "Autoridade para decisao medica",
+    experienceBody: "O paciente entende especialidade, metodo e criterios antes do contato.",
+    experiencePoints: ["CRM e area de atuacao visiveis", "Tecnologia contextualizada", "Orientacoes pre-consulta"],
+    patientJourney: ["Pesquisa sintomas", "Confere especialista", "Entende conduta", "Marca consulta"],
+  },
+  "psicologia-humanizada": {
+    archetype: "Acolhimento privado e calmo",
+    heroImage: WELLNESS_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(250,250,249,0.98) 0%, rgba(250,250,249,0.9) 45%, rgba(250,250,249,0.3) 100%)",
+    layout: "calm",
+    catalogGradient: "linear-gradient(135deg, rgba(79,70,229,0.82), rgba(13,148,136,0.68))",
+    proofTitle: "Acolhimento antes da primeira sessao",
+    proofBody: "O layout transmite privacidade, metodo e facilidade para marcar sem pressao.",
+    ctaLabel: "Falar com a psicologa",
+    secondaryCtaLabel: "Ver abordagem",
+    serviceIntro: "Temas e formatos de atendimento aparecem com cuidado, sem linguagem alarmista.",
+    experienceTitle: "Decisao sensivel e segura",
+    experienceBody: "A pagina ajuda a pessoa a sentir clareza sobre abordagem, sigilo e primeiro passo.",
+    experiencePoints: ["Tom acolhedor", "Online e presencial claros", "FAQ para reduzir ansiedade"],
+    patientJourney: ["Busca apoio", "Le abordagem", "Confere sigilo", "Envia mensagem"],
+  },
+  "fisioterapia-reabilitacao": {
+    archetype: "Performance, recuperacao e movimento",
+    heroImage: PERFORMANCE_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(247,250,252,0.98) 0%, rgba(247,250,252,0.88) 42%, rgba(247,250,252,0.26) 100%)",
+    layout: "active",
+    catalogGradient: "linear-gradient(135deg, rgba(14,165,233,0.88), rgba(22,163,74,0.72))",
+    proofTitle: "Plano claro para voltar a se mover",
+    proofBody: "Dor, recuperacao e performance aparecem com promessa responsavel e orientada a tratamento.",
+    ctaLabel: "Agendar avaliacao",
+    secondaryCtaLabel: "Ver programas",
+    serviceIntro: "Programas organizados por objetivo facilitam a leitura de quem procura reabilitacao.",
+    experienceTitle: "Do problema ao plano",
+    experienceBody: "O visitante entende causa, abordagem e proximo passo em poucos blocos.",
+    experiencePoints: ["Objetivos por perfil", "Evolucao e acompanhamento", "Blocos para atletas e dores"],
+    patientJourney: ["Sente dor", "Identifica programa", "Entende plano", "Agenda avaliacao"],
+  },
+  "nutricionista-autoridade": {
+    archetype: "Consultoria de resultado sustentavel",
+    heroImage: "https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=1800&q=82",
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(250,250,247,0.98) 0%, rgba(250,250,247,0.88) 45%, rgba(250,250,247,0.25) 100%)",
+    layout: "editorial",
+    catalogGradient: "linear-gradient(135deg, rgba(22,101,52,0.86), rgba(202,138,4,0.72))",
+    proofTitle: "Metodo acima de dieta pronta",
+    proofBody: "A pagina vende acompanhamento, estrategia e autoridade sem cair em promessa milagrosa.",
+    ctaLabel: "Quero acompanhamento",
+    secondaryCtaLabel: "Ver objetivos",
+    serviceIntro: "Objetivos alimentares ficam organizados por contexto de vida, rotina e acompanhamento.",
+    experienceTitle: "Plano alimentar com contexto",
+    experienceBody: "O visitante percebe metodo, acompanhamento e personalizacao desde a primeira dobra.",
+    experiencePoints: ["Objetivos por perfil", "Acompanhamento recorrente", "Prova de autoridade"],
+    patientJourney: ["Define objetivo", "Conhece metodo", "Confere acompanhamento", "Marca consulta"],
+  },
+  "clinica-medica-multiespecialidade": {
+    archetype: "Centro medico organizado",
+    heroImage: MEDICAL_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(248,250,252,0.98) 0%, rgba(248,250,252,0.9) 45%, rgba(248,250,252,0.24) 100%)",
+    layout: "clinical",
+    catalogGradient: "linear-gradient(135deg, rgba(30,64,175,0.9), rgba(13,148,136,0.7))",
+    proofTitle: "Multiespecialidade sem confusao",
+    proofBody: "O modelo organiza especialidades, horarios e fluxo de agendamento para familias e empresas.",
+    ctaLabel: "Encontrar especialidade",
+    secondaryCtaLabel: "Ver agenda",
+    serviceIntro: "Especialidades aparecem agrupadas para o paciente achar o atendimento certo rapidamente.",
+    experienceTitle: "Navegacao para muitas demandas",
+    experienceBody: "A arquitetura evita que uma clinica grande pareca baguncada.",
+    experiencePoints: ["Especialidades por categoria", "Fluxo de agendamento simples", "Localizacao e convenios"],
+    patientJourney: ["Procura medico", "Escolhe especialidade", "Confere horarios", "Agenda atendimento"],
+  },
+  "consultorio-especialista": {
+    archetype: "Especialista de referencia",
+    heroImage: CLINIC_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.88) 45%, rgba(255,255,255,0.2) 100%)",
+    layout: "profile",
+    catalogGradient: "linear-gradient(135deg, rgba(79,70,229,0.86), rgba(15,118,110,0.72))",
+    proofTitle: "Nome, metodo e autoridade em foco",
+    proofBody: "Ideal para profissionais que precisam parecer referencia antes do primeiro contato.",
+    ctaLabel: "Solicitar avaliacao",
+    secondaryCtaLabel: "Conhecer metodo",
+    serviceIntro: "A pagina da espaco para especialidade, criterios de atendimento e resultados esperados.",
+    experienceTitle: "Posicionamento de especialista",
+    experienceBody: "O visitante entende porque aquele profissional e a escolha certa para um caso especifico.",
+    experiencePoints: ["Bio profissional forte", "Metodo proprietario", "Casos e indicacoes"],
+    patientJourney: ["Busca especialista", "Avalia curriculo", "Entende metodo", "Solicita consulta"],
+  },
+  "landing-page-conversao-rapida": {
+    archetype: "Campanha direta de alta conversao",
+    heroImage: DEFAULT_HERO_IMAGE,
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(12,12,12,0.88) 0%, rgba(12,12,12,0.72) 48%, rgba(12,12,12,0.18) 100%)",
+    layout: "performance",
+    catalogGradient: "linear-gradient(135deg, rgba(12,12,12,0.9), rgba(245,158,11,0.76))",
+    proofTitle: "Uma oferta, uma acao",
+    proofBody: "Feita para trafego pago, campanha de WhatsApp ou promocao com proximo passo nitido.",
+    ctaLabel: "Quero essa oferta",
+    secondaryCtaLabel: "Ver prova",
+    serviceIntro: "Os blocos priorizam uma campanha central, beneficios rapidos e CTA repetido no ponto certo.",
+    experienceTitle: "Velocidade para campanha",
+    experienceBody: "Menos navegacao, mais clareza de oferta e conversao.",
+    experiencePoints: ["Oferta unica", "Prova curta", "CTA em todos os blocos"],
+    patientJourney: ["Clica no anuncio", "Entende oferta", "Confere prova", "Chama no WhatsApp"],
+  },
+  "clinica-saude-familiar": {
+    archetype: "Cuidado familiar e recorrente",
+    heroImage: "https://images.unsplash.com/photo-1584515933487-779824d29309?auto=format&fit=crop&w=1800&q=82",
+    heroImagePosition: "center",
+    heroOverlay: "linear-gradient(90deg, rgba(255,251,235,0.98) 0%, rgba(255,251,235,0.88) 45%, rgba(255,251,235,0.24) 100%)",
+    layout: "calm",
+    catalogGradient: "linear-gradient(135deg, rgba(13,148,136,0.86), rgba(234,88,12,0.7))",
+    proofTitle: "Confianca para a familia inteira",
+    proofBody: "A pagina valoriza rotina, prevencao, localizacao e proximidade com linguagem calorosa.",
+    ctaLabel: "Agendar para minha familia",
+    secondaryCtaLabel: "Ver cuidados",
+    serviceIntro: "Servicos recorrentes ficam agrupados para pais, filhos e pacientes de acompanhamento.",
+    experienceTitle: "Cuidado continuo",
+    experienceBody: "O visitante percebe que a clinica resolve demandas recorrentes com organizacao e carinho.",
+    experiencePoints: ["Rotina preventiva", "Atendimento para varias idades", "Mapa e horarios claros"],
+    patientJourney: ["Procura cuidado confiavel", "Confere servicos", "Ve localizacao", "Agenda horario"],
+  },
+};
+
+export function getSiteTemplateVisual(template: Pick<SiteTemplate, "slug" | "heroImage">): SiteTemplateVisual {
+  return (
+    SITE_TEMPLATE_VISUALS[template.slug] ?? {
+      archetype: "Site profissional para clinicas",
+      heroImage: template.heroImage || DEFAULT_HERO_IMAGE,
+      heroImagePosition: "center",
+      heroOverlay: "linear-gradient(90deg, rgba(255,255,255,0.97) 0%, rgba(255,255,255,0.88) 46%, rgba(255,255,255,0.32) 100%)",
+      layout: "clinical",
+      catalogGradient: "linear-gradient(135deg, rgba(15,118,110,0.88), rgba(217,119,6,0.7))",
+      proofTitle: "Estrutura pronta para vender",
+      proofBody: "O modelo combina clareza, confianca e chamadas para WhatsApp.",
+      ctaLabel: "Selecionar template",
+      secondaryCtaLabel: "Ver estrutura",
+      serviceIntro: "Servicos organizados para o paciente entender rapido.",
+      experienceTitle: "Experiencia profissional",
+      experienceBody: "Uma pagina preparada para apresentar a clinica com credibilidade.",
+      experiencePoints: ["Oferta clara", "Prova social", "Contato sem friccao"],
+      patientJourney: ["Busca local", "Confere prova", "Entende oferta", "Chama no WhatsApp"],
+    }
+  );
+}
+
+export const SITE_TEMPLATE_ELITE_DETAILS: Record<string, SiteTemplateEliteDetails> = {
+  "clinica-odontologica-premium": {
+    motion: "cinematic",
+    visualFocus: "luxo discreto, tecnologia e sorriso de alto valor",
+    authority: {
+      eyebrow: "Autoridade premium",
+      title: "Especialistas, estrutura e decisao de alto ticket no mesmo fluxo.",
+      body: "O modelo prepara o paciente para implantes, lentes e estetica dental com uma narrativa de confianca antes de falar em preco.",
+      items: ["CRO e especialidades em destaque", "Tecnologia como prova de valor", "CTA de avaliacao sem pressao"],
+    },
+    showcase: {
+      title: "Tratamentos apresentados como experiencia premium",
+      body: "Cada bloco combina indicacao, valor percebido e proximo passo para pacientes que pesquisam antes de decidir.",
+      items: [
+        { title: "Implantes planejados", body: "Explica avaliacao, planejamento digital e seguranca do processo." },
+        { title: "Estetica do sorriso", body: "Apresenta lentes, clareamento e harmonizacao com linguagem elegante." },
+        { title: "Estrutura boutique", body: "Mostra ambiente, equipe e atendimento consultivo como diferencial." },
+      ],
+    },
+    socialProof: {
+      title: "Prova social de alto valor",
+      quote: "Modelo de depoimento para destacar confianca, acolhimento e clareza no plano de tratamento.",
+      source: "Espaco para Google Reviews e casos autorizados",
+    },
+    localTrust: {
+      eyebrow: "SEO local premium",
+      title: "Busca local conectada a uma experiencia de marca.",
+      body: "Cidade, bairro, mapa e WhatsApp entram como prova de presenca, nao apenas informacao operacional.",
+      items: ["Bairro e cidade no primeiro scroll", "Mapa contextualizado", "Perguntas de alto ticket respondidas"],
+    },
+    finalCta: {
+      title: "Transforme interesse em avaliacao premium.",
+      body: "O CTA final fecha a pagina com foco em clareza, autoridade e um convite direto para WhatsApp.",
+    },
+  },
+  "clinica-odontologica-popular": {
+    motion: "direct",
+    visualFocus: "clareza, volume e atendimento rapido",
+    authority: {
+      eyebrow: "Confianca acessivel",
+      title: "Servicos simples de entender para o paciente chamar sem friccao.",
+      body: "O modelo valoriza preco percebido, urgencia responsavel, horario e localizacao antes do visitante abandonar a pagina.",
+      items: ["Servicos populares acima da dobra", "Endereco e horario visiveis", "WhatsApp como caminho principal"],
+    },
+    showcase: {
+      title: "Oferta direta para demanda local",
+      body: "Os blocos reduzem duvida para quem precisa resolver limpeza, dor, extracao ou restauracao.",
+      items: [
+        { title: "Atendimento rapido", body: "Mostra como chamar, onde ir e qual o proximo passo." },
+        { title: "Urgencia responsavel", body: "Comunica dor e emergencia sem prometer resultado imediato." },
+        { title: "Servicos populares", body: "Organiza procedimentos comuns em linguagem direta." },
+      ],
+    },
+    socialProof: {
+      title: "Confianca de bairro",
+      quote: "Modelo de depoimento curto para reforcar atendimento claro, preco justo e equipe atenciosa.",
+      source: "Espaco para avaliacoes locais",
+    },
+    localTrust: {
+      eyebrow: "Presenca local",
+      title: "Localizacao, horario e contato no caminho natural da leitura.",
+      body: "A pagina foi pensada para paciente de alto volume que decide rapido pelo celular.",
+      items: ["Mapa sem esconder CTA", "Horario objetivo", "Contato em todos os blocos"],
+    },
+    finalCta: {
+      title: "Facilite a chamada agora.",
+      body: "A pagina fecha com um convite simples para falar com a recepcao pelo WhatsApp.",
+    },
+  },
+  "estetica-facial-moderna": {
+    motion: "editorial",
+    visualFocus: "beleza editorial, pele e desejo responsavel",
+    authority: {
+      eyebrow: "Estetica com criterio",
+      title: "Protocolos apresentados com desejo, cuidado e responsabilidade.",
+      body: "A experiencia valoriza transformacao possivel sem prometer resultado garantido ou parecer anuncio agressivo.",
+      items: ["Profissional responsavel", "Protocolos por objetivo", "Galeria controlada"],
+    },
+    showcase: {
+      title: "Protocolos que parecem uma vitrine premium",
+      body: "Cada card ajuda o visitante a entender indicacao, beneficio e necessidade de avaliacao.",
+      items: [
+        { title: "Pele e textura", body: "Blocos para limpeza de pele, bioestimuladores e rotina de cuidado." },
+        { title: "Harmonizacao leve", body: "Copy com foco em avaliacao individual e naturalidade." },
+        { title: "Manutencao", body: "Agenda recorrente para retorno e acompanhamento." },
+      ],
+    },
+    socialProof: {
+      title: "Desejo com prova",
+      quote: "Modelo de depoimento para destacar atendimento cuidadoso, orientacao clara e seguranca no procedimento.",
+      source: "Espaco para depoimentos autorizados",
+    },
+    localTrust: {
+      eyebrow: "Agenda local",
+      title: "Avaliacao e manutencao com caminho claro pelo WhatsApp.",
+      body: "Cidade, agenda e orientacao pre-procedimento aparecem sem quebrar o clima editorial.",
+      items: ["CTA de avaliacao", "Orientacao pre-procedimento", "Prova visual com cuidado"],
+    },
+    finalCta: {
+      title: "Convide o paciente a avaliar o caso.",
+      body: "O fechamento reforca desejo, seguranca e proximo passo com tom elegante.",
+    },
+  },
+  "dermatologia-premium": {
+    motion: "clinical",
+    visualFocus: "medicina limpa, autoridade e tecnologia",
+    authority: {
+      eyebrow: "Autoridade medica",
+      title: "Dermatologia com organizacao clinica e experiencia premium.",
+      body: "O modelo combina consulta, queixas, estetica e tecnologia com linguagem acessivel para paciente criterioso.",
+      items: ["CRM e especialidade visiveis", "Tecnologia explicada sem exagero", "Conduta por queixa"],
+    },
+    showcase: {
+      title: "Tratamentos por problema e decisao",
+      body: "A estrutura ajuda o paciente a se reconhecer na demanda antes de marcar consulta.",
+      items: [
+        { title: "Pele, acne e manchas", body: "Organiza queixas comuns com orientacao responsavel." },
+        { title: "Estetica medica", body: "Apresenta procedimentos com seguranca e criterio." },
+        { title: "Consulta especializada", body: "Mostra como acontece avaliacao, exame e acompanhamento." },
+      ],
+    },
+    socialProof: {
+      title: "Credibilidade antes da agenda",
+      quote: "Modelo de depoimento para reforcar explicacao clara, cuidado medico e acompanhamento.",
+      source: "Espaco para avaliacoes e credenciais",
+    },
+    localTrust: {
+      eyebrow: "Consulta local",
+      title: "Cidade, agenda e orientacoes sem perder sobriedade.",
+      body: "O paciente encontra especialidade, proximo passo e localizacao sem excesso visual.",
+      items: ["Orientacoes pre-consulta", "Agenda por WhatsApp", "Mapa e bairro discretos"],
+    },
+    finalCta: {
+      title: "Feche com seguranca medica.",
+      body: "O CTA final conduz para uma consulta, nao para promessa de resultado.",
+    },
+  },
+  "psicologia-humanizada": {
+    motion: "calm",
+    visualFocus: "acolhimento, privacidade e primeira conversa leve",
+    authority: {
+      eyebrow: "Acolhimento seguro",
+      title: "Uma pagina que reduz ansiedade antes do primeiro contato.",
+      body: "A composicao evita pressao comercial e explica abordagem, sigilo e formatos de atendimento com calma.",
+      items: ["Abordagem terapeutica", "Sigilo em destaque", "Online e presencial claros"],
+    },
+    showcase: {
+      title: "Temas atendidos com cuidado",
+      body: "Os blocos ajudam a pessoa a se orientar sem rotulos fortes ou linguagem alarmista.",
+      items: [
+        { title: "Ansiedade e rotina", body: "Texto leve para quem busca apoio no dia a dia." },
+        { title: "Relacionamentos", body: "Explica escuta e processo sem prometer solucao rapida." },
+        { title: "Primeira sessao", body: "Mostra como funciona o primeiro passo." },
+      ],
+    },
+    socialProof: {
+      title: "Seguranca emocional",
+      quote: "Modelo de depoimento discreto para reforcar acolhimento, respeito e clareza no processo.",
+      source: "Espaco opcional para prova social etica",
+    },
+    localTrust: {
+      eyebrow: "Contato cuidadoso",
+      title: "O WhatsApp entra como ponte, nao como pressao.",
+      body: "A pagina deixa claro como chamar, onde atender e o que esperar da primeira conversa.",
+      items: ["Tom calmo no CTA", "Endereco ou online", "FAQ para duvidas sensiveis"],
+    },
+    finalCta: {
+      title: "Convide para uma primeira conversa.",
+      body: "O fechamento mantem o tom humano e facilita o contato sem urgencia artificial.",
+    },
+  },
+  "fisioterapia-reabilitacao": {
+    motion: "performance",
+    visualFocus: "movimento, recuperacao e evolucao funcional",
+    authority: {
+      eyebrow: "Plano de recuperacao",
+      title: "Do problema ao plano, com evolucao visivel.",
+      body: "O modelo organiza dores, reabilitacao e performance para mostrar metodo antes da avaliacao.",
+      items: ["Avaliacao funcional", "Programas por objetivo", "Acompanhamento de evolucao"],
+    },
+    showcase: {
+      title: "Programas por objetivo do paciente",
+      body: "Cada bloco traduz a demanda em uma rota de tratamento clara.",
+      items: [
+        { title: "Dor e mobilidade", body: "Organiza sintomas comuns e proximo passo." },
+        { title: "Pos-operatorio", body: "Mostra cuidado, fases e acompanhamento." },
+        { title: "Performance", body: "Fala com atletas e pacientes ativos sem exagero." },
+      ],
+    },
+    socialProof: {
+      title: "Evolucao percebida",
+      quote: "Modelo de depoimento para destacar progresso, acompanhamento e clareza nos exercicios.",
+      source: "Espaco para casos autorizados",
+    },
+    localTrust: {
+      eyebrow: "Atendimento proximo",
+      title: "Avaliacao, frequencia e localizacao explicadas sem confusao.",
+      body: "O paciente entende se a clinica atende sua dor, onde fica e como iniciar.",
+      items: ["Objetivos por perfil", "Agenda de avaliacao", "Mapa e horarios"],
+    },
+    finalCta: {
+      title: "Transforme dor em plano de acao.",
+      body: "O CTA final chama para avaliacao funcional com foco em retorno seguro ao movimento.",
+    },
+  },
+  "nutricionista-autoridade": {
+    motion: "editorial",
+    visualFocus: "metodo, rotina real e acompanhamento sustentavel",
+    authority: {
+      eyebrow: "Metodo nutricional",
+      title: "Autoridade sem promessa milagrosa.",
+      body: "A pagina vende acompanhamento, contexto e plano individualizado com linguagem confiavel.",
+      items: ["CRN e metodo", "Objetivos por perfil", "Acompanhamento recorrente"],
+    },
+    showcase: {
+      title: "Objetivos organizados por rotina",
+      body: "O paciente entende como a consulta se adapta a vida real, nao a uma dieta pronta.",
+      items: [
+        { title: "Emagrecimento", body: "Copy responsavel com foco em processo e consistencia." },
+        { title: "Performance", body: "Espaco para nutricao esportiva e ajustes de rotina." },
+        { title: "Saude intestinal", body: "Bloco educativo para demandas especificas." },
+      ],
+    },
+    socialProof: {
+      title: "Metodo que gera confianca",
+      quote: "Modelo de depoimento para mostrar orientacao, clareza e acompanhamento sem prometer resultado fixo.",
+      source: "Espaco para relatos autorizados",
+    },
+    localTrust: {
+      eyebrow: "Consulta local ou online",
+      title: "A pagina explica formato, retorno e acompanhamento.",
+      body: "O visitante entende como comecar e como sera acompanhado depois da primeira consulta.",
+      items: ["Online ou presencial", "Retornos explicados", "CTA para acompanhamento"],
+    },
+    finalCta: {
+      title: "Convide para um acompanhamento realista.",
+      body: "O fechamento reforca metodo, rotina e conversa inicial.",
+    },
+  },
+  "clinica-medica-multiespecialidade": {
+    motion: "clinical",
+    visualFocus: "organizacao institucional, especialidades e agenda",
+    authority: {
+      eyebrow: "Centro medico organizado",
+      title: "Muitas especialidades sem parecer uma lista confusa.",
+      body: "A arquitetura ajuda o paciente a encontrar area, medico, unidade e contato rapidamente.",
+      items: ["Especialidades agrupadas", "Equipe e unidades", "Agenda pela recepcao"],
+    },
+    showcase: {
+      title: "Navegacao por demanda",
+      body: "A clinica ganha uma vitrine organizada para consultas, exames e acompanhamento.",
+      items: [
+        { title: "Especialidades", body: "Agrupadas para facilitar escolha." },
+        { title: "Unidades", body: "Endereco, horario e recepcao sem friccao." },
+        { title: "Exames e consultas", body: "Servicos operacionais com CTA claro." },
+      ],
+    },
+    socialProof: {
+      title: "Institucional com rosto humano",
+      quote: "Modelo de depoimento para reforcar organizacao, atendimento da recepcao e clareza no agendamento.",
+      source: "Espaco para avaliacoes locais",
+    },
+    localTrust: {
+      eyebrow: "Operacao local",
+      title: "Unidades, horarios e contatos no fluxo certo.",
+      body: "O visitante nao precisa procurar informacao basica antes de chamar.",
+      items: ["Horarios", "Convenios ou diferenciais", "Mapa por unidade"],
+    },
+    finalCta: {
+      title: "Ajude o paciente a escolher a especialidade.",
+      body: "O CTA final conduz para recepcao e triagem com clareza operacional.",
+    },
+  },
+  "consultorio-especialista": {
+    motion: "cinematic",
+    visualFocus: "marca pessoal, metodo e autoridade individual",
+    authority: {
+      eyebrow: "Especialista de referencia",
+      title: "A pagina coloca nome, curriculo e metodo no centro.",
+      body: "Ideal para profissional que precisa ser escolhido pela autoridade, nao apenas pela localizacao.",
+      items: ["Bio forte", "Credenciais", "Metodo proprietario"],
+    },
+    showcase: {
+      title: "Casos, indicacoes e abordagem",
+      body: "O visitante entende quando procurar o especialista e como a consulta funciona.",
+      items: [
+        { title: "Condicoes atendidas", body: "Demandas explicadas por criterio de atendimento." },
+        { title: "Segunda opiniao", body: "Bloco para pacientes que pesquisam muito antes de decidir." },
+        { title: "Metodo", body: "Diferencial autoral explicado com sobriedade." },
+      ],
+    },
+    socialProof: {
+      title: "Reputacao com sobriedade",
+      quote: "Modelo de depoimento para mostrar seguranca, escuta e explicacao tecnica acessivel.",
+      source: "Espaco para avaliacoes e credenciais",
+    },
+    localTrust: {
+      eyebrow: "Agenda especializada",
+      title: "Contato com proximo passo adequado ao caso.",
+      body: "A pagina pode orientar envio de duvida, exames ou solicitacao de consulta.",
+      items: ["Consulta especializada", "Envio de duvida", "Orientacao pre-atendimento"],
+    },
+    finalCta: {
+      title: "Convide o paciente certo para consulta.",
+      body: "O fechamento reforca autoridade e direciona para um contato qualificado.",
+    },
+  },
+  "landing-page-conversao-rapida": {
+    motion: "performance",
+    visualFocus: "campanha, oferta unica e WhatsApp em destaque",
+    authority: {
+      eyebrow: "Conversao de campanha",
+      title: "Uma pagina feita para uma oferta, uma acao e um canal.",
+      body: "O modelo reduz navegacao e concentra energia em prova curta, beneficios e CTA repetido.",
+      items: ["Oferta clara", "Prova curta", "CTA em todos os pontos"],
+    },
+    showcase: {
+      title: "Blocos para trafego pago e WhatsApp",
+      body: "A pagina ajuda a testar demanda sem construir um site gigante.",
+      items: [
+        { title: "Beneficio principal", body: "Headline direta e facil de entender no celular." },
+        { title: "Regras da oferta", body: "Evita duvida e protege a equipe comercial." },
+        { title: "FAQ curto", body: "Remove objecoes antes do clique." },
+      ],
+    },
+    socialProof: {
+      title: "Prova rapida",
+      quote: "Modelo de depoimento curto para reforcar confianca sem quebrar o ritmo da campanha.",
+      source: "Espaco para prova ou garantia de clareza",
+    },
+    localTrust: {
+      eyebrow: "Lead local",
+      title: "Contato, regra e proximo passo sempre visiveis.",
+      body: "A estrutura funciona para mutirao, avaliacao inicial ou campanha sazonal.",
+      items: ["Oferta com regras", "WhatsApp fixo", "Medicao de interesse"],
+    },
+    finalCta: {
+      title: "Feche com uma acao sem distracao.",
+      body: "O CTA final repete a oferta e leva direto para o WhatsApp.",
+    },
+  },
+  "clinica-saude-familiar": {
+    motion: "direct",
+    visualFocus: "familia, prevencao e confianca de bairro",
+    authority: {
+      eyebrow: "Cuidado recorrente",
+      title: "Uma clinica local com cara humana e organizada.",
+      body: "O modelo valoriza atendimento familiar, prevencao, rotina e proximidade sem parecer frio.",
+      items: ["Servicos por idade", "Prevencao", "Recepcao acessivel"],
+    },
+    showcase: {
+      title: "Cuidado para a rotina da familia",
+      body: "Blocos mostram consultas, exames simples e acompanhamento sem confundir o paciente.",
+      items: [
+        { title: "Criancas e adultos", body: "Organiza demandas de varias idades." },
+        { title: "Prevencao", body: "Valoriza check-ups e acompanhamento." },
+        { title: "Recepcao local", body: "WhatsApp, horario e endereco sempre acessiveis." },
+      ],
+    },
+    socialProof: {
+      title: "Proximidade que gera escolha",
+      quote: "Modelo de depoimento para destacar cuidado, atendimento humano e facilidade para agendar.",
+      source: "Espaco para avaliacoes da comunidade",
+    },
+    localTrust: {
+      eyebrow: "Bairro e familia",
+      title: "Endereco, horario e equipe conhecidos no centro da decisao.",
+      body: "A pagina reforca que a clinica esta perto e resolve demandas recorrentes.",
+      items: ["Endereco claro", "Horarios", "Atendimento familiar"],
+    },
+    finalCta: {
+      title: "Convide a familia para agendar com facilidade.",
+      body: "O fechamento prioriza recepcao, proximidade e confianca local.",
+    },
+  },
+};
+
+const DEFAULT_ELITE_DETAILS: SiteTemplateEliteDetails = {
+  motion: "clinical",
+  visualFocus: "site profissional com conversao local",
+  authority: {
+    eyebrow: "Autoridade",
+    title: "Estrutura pronta para gerar confianca antes do contato.",
+    body: "O modelo combina apresentacao, servicos, prova e CTA de WhatsApp em uma jornada clara.",
+    items: ["Oferta clara", "Prova social", "Contato sem friccao"],
+  },
+  showcase: {
+    title: "Blocos comerciais editaveis",
+    body: "Cada area da pagina ajuda o visitante a entender valor e proximo passo.",
+    items: [
+      { title: "Servicos", body: "Procedimentos organizados em linguagem simples." },
+      { title: "Confianca", body: "Sinais de prova, equipe e localizacao." },
+      { title: "Conversao", body: "CTA visivel para WhatsApp ou agendamento." },
+    ],
+  },
+  socialProof: {
+    title: "Prova social",
+    quote: "Modelo de depoimento para destacar confianca e clareza no atendimento.",
+    source: "Espaco para avaliacoes reais",
+  },
+  localTrust: {
+    eyebrow: "Local",
+    title: "Cidade, mapa e contato juntos.",
+    body: "A estrutura facilita a decisao de quem procura uma clinica perto.",
+    items: ["Cidade em destaque", "Mapa", "WhatsApp"],
+  },
+  finalCta: {
+    title: "Leve o visitante para o proximo passo.",
+    body: "O fechamento da pagina reforca confianca e convida para uma conversa.",
+  },
+};
+
+export function getSiteTemplateEliteDetails(template: Pick<SiteTemplate, "slug">): SiteTemplateEliteDetails {
+  return SITE_TEMPLATE_ELITE_DETAILS[template.slug] ?? DEFAULT_ELITE_DETAILS;
+}
 
 export const SITE_TEMPLATES: SiteTemplate[] = [
   {
@@ -673,6 +1367,23 @@ export function buildSiteTemplatePreviewPath(
   if (params?.whatsapp) query.set("whatsapp", params.whatsapp);
   const suffix = query.toString();
   return `${SITE_TEMPLATE_CATALOG_PATH}/${template.slug}${suffix ? `?${suffix}` : ""}`;
+}
+
+export function buildSiteTemplateSectionPath(
+  template: SiteTemplate,
+  section: SiteTemplateSectionKey,
+  params?: {
+    clinic?: string | null;
+    city?: string | null;
+    whatsapp?: string | null;
+  },
+) {
+  const query = new URLSearchParams();
+  if (params?.clinic) query.set("clinic", params.clinic);
+  if (params?.city) query.set("city", params.city);
+  if (params?.whatsapp) query.set("whatsapp", params.whatsapp);
+  const suffix = query.toString();
+  return `${SITE_TEMPLATE_CATALOG_PATH}/${template.slug}/${section}${suffix ? `?${suffix}` : ""}`;
 }
 
 export function buildSiteTemplateSelectionSnapshot(

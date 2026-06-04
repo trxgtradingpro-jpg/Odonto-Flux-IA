@@ -7,6 +7,7 @@ import secrets
 import unicodedata
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import delete, func, or_, select
@@ -670,6 +671,99 @@ def _next_demo_showcase_week_start(base: datetime) -> datetime:
 def _combine_day_and_time(base: datetime, time_text: str) -> datetime:
     hour_text, minute_text = (time_text or "09:00").split(":")
     return base.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
+
+
+def _resolve_demo_timezone(timezone_name: str | None) -> ZoneInfo:
+    candidate = str(timezone_name or settings.app_timezone or "America/Sao_Paulo").strip()
+    try:
+        return ZoneInfo(candidate)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/Sao_Paulo")
+
+
+def _parse_minutes_since_midnight(time_text: str | None, *, fallback: int) -> int:
+    candidate = str(time_text or "").strip()
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", candidate)
+    if not match:
+        return fallback
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def _parse_working_hours_range_text(value: object) -> tuple[int, int] | None:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)\s*-\s*([01]?\d|2[0-3]):([0-5]\d)", text)
+    if not match:
+        return None
+    start = int(match.group(1)) * 60 + int(match.group(2))
+    end = int(match.group(3)) * 60 + int(match.group(4))
+    if end <= start:
+        return None
+    return start, end
+
+
+def _resolve_unit_working_window_minutes(unit: Unit | None) -> tuple[int, int]:
+    if not unit or not isinstance(unit.working_hours, dict):
+        return 8 * 60, 18 * 60
+
+    working_hours = unit.working_hours
+    for key in ("range", "hours", "monday_friday", "seg-sex", "segunda-sexta", "segunda sexta"):
+        parsed_range = _parse_working_hours_range_text(working_hours.get(key))
+        if parsed_range:
+            return parsed_range
+
+    start = _parse_minutes_since_midnight(
+        working_hours.get("start") or working_hours.get("opens_at"),
+        fallback=8 * 60,
+    )
+    end = _parse_minutes_since_midnight(
+        working_hours.get("end") or working_hours.get("closes_at"),
+        fallback=18 * 60,
+    )
+    if end <= start:
+        return 8 * 60, 18 * 60
+    return start, end
+
+
+def _resolve_professional_working_window_minutes(professional: Professional | None) -> tuple[int, int]:
+    if not professional:
+        return 8 * 60, 18 * 60
+    start = _parse_minutes_since_midnight(professional.shift_start, fallback=8 * 60)
+    end = _parse_minutes_since_midnight(professional.shift_end, fallback=18 * 60)
+    if end <= start:
+        return 8 * 60, 18 * 60
+    return start, end
+
+
+def _build_demo_showcase_slot_start(
+    *,
+    showcase_day_local: datetime,
+    preferred_time_text: str,
+    tenant_timezone: ZoneInfo,
+    unit: Unit | None,
+    professional: Professional | None,
+    duration_minutes: int = 60,
+) -> datetime:
+    preferred_minutes = _parse_minutes_since_midnight(preferred_time_text, fallback=9 * 60)
+    unit_start, unit_end = _resolve_unit_working_window_minutes(unit)
+    professional_start, professional_end = _resolve_professional_working_window_minutes(professional)
+    effective_start = max(unit_start, professional_start)
+    effective_end = min(unit_end, professional_end)
+
+    if effective_end - effective_start < duration_minutes:
+        effective_start = 8 * 60
+        effective_end = 18 * 60
+
+    last_possible_start = max(effective_start, effective_end - duration_minutes)
+    clamped_minutes = min(max(preferred_minutes, effective_start), last_possible_start)
+
+    local_slot = showcase_day_local.replace(
+        hour=clamped_minutes // 60,
+        minute=clamped_minutes % 60,
+        second=0,
+        microsecond=0,
+        tzinfo=tenant_timezone,
+    )
+    return local_slot.astimezone(UTC)
 
 
 def _slugify(value: str) -> str:
@@ -2065,9 +2159,10 @@ def _sales_outreach_initial_message_from_skill(prospect: ProspectAccount) -> str
         )
     if _sales_outreach_offer_lane(prospect) == "website_first":
         return (
-            "Oi, tudo bem? Encontrei a clinica no Google e vi que nao aparece um site vinculado. "
-            "Aqui e o time comercial da ClinicFlux AI. "
-            "Posso falar com quem cuida do WhatsApp, agenda ou divulgacao da clinica?"
+            "Oi, tudo bem?\n\n"
+            "Notei que a clínica ainda não possui um site profissional.\n\n"
+            "Eu já montei um modelo de site para a clínica e gostaria de mostrar ao responsável.\n\n"
+            "Quem seria a pessoa ideal para eu encaminhar?"
         )
     return (
         "Oi, tudo bem? Encontrei a clinica no Google. Aqui e o time comercial da ClinicFlux AI. "
@@ -2614,6 +2709,14 @@ def review_sales_outreach_outbox_send_gate(
         payload_json = None
 
     if not payload_json:
+        if not actual_messages:
+            return {
+                "decision": "send",
+                "confidence": 1.0,
+                "reason": "Primeira mensagem comercial sem historico previo; envio liberado com fallback local do gate.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
         if facts.get("last_actual_direction") == MessageDirection.INBOUND.value:
             if latest_inbound_classification == "automatica":
                 return _sales_outreach_auto_reply_block_gate(facts=facts)
@@ -6869,7 +6972,8 @@ def _seed_demo_operational_data(
 ) -> None:
     service_names = [service.service_name for service in services] or ["Avaliacao inicial"]
     unit_professionals = [professional for professional in professionals if professional.unit_id == unit.id] or professionals
-    showcase_week_start = _next_demo_showcase_week_start(_now())
+    tenant_timezone = _resolve_demo_timezone(tenant.timezone)
+    showcase_week_start = _next_demo_showcase_week_start(_now().astimezone(tenant_timezone))
     weekday_labels = [
         "segunda-feira",
         "terca-feira",
@@ -6885,11 +6989,18 @@ def _seed_demo_operational_data(
         service_name = service_names[idx % len(service_names)]
         professional = unit_professionals[idx % len(unit_professionals)] if unit_professionals else None
         showcase_day = showcase_week_start + timedelta(days=idx)
-        starts_at = _combine_day_and_time(showcase_day, spec["time"])
+        starts_at = _build_demo_showcase_slot_start(
+            showcase_day_local=showcase_day,
+            preferred_time_text=str(spec["time"]),
+            tenant_timezone=tenant_timezone,
+            unit=unit,
+            professional=professional,
+        )
         ends_at = starts_at + timedelta(minutes=60)
-        weekday_label = weekday_labels[starts_at.weekday()]
-        date_label = starts_at.strftime("%d/%m/%Y")
-        time_label = starts_at.strftime("%H:%M")
+        starts_at_local = starts_at.astimezone(tenant_timezone)
+        weekday_label = weekday_labels[starts_at_local.weekday()]
+        date_label = starts_at_local.strftime("%d/%m/%Y")
+        time_label = starts_at_local.strftime("%H:%M")
 
         patient = db.scalar(
             select(Patient).where(Patient.tenant_id == tenant.id, Patient.normalized_phone == normalized_phone)

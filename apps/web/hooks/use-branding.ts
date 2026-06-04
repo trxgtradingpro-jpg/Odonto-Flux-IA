@@ -32,6 +32,7 @@ export type BrandingTheme = {
   logoDataUrl: string | null;
   demoBackgroundImageUrl: string;
   demoBackgroundOpacity: number;
+  demoAiTestButtonEnabled: boolean;
   clinicName: string;
 };
 
@@ -53,6 +54,7 @@ const DEFAULT_BRANDING: BrandingTheme = {
   logoDataUrl: null,
   demoBackgroundImageUrl: "/images/dental-floss-smile-background.png",
   demoBackgroundOpacity: 0.18,
+  demoAiTestButtonEnabled: true,
   clinicName: BRAND_NAME,
 };
 
@@ -92,6 +94,13 @@ function parseOpacity(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(parsed, 0), 1);
+}
+
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }
 
 export function useBranding(scopeKey: string) {
@@ -152,6 +161,10 @@ export function useBranding(scopeKey: string) {
         demoBackgroundOpacity: parseOpacity(
           themePayload.demo_background_opacity,
           DEFAULT_BRANDING.demoBackgroundOpacity,
+        ),
+        demoAiTestButtonEnabled: parseBoolean(
+          themePayload.demo_ai_test_button_enabled,
+          DEFAULT_BRANDING.demoAiTestButtonEnabled,
         ),
         clinicName,
       };

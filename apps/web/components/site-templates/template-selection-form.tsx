@@ -47,9 +47,11 @@ function extractApiErrorMessage(error: unknown, fallback: string) {
 export function TemplateSelectionForm({
   templates,
   defaultTemplateSlug,
+  variant = "default",
 }: {
   templates: SiteTemplate[];
   defaultTemplateSlug?: string | null;
+  variant?: "default" | "premium";
 }) {
   const initialSlug = defaultTemplateSlug || templates[0]?.slug || "";
   const [form, setForm] = useState<FormState>({
@@ -99,24 +101,90 @@ export function TemplateSelectionForm({
     }
   }
 
+  const isPremium = variant === "premium";
+
   return (
-    <section id="selecionar-template" className="bg-stone-950 px-4 py-16 text-white sm:px-6 lg:px-8">
-      <div className="mx-auto grid w-full max-w-7xl gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+    <section
+      id="selecionar-template"
+      className={cn(
+        "px-4 py-16 text-white sm:px-6 lg:px-8",
+        isPremium ? "relative overflow-hidden bg-[#060607]" : "bg-stone-950",
+      )}
+    >
+      {isPremium ? (
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(31,119,111,0.18),transparent_32%),radial-gradient(circle_at_80%_20%,rgba(214,162,81,0.10),transparent_24%),linear-gradient(180deg,#060607_0%,#090909_100%)]" />
+        </div>
+      ) : null}
+
+      <div
+        className={cn(
+          "mx-auto grid w-full max-w-7xl gap-8 lg:items-start",
+          isPremium ? "relative z-10 lg:grid-cols-[0.84fr_1.16fr]" : "lg:grid-cols-[0.9fr_1.1fr]",
+        )}
+      >
         <div>
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">Selecionar modelo</p>
-          <h2 className="mt-3 font-heading text-3xl font-black sm:text-4xl">Registre o interesse e gere uma demo com o template escolhido.</h2>
-          <p className="mt-4 max-w-xl text-base leading-7 text-white/70">
+          <p className={cn("text-xs font-black uppercase tracking-[0.18em] text-emerald-300", isPremium && "tracking-[0.22em]")}>
+            Selecionar modelo
+          </p>
+          <h2 className={cn("mt-3 font-heading text-3xl font-black sm:text-4xl", isPremium && "max-w-2xl text-4xl leading-tight sm:text-5xl")}>
+            Registre o interesse e gere uma demo com o template escolhido.
+          </h2>
+          <p className={cn("mt-4 max-w-xl text-base leading-7 text-white/70", isPremium && "text-white/62")}>
             A escolha entra no CRM comercial como snapshot do prospect e ja volta com link de demo e preview personalizado.
           </p>
           {selectedTemplate ? (
-            <div className="mt-6 rounded-lg border border-white/10 bg-white/10 p-4">
-              <p className="text-sm font-black">{selectedTemplate.name}</p>
-              <p className="mt-2 text-sm leading-6 text-white/70">{selectedTemplate.outcome}</p>
+            <div
+              className={cn(
+                "mt-6 rounded-lg border border-white/10 bg-white/10 p-4",
+                isPremium && "rounded-[28px] border-white/10 bg-white/[0.04] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.20)] backdrop-blur",
+              )}
+            >
+              <div className={cn(isPremium && "flex items-start justify-between gap-4")}>
+                <div>
+                  <p className={cn("text-sm font-black", isPremium && "text-base text-white")}>{selectedTemplate.name}</p>
+                  <p className={cn("mt-2 text-sm leading-6 text-white/70", isPremium && "max-w-lg text-white/60")}>{selectedTemplate.outcome}</p>
+                </div>
+                {isPremium ? (
+                  <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-emerald-300">
+                    snapshot pronto
+                  </div>
+                ) : null}
+              </div>
+
+              {isPremium ? (
+                <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-black text-white/84">
+                    Preview real para abrir na hora
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-black text-white/84">
+                    Registro comercial com template escolhido
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
 
-        <form onSubmit={handleSubmit} className="rounded-lg border border-white/10 bg-white p-5 text-stone-950 shadow-[0_24px_70px_rgba(0,0,0,0.22)]">
+        <form
+          onSubmit={handleSubmit}
+          className={cn(
+            "rounded-lg border border-white/10 bg-white p-5 text-stone-950 shadow-[0_24px_70px_rgba(0,0,0,0.22)]",
+            isPremium && "rounded-[32px] border-[#e8decc] bg-[#f7f1e6] p-6 shadow-[0_32px_100px_rgba(0,0,0,0.30)] sm:p-8",
+          )}
+        >
+          {isPremium ? (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-stone-500">Fechamento de demo</p>
+                <p className="mt-2 text-2xl font-black text-stone-950">Complete os dados e dispare a experiencia.</p>
+              </div>
+              <div className="rounded-full bg-stone-950 px-3 py-1 text-[11px] font-black uppercase tracking-[0.16em] text-white">
+                premium flow
+              </div>
+            </div>
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block space-y-2">
               <span className="text-xs font-black uppercase tracking-[0.14em] text-stone-500">Clinica</span>
@@ -162,7 +230,12 @@ export function TemplateSelectionForm({
           </div>
 
           {errorMessage ? (
-            <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-700">
+            <div
+              className={cn(
+                "mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-700",
+                isPremium && "rounded-2xl border-rose-200 bg-rose-50/90 p-4",
+              )}
+            >
               {errorMessage}
             </div>
           ) : null}
@@ -172,6 +245,8 @@ export function TemplateSelectionForm({
             disabled={!canSubmit}
             className={cn(
               "mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-black text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60",
+              isPremium &&
+                "h-14 rounded-full bg-[linear-gradient(135deg,#0f766e,#1b8f84)] text-base shadow-[0_18px_44px_rgba(15,118,110,0.26)] hover:brightness-110",
             )}
           >
             {isSubmitting ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <MessageCircle className="h-5 w-5" />}
@@ -179,7 +254,12 @@ export function TemplateSelectionForm({
           </button>
 
           {result ? (
-            <div className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+            <div
+              className={cn(
+                "mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-950",
+                isPremium && "rounded-[28px] border-emerald-200 bg-[#ecfbf5] p-5 shadow-sm",
+              )}
+            >
               <div className="flex items-start gap-3">
                 <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
                 <div>

@@ -304,6 +304,7 @@ type BrandingConfig = {
   logo_data_url?: string | null;
   demo_background_image_url?: string | null;
   demo_background_opacity: number;
+  demo_ai_test_button_enabled: boolean;
 };
 
 function extractApiErrorMessage(error: unknown, fallback: string): string {
@@ -414,13 +415,17 @@ const DEFAULT_BRANDING_CONFIG: BrandingConfig = {
   logo_data_url: null,
   demo_background_image_url: "/images/dental-floss-smile-background.png",
   demo_background_opacity: 0.18,
+  demo_ai_test_button_enabled: true,
 };
 
 const BRANDING_PRESETS: Array<{
   id: string;
   name: string;
   description: string;
-  config: Omit<BrandingConfig, "logo_data_url" | "demo_background_image_url" | "demo_background_opacity">;
+  config: Omit<
+    BrandingConfig,
+    "logo_data_url" | "demo_background_image_url" | "demo_background_opacity" | "demo_ai_test_button_enabled"
+  >;
 }> = [
   {
     id: "neon-clinic",
@@ -1251,6 +1256,12 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
     const demoBackgroundOpacity = Number.isFinite(rawDemoBackgroundOpacity)
       ? Math.min(Math.max(rawDemoBackgroundOpacity, 0), 1)
       : DEFAULT_BRANDING_CONFIG.demo_background_opacity;
+    const demoAiTestButtonEnabled =
+      typeof theme.demo_ai_test_button_enabled === "boolean"
+        ? theme.demo_ai_test_button_enabled
+        : theme.demo_ai_test_button_enabled === "false"
+          ? false
+          : DEFAULT_BRANDING_CONFIG.demo_ai_test_button_enabled;
 
     setBrandingDraft({
       primary_color: readThemeColor(theme.primary_color, DEFAULT_BRANDING_CONFIG.primary_color),
@@ -1283,6 +1294,7 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
       logo_data_url: logo,
       demo_background_image_url: demoBackgroundImage,
       demo_background_opacity: demoBackgroundOpacity,
+      demo_ai_test_button_enabled: demoAiTestButtonEnabled,
     });
     setBrandingLogoPreview(logo);
   }, [settingsQuery.data]);
@@ -2151,6 +2163,10 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
       logo_data_url: current.logo_data_url ?? null,
       demo_background_image_url: current.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
       demo_background_opacity: current.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
+      demo_ai_test_button_enabled:
+        typeof current.demo_ai_test_button_enabled === "boolean"
+          ? current.demo_ai_test_button_enabled
+          : DEFAULT_BRANDING_CONFIG.demo_ai_test_button_enabled,
     }));
     toast.success("Cores do tema restauradas para o padrao.");
   };
@@ -2161,6 +2177,10 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
       logo_data_url: brandingDraft.logo_data_url ?? null,
       demo_background_image_url: brandingDraft.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
       demo_background_opacity: brandingDraft.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
+      demo_ai_test_button_enabled:
+        typeof brandingDraft.demo_ai_test_button_enabled === "boolean"
+          ? brandingDraft.demo_ai_test_button_enabled
+          : DEFAULT_BRANDING_CONFIG.demo_ai_test_button_enabled,
     };
 
     setBrandingDraft(nextDraft);
@@ -2173,6 +2193,10 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
       logo_data_url: brandingDraft.logo_data_url ?? null,
       demo_background_image_url: brandingDraft.demo_background_image_url ?? DEFAULT_BRANDING_CONFIG.demo_background_image_url,
       demo_background_opacity: brandingDraft.demo_background_opacity ?? DEFAULT_BRANDING_CONFIG.demo_background_opacity,
+      demo_ai_test_button_enabled:
+        typeof brandingDraft.demo_ai_test_button_enabled === "boolean"
+          ? brandingDraft.demo_ai_test_button_enabled
+          : DEFAULT_BRANDING_CONFIG.demo_ai_test_button_enabled,
     };
 
     setBrandingDraft(nextDraft);
@@ -3246,6 +3270,19 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
                         Acoes rapidas
                       </p>
                       <div className="mt-3 flex flex-col gap-2">
+                        <label className="flex items-center gap-2 rounded-2xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={brandingDraft.demo_ai_test_button_enabled}
+                            onChange={(event) =>
+                              setBrandingDraft((current) => ({
+                                ...current,
+                                demo_ai_test_button_enabled: event.target.checked,
+                              }))
+                            }
+                          />
+                          Mostrar botao "Teste IA" (demo)
+                        </label>
                         <Button variant="outline" onClick={restoreBrandingColors}>
                           Restaurar cores
                         </Button>

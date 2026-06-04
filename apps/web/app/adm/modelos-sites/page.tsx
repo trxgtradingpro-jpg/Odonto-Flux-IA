@@ -29,6 +29,8 @@ import {
   buildSiteTemplatePreviewPath,
   buildSiteTemplateSelectionSnapshot,
   getSiteTemplateBySlug,
+  getSiteTemplateEliteDetails,
+  getSiteTemplateVisual,
 } from "@/lib/site-templates";
 import { cn } from "@odontoflux/ui";
 
@@ -237,7 +239,7 @@ export default function AdmSiteTemplatesPage() {
             </div>
             <h1 className="mt-4 font-heading text-3xl font-black sm:text-4xl">Modelos de sites para vender demos</h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-stone-600">
-              Crie a biblioteca inicial, veja os 10 modelos, selecione um template para cada prospect e copie o link publico para vender com preview real.
+              Crie a biblioteca elite, veja os modelos, selecione um template para cada prospect e copie o link publico para vender com preview real.
             </p>
           </div>
 
@@ -272,7 +274,7 @@ export default function AdmSiteTemplatesPage() {
 
         <section className="mt-8 grid gap-4 lg:grid-cols-4">
           {[
-            ["10", "templates profissionais"],
+            [String(SITE_TEMPLATES.length), "experiencias premium"],
             ["publico", "catalogo publicado"],
             ["CRM", "selecao no prospect"],
             ["SEO", "estrutura local"],
@@ -310,20 +312,27 @@ export default function AdmSiteTemplatesPage() {
           <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {SITE_TEMPLATES.map((template) => {
               const isSelected = template.slug === selectedTemplateSlug;
+              const visual = getSiteTemplateVisual(template);
+              const elite = getSiteTemplateEliteDetails(template);
               return (
                 <article
                   key={template.slug}
                   className={cn(
-                    "overflow-hidden rounded-lg border bg-white shadow-sm transition",
+                    "group overflow-hidden rounded-lg border bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg",
                     isSelected ? "border-emerald-400 ring-4 ring-emerald-100" : "border-stone-200",
                   )}
                 >
                   <div
-                    className="h-28 bg-cover bg-center"
+                    className="relative h-36 bg-cover"
                     style={{
-                      backgroundImage: `linear-gradient(135deg, ${template.palette.primary}E6, ${template.palette.accent}BA), url(${template.heroImage})`,
+                      backgroundImage: `${visual.catalogGradient}, url(${visual.heroImage})`,
+                      backgroundPosition: visual.heroImagePosition,
                     }}
-                  />
+                  >
+                    <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-white/25 bg-white/86 p-3 backdrop-blur">
+                      <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-800">{elite.visualFocus}</p>
+                    </div>
+                  </div>
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -332,9 +341,9 @@ export default function AdmSiteTemplatesPage() {
                       </div>
                       {isSelected ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : null}
                     </div>
-                    <p className="mt-3 min-h-[72px] text-sm leading-6 text-stone-600">{template.outcome}</p>
+                    <p className="mt-3 min-h-[72px] text-sm leading-6 text-stone-600">{elite.authority.title}</p>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {template.badges.map((badge) => (
+                      {[visual.archetype, elite.motion, ...template.badges.slice(0, 1)].map((badge) => (
                         <span key={badge} className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-bold text-stone-700">
                           {badge}
                         </span>

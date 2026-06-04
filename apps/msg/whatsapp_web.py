@@ -535,7 +535,7 @@ class WhatsAppAutomation:
                     continue
                 body = prepared.get("body") or body
 
-                send_result = self.send_message_to_number(phone_number, body)
+                send_result = self.send_message_to_number(phone_number, body, reopen_chat=False)
                 if send_result:
                     self.remember_bridge_mapping(item, send_result)
                     self.last_outbound_chat = {
@@ -555,7 +555,7 @@ class WhatsAppAutomation:
                 self.acknowledge_bridge_outbox_failure(outbox_id, reason, retryable=False)
                 results.append({"outbox_id": outbox_id, "status": "dead_letter", "phone_number": phone_number})
             except Exception as e:
-                logging.error(f"Bridge outbound unexpected error for {phone_number}: {e}")
+                logging.exception("Bridge outbound unexpected error for %s: %s (%s)", phone_number, e, type(e).__name__)
                 self.acknowledge_bridge_outbox_failure(outbox_id, f"Falha ao preparar ou enviar mensagem para {phone_number}: {e}", retryable=True)
                 results.append({"outbox_id": outbox_id, "status": "failed", "phone_number": phone_number})
         return results
@@ -652,10 +652,14 @@ class WhatsAppAutomation:
                         continue
                     if "dados do contato" in normalized_text or "contact info" in normalized_text:
                         continue
-                    if header.find_elements(By.XPATH, ".//*[@data-testid='conversation-info-header-chat-title']"):
-                        return header
-                    if header.find_elements(By.XPATH, ".//span[@title] | .//span[@dir='auto']"):
-                        return header
+                    title_candidates = header.find_elements(
+                        By.XPATH,
+                        ".//*[@data-testid='conversation-info-header-chat-title'] | .//span[@title] | .//span[@dir='auto']",
+                    )
+                    for elem in title_candidates:
+                        candidate = self.normalize_text((elem.get_attribute("title") or elem.text or "").strip())
+                        if self.is_valid_chat_contact_label(candidate):
+                            return header
                 except Exception:
                     continue
 
@@ -663,7 +667,12 @@ class WhatsAppAutomation:
                 try:
                     text = self.normalize_text(header.text or "")
                     normalized_text = text.lower()
-                    if text and "dados do contato" not in normalized_text and "contact info" not in normalized_text:
+                    if (
+                        text
+                        and "dados do contato" not in normalized_text
+                        and "contact info" not in normalized_text
+                        and self.is_valid_chat_contact_label(text.splitlines()[0].strip())
+                    ):
                         return header
                 except Exception:
                     continue
@@ -734,6 +743,19 @@ class WhatsAppAutomation:
         normalized = normalized.encode("ascii", "ignore").decode("ascii")
         normalized = re.sub(r"\s+", " ", normalized).strip().lower()
         return normalized
+
+    def is_valid_chat_contact_label(self, text):
+        normalized = self.normalize_text(text or "").strip()
+        if not normalized:
+            return False
+        lowered = self.normalize_contact_match_key(normalized)
+        if not lowered or lowered in {"menu", "fechar", "close"}:
+            return False
+        if lowered.isdigit():
+            return False
+        if self.looks_like_phone_label(normalized):
+            return True
+        return any(char.isalpha() for char in lowered)
 
     def looks_like_phone_label(self, text):
         normalized = self.normalize_text(text or "").strip()
@@ -853,6 +875,11 @@ class WhatsAppAutomation:
     def wait_for_target_chat_match(self, phone_number, composer_element=None, timeout=12):
         deadline = time.time() + max(1, timeout)
         last_seen = ""
+        normalized_phone = ""
+        try:
+            normalized_phone = self.normalize_phone_number(phone_number)
+        except Exception:
+            normalized_phone = ""
         while time.time() < deadline:
             if composer_element is not None:
                 try:
@@ -874,6 +901,19 @@ class WhatsAppAutomation:
 
             last_seen = open_chat_phone or (self.extract_open_chat_contact_name() or "")
             time.sleep(0.6)
+
+        try:
+            current_url = self.driver.current_url or ""
+        except Exception:
+            current_url = ""
+        if composer_element is not None and normalized_phone and normalized_phone in re.sub(r"\D", "", current_url):
+            logging.warning(
+                "Composer aberto via link direto para %s, mas o telefone nao apareceu no cabecalho. "
+                "Continuando com a conversa visivel: %s",
+                phone_number,
+                last_seen or "desconhecida",
+            )
+            return composer_element
 
         raise TimeoutException(
             f"O chat aberto nao corresponde ao numero {phone_number}. "
@@ -902,7 +942,7 @@ class WhatsAppAutomation:
                     )
                 except TimeoutException as exc:
                     last_error = exc
-                    logging.warning("Composer apareceu no chat errado para %s. Tentando reabrir...", phone_number)
+                    logging.warning("Composer apareceu sem verificacao de numero para %s: %s", phone_number, exc)
                     try:
                         normalized_phone = self.normalize_phone_number(phone_number)
                         self.open_url_with_retries(
@@ -910,6 +950,19 @@ class WhatsAppAutomation:
                             timeout=45,
                             retries=1,
                         )
+                        reopened_state = self.wait_for_chat_input_or_unavailable_alert(timeout=min(8, max(2, remaining)))
+                        if isinstance(reopened_state, dict) and reopened_state.get("state") == "unavailable":
+                            alert_text = self.normalize_text(reopened_state.get("message") or "")
+                            self.dismiss_unavailable_whatsapp_alert()
+                            raise WhatsAppNumberUnavailableError(
+                                alert_text or f"O numero {phone_number} nao esta no WhatsApp."
+                            )
+                        if isinstance(reopened_state, dict) and reopened_state.get("state") == "composer":
+                            logging.warning(
+                                "Usando composer reaberto por link direto para %s sem conseguir validar telefone no cabecalho.",
+                                phone_number,
+                            )
+                            return reopened_state.get("element")
                     except Exception as reopen_exc:
                         last_error = reopen_exc
                     time.sleep(0.8)
@@ -1674,13 +1727,43 @@ class WhatsAppAutomation:
             try:
                 for elem in header.find_elements(By.XPATH, selector):
                     title = self.normalize_text((elem.get_attribute("title") or elem.text or "").strip())
-                    if title and title.lower() not in {"menu"}:
+                    if self.is_valid_chat_contact_label(title):
                         return title
             except Exception:
                 continue
 
         text = self.normalize_text((header.text or "").strip())
-        return text.splitlines()[0].strip() if text else None
+        if not text:
+            return None
+        for line in text.splitlines():
+            candidate = line.strip()
+            if self.is_valid_chat_contact_label(candidate):
+                return candidate
+        return None
+
+    def get_last_outgoing_message_text(self):
+        try:
+            outgoing_containers = self.driver.find_elements(By.XPATH, "//div[@data-testid='msg-container']")
+        except Exception:
+            return ""
+        for container in reversed(outgoing_containers):
+            try:
+                if self.get_message_direction(container) != "out":
+                    continue
+                text = self.extract_message_text_from_container(container)
+                if text:
+                    return self.normalize_text(text)
+            except Exception:
+                continue
+        return ""
+
+    def message_send_looks_confirmed(self, send_box, expected_message):
+        normalized_expected = self.normalize_text(expected_message or "")
+        last_outgoing = self.get_last_outgoing_message_text()
+        if normalized_expected and last_outgoing and normalized_expected in last_outgoing:
+            return True
+        composer_text = self.normalize_text((send_box.text or "") if send_box else "")
+        return bool(normalized_expected and not composer_text and last_outgoing)
 
     def extract_last_message_text(self):
         """Read the latest visible message in the opened conversation."""
@@ -2408,11 +2491,12 @@ class WhatsAppAutomation:
 
         normalized_phone = self.normalize_phone_number(phone_number)
         self.open_url_with_retries(f"https://web.whatsapp.com/send?phone={normalized_phone}", timeout=90, retries=3)
-        self.ensure_chat_available_for_phone(phone_number, timeout=40)
+        self.ensure_chat_available_for_phone(phone_number, timeout=75)
         time.sleep(1.2)
 
         self.load_visible_chat_history(max_scrolls=12)
-        contact_name = self.extract_open_chat_contact_name() or phone_number
+        extracted_contact_name = self.extract_open_chat_contact_name()
+        contact_name = extracted_contact_name if self.is_valid_chat_contact_label(extracted_contact_name) else phone_number
         live_messages = self.collect_visible_chat_messages(limit=120)
         logging.info("Bridge live sync captured %s visible message(s) for %s", len(live_messages), contact_name)
 
@@ -2447,7 +2531,7 @@ class WhatsAppAutomation:
             "contact_name": contact_name,
         }
 
-    def send_message_to_number(self, phone_number, message_text):
+    def send_message_to_number(self, phone_number, message_text, reopen_chat=True):
         """Open a direct chat and send a message."""
         history_entry = {
             "timestamp": datetime.now().isoformat(),
@@ -2460,10 +2544,23 @@ class WhatsAppAutomation:
             normalized_phone = self.normalize_phone_number(phone_number)
             normalized_message = self.normalize_text(message_text)
 
-            self.open_url_with_retries(f"https://web.whatsapp.com/send?phone={normalized_phone}", timeout=90, retries=3)
+            if reopen_chat:
+                self.open_url_with_retries(f"https://web.whatsapp.com/send?phone={normalized_phone}", timeout=90, retries=3)
 
             wait = WebDriverWait(self.driver, 40)
-            send_box = self.ensure_chat_available_for_phone(phone_number, timeout=40)
+            if reopen_chat:
+                send_box = self.ensure_chat_available_for_phone(phone_number, timeout=75)
+            else:
+                state = self.wait_for_chat_input_or_unavailable_alert(timeout=30)
+                if isinstance(state, dict) and state.get("state") == "unavailable":
+                    alert_text = self.normalize_text(state.get("message") or "")
+                    self.dismiss_unavailable_whatsapp_alert()
+                    raise WhatsAppNumberUnavailableError(
+                        alert_text or f"O numero {phone_number} nao esta no WhatsApp."
+                    )
+                send_box = state.get("element") if isinstance(state, dict) else None
+                if send_box is None:
+                    raise TimeoutException(f"Nao foi possivel reutilizar o composer aberto para {phone_number}.")
             time.sleep(1.2)
 
             current_box_text = self.normalize_text(send_box.text or "")
@@ -2489,6 +2586,9 @@ class WhatsAppAutomation:
                     sent = True
                     break
                 except Exception:
+                    if self.message_send_looks_confirmed(send_box, normalized_message):
+                        sent = True
+                        break
                     logging.warning(f"Message not confirmed after attempt {attempt + 1}")
 
                 if self.composer_contains_text(send_box, normalized_message):
@@ -2520,7 +2620,12 @@ class WhatsAppAutomation:
             history_entry["status"] = "sent"
             history_entry["timestamp"] = datetime.now().isoformat()
             try:
-                history_entry["chat_contact"] = self.extract_open_chat_contact_name() or normalized_phone
+                extracted_contact_name = self.extract_open_chat_contact_name()
+                history_entry["chat_contact"] = (
+                    extracted_contact_name
+                    if self.is_valid_chat_contact_label(extracted_contact_name)
+                    else normalized_phone
+                )
             except Exception:
                 history_entry["chat_contact"] = normalized_phone
             self.prime_active_chat_baseline(history_entry["chat_contact"], normalized_phone)
@@ -2537,7 +2642,7 @@ class WhatsAppAutomation:
             history_entry["error"] = str(e)
             history_entry["timestamp"] = datetime.now().isoformat()
             self.append_sent_message_history(history_entry)
-            logging.error(f"Error sending message to {phone_number}: {e}")
+            logging.exception("Error sending message to %s: %s (%s)", phone_number, e, type(e).__name__)
             return None
     
     def get_single_unopened_message(self, conversation_info):

@@ -59,6 +59,7 @@ class BrandingThemeInput(BaseModel):
     logo_data_url: str | None = None
     demo_background_image_url: str | None = Field(default="/images/dental-floss-smile-background.png")
     demo_background_opacity: float = Field(default=0.18, ge=0.0, le=1.0)
+    demo_ai_test_button_enabled: bool = Field(default=True)
 
     @field_validator(
         "primary_color",

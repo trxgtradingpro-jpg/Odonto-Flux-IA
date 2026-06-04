@@ -1,0 +1,8 @@
+interface:
+  display_name: "ClinicFlux Architect"
+  short_description: "Arquitetura segura e rapida do ClinicFlux"
+  brand_color: "#07966F"
+  default_prompt: "Use $clinicflux-project-architect para analisar e alterar o ClinicFlux AI preservando fluxos, guardrails e validacao real."
+
+policy:
+  allow_implicit_invocation: true

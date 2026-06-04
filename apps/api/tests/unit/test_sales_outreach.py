@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 import json
 from types import SimpleNamespace
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -13,10 +14,12 @@ from app.models import (
     Conversation,
     Message,
     OutboxMessage,
+    Professional,
     ProspectAccount,
     SalesOutreachAutomationBatchItem,
     Setting,
     Tenant,
+    Unit,
     User,
     WhatsAppAccount,
 )
@@ -402,9 +405,14 @@ def test_sales_outreach_initial_message_uses_google_places_no_website_offer(monk
         base_url="http://localhost:3000",
     )
 
-    assert "Encontrei a clinica no Google" in result["message_text"]
-    assert "nao aparece um site vinculado" in result["message_text"]
-    assert "time comercial da ClinicFlux AI" in result["message_text"]
+    expected_message = (
+        "Oi, tudo bem?\n\n"
+        "Notei que a clínica ainda não possui um site profissional.\n\n"
+        "Eu já montei um modelo de site para a clínica e gostaria de mostrar ao responsável.\n\n"
+        "Quem seria a pessoa ideal para eu encaminhar?"
+    )
+
+    assert result["message_text"] == expected_message
 
 
 def test_sales_outreach_initial_message_uses_google_places_with_website_saas_route(monkeypatch, seeded_db, db_session):
@@ -435,7 +443,7 @@ def test_sales_outreach_initial_message_uses_google_places_with_website_saas_rou
     )
 
     assert "Encontrei a clinica no Google" in result["message_text"]
-    assert "nao aparece um site vinculado" not in result["message_text"]
+    assert "site profissional" not in result["message_text"]
     assert "WhatsApp e dos agendamentos" in result["message_text"]
 
 
@@ -834,6 +842,43 @@ def test_review_sales_outreach_outbox_send_gate_blocks_if_latest_inbound_refused
     gate = sales_demo_service.review_sales_outreach_outbox_send_gate(db_session, outbox=outbox)
     assert gate["decision"] == "block"
     assert "recusou contato" in gate["reason"].lower()
+
+
+def test_review_sales_outreach_outbox_send_gate_allows_first_message_when_ai_unavailable(
+    monkeypatch,
+    seeded_db,
+    db_session,
+):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+    conversation = sales_demo_service._ensure_outreach_conversation(
+        db_session,
+        sender_tenant=sender_tenant,
+        prospect=prospect,
+    )
+    outbox = queue_outbound_message(
+        db_session,
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        to=prospect.whatsapp_phone,
+        body="Oi, tudo bem? Encontrei a clinica no Google. Aqui e o time comercial da ClinicFlux AI.",
+        metadata={"source": "sales_outreach", "step": "reception_intro", "transport": "whatsapp_web_bridge"},
+        immediate_dispatch=False,
+        commit=True,
+    )
+
+    monkeypatch.setattr(sales_demo_service, "_sales_outreach_ai_is_enabled", lambda: True)
+
+    def _raise_unavailable(*args, **kwargs):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(sales_demo_service, "_run_sales_outreach_llm_task", _raise_unavailable)
+
+    gate = sales_demo_service.review_sales_outreach_outbox_send_gate(db_session, outbox=outbox)
+
+    assert gate["decision"] == "send"
+    assert "primeira mensagem comercial" in gate["reason"].lower()
+    assert gate["facts"]["total_actual_messages"] == 0
 
 
 def test_live_gate_repairs_wrong_reception_persona(monkeypatch, seeded_db, db_session):
@@ -2043,6 +2088,58 @@ def test_generate_demo_populates_business_week_with_conversation_backed_appointm
 
     assert second_result["prospect"].demo_tenant_id == demo_tenant_id
     assert len(appointments_after) == len(appointments_before)
+
+
+def test_generate_demo_keeps_showcase_appointments_within_clinic_working_hours(monkeypatch, seeded_db, db_session):
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(
+        sales_demo_service,
+        "_ai_draft",
+        lambda db, demo_prospect, services: sales_demo_service.build_fallback_ai_draft(demo_prospect, services),
+    )
+
+    generated = sales_demo_service.generate_demo(
+        db_session,
+        prospect,
+        actor_id=None,
+        base_url="http://localhost:3000",
+    )
+
+    demo_tenant_id = generated["prospect"].demo_tenant_id
+    tenant = db_session.get(Tenant, demo_tenant_id)
+    timezone = ZoneInfo(str(tenant.timezone or "America/Sao_Paulo"))
+    units = {
+        unit.id: unit
+        for unit in db_session.execute(select(Unit).where(Unit.tenant_id == demo_tenant_id)).scalars().all()
+    }
+    professionals = {
+        professional.id: professional
+        for professional in db_session.execute(select(Professional).where(Professional.tenant_id == demo_tenant_id)).scalars().all()
+    }
+    appointments = db_session.execute(
+        select(Appointment)
+        .where(
+            Appointment.tenant_id == demo_tenant_id,
+            Appointment.origin == "demo_personalizada",
+        )
+        .order_by(Appointment.starts_at.asc())
+    ).scalars().all()
+
+    assert appointments
+
+    for appointment in appointments:
+        appointment_local = appointment.starts_at.astimezone(timezone)
+        unit = units[appointment.unit_id]
+        professional = professionals[appointment.professional_id]
+        unit_window = sales_demo_service._resolve_unit_working_window_minutes(unit)
+        professional_window = sales_demo_service._resolve_professional_working_window_minutes(professional)
+        effective_start = max(unit_window[0], professional_window[0])
+        effective_end = min(unit_window[1], professional_window[1])
+        appointment_minutes = appointment_local.hour * 60 + appointment_local.minute
+
+        assert effective_start <= appointment_minutes
+        assert appointment_minutes + 60 <= effective_end
 
 
 def test_cleanup_demo_resources_removes_demo_tenant_data(monkeypatch, seeded_db, db_session):

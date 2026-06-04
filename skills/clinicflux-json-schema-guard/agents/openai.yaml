@@ -1,0 +1,8 @@
+interface:
+  display_name: "ClinicFlux JSON Guard"
+  short_description: "Protege schemas e payloads JSON"
+  brand_color: "#0F766E"
+  default_prompt: "Use $clinicflux-json-schema-guard para revisar este payload/schema sem quebrar contratos do ClinicFlux."
+
+policy:
+  allow_implicit_invocation: true

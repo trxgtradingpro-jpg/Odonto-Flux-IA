@@ -40,6 +40,7 @@ import { toast } from "sonner";
 
 import { ConfirmDialog, EmptyState, RightDrawer, StatusBadge, TemperatureBadge } from "@/components/premium";
 import { ErrorState, LoadingState } from "@/components/page-state";
+import { useBranding } from "@/hooks/use-branding";
 import { useOwnerUnitScope } from "@/hooks/use-owner-unit-scope";
 import { useSession } from "@/hooks/use-session";
 import { api } from "@/lib/api";
@@ -1964,6 +1965,8 @@ export default function ConversasPage() {
   const demoWhatsAppEntryPhoneLabel = demoWhatsAppEntryPhone ? formatPhoneBR(demoWhatsAppEntryPhone) : null;
   const demoHasPersistentWebchatEntry = isDemoUser && Boolean(demoResolvedPublicEntryPath);
   const demoUsesWebchatEntry = demoEntryChannel === "webchat" || demoHasPersistentWebchatEntry;
+  const demoBrandingQuery = useBranding(sessionQuery.data?.tenant_slug ?? "dashboard");
+  const demoAiTestButtonEnabled = demoBrandingQuery.data?.demoAiTestButtonEnabled ?? true;
   const demoWorkspaceEnabled = isDemoUser && demoUsesWebchatEntry && Boolean(demoResolvedPublicEntryPath);
   const demoWorkspaceSwipeEnabled = demoWorkspaceEnabled && !isDesktopLayout;
   const demoWorkspaceOpen = demoWorkspaceEnabled && demoWorkspacePanel === "webchat";
@@ -1982,7 +1985,8 @@ export default function ConversasPage() {
       (isDemoUser &&
         ["entry", "awaiting_appointment"].includes(demoWhatsAppExperienceStage) &&
         Boolean(demoWhatsAppEntryLink || (demoUsesWebchatEntry && demoResolvedPublicEntryPath)))) &&
-    !demoWorkspaceOpen;
+    !demoWorkspaceOpen &&
+    (!demoUsesWebchatEntry || demoAiTestButtonEnabled);
   const demoEntryShortcutLabel = demoUsesWebchatEntry
     ? demoWhatsAppExperienceStage === "entry"
       ? "Teste IA"
