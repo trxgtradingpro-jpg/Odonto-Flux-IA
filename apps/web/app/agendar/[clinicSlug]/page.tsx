@@ -1660,6 +1660,25 @@ export default function PublicBookingPage() {
   const publicBookingBlockingMessage = linkFlowUnavailable;
   const showPublicBookingLoadingPanel = (loading || !session) && !publicBookingBlockingMessage;
 
+  const handleCloseSummaryPanel = useCallback(() => {
+    if (!mobileSummaryOpen) return;
+    setMobileSummaryOpen(false);
+    if (!summaryManualChangesPendingRef.current || !session || session.cta_mode !== "webchat" || !webchatToken) return;
+    summaryManualChangesPendingRef.current = false;
+    void publicApiFetch<PublicBookingSummary>(
+      `/public/booking/sessions/${session.session_id}/summary/followup`,
+      { method: "POST" },
+      { publicAccessToken: webchatToken },
+    )
+      .then((response) => {
+        setSummary(response);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Nao foi possivel continuar o atendimento pelo resumo.");
+      });
+  }, [mobileSummaryOpen, session, webchatToken]);
+
   const handleMobileSummaryGestureStart = useCallback(
     (event: ReactPointerEvent<HTMLElement>, action: "open" | "close") => {
       if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -1696,25 +1715,6 @@ export default function PublicBookingPage() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }, []);
-
-  function handleCloseSummaryPanel() {
-    if (!mobileSummaryOpen) return;
-    setMobileSummaryOpen(false);
-    if (!summaryManualChangesPendingRef.current || !session || session.cta_mode !== "webchat" || !webchatToken) return;
-    summaryManualChangesPendingRef.current = false;
-    void publicApiFetch<PublicBookingSummary>(
-      `/public/booking/sessions/${session.session_id}/summary/followup`,
-      { method: "POST" },
-      { publicAccessToken: webchatToken },
-    )
-      .then((response) => {
-        setSummary(response);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Nao foi possivel continuar o atendimento pelo resumo.");
-      });
-  }
 
   useEffect(() => {
     if (!isWebchat) {

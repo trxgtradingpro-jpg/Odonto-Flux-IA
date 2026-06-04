@@ -3281,7 +3281,7 @@ export default function ConfiguracoesPage({ fixedTab }: ConfiguracoesPageProps =
                               }))
                             }
                           />
-                          Mostrar botao "Teste IA" (demo)
+                          Mostrar botao &quot;Teste IA&quot; (demo)
                         </label>
                         <Button variant="outline" onClick={restoreBrandingColors}>
                           Restaurar cores

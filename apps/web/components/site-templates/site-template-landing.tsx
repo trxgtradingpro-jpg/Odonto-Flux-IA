@@ -501,7 +501,9 @@ function PremiumSiteHeader({
     }
 
     document.body.style.setProperty("overflow", "hidden");
-    return () => document.body.style.removeProperty("overflow");
+    return () => {
+      document.body.style.removeProperty("overflow");
+    };
   }, [mobileMenuOpen]);
 
   return (

@@ -20,6 +20,7 @@ import {
   buildSiteTemplatePreviewPath,
   getSiteTemplateEliteDetails,
   getSiteTemplateVisual,
+  type SiteTemplate,
 } from "@/lib/site-templates";
 
 export const metadata: Metadata = {
@@ -52,8 +53,10 @@ const SALES_STEPS = [
   },
 ];
 
-function getFeaturedTemplates() {
-  return FEATURED_TEMPLATE_SLUGS.map((slug) => SITE_TEMPLATES.find((template) => template.slug === slug)).filter(Boolean);
+function getFeaturedTemplates(): SiteTemplate[] {
+  return FEATURED_TEMPLATE_SLUGS.map((slug) => SITE_TEMPLATES.find((template) => template.slug === slug)).filter(
+    (template): template is SiteTemplate => Boolean(template),
+  );
 }
 
 export default function SiteTemplatesCatalogPage() {
