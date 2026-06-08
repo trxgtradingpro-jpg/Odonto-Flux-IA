@@ -1111,6 +1111,213 @@ def test_start_sales_outreach_automation_marks_snapshot_and_sends_first_step(mon
     assert outreach.get("last_step") == "reception_intro"
 
 
+def test_send_no_site_outreach_stage_queues_random_message_for_whatsapp_web_bridge(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    monkeypatch.setattr(sales_demo_service.secrets, "randbelow", lambda size: 1)
+    sales_demo_service.save_no_site_outreach_flow_config(
+        db_session,
+        {
+            "first_messages": ["primeira A", "primeira B", "primeira C"],
+            "second_messages": ["segunda A", "segunda B", "segunda C"],
+            "third_messages": ["terceira A", "terceira B", "terceira C"],
+        },
+    )
+
+    result = sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="first",
+        actor_id=seeded_db["admin"].id,
+    )
+
+    outbox = db_session.scalar(select(OutboxMessage).where(OutboxMessage.id.is_not(None)).order_by(OutboxMessage.created_at.desc()))
+    metadata = (outbox.payload or {}).get("metadata", {})
+    snapshot = (result["prospect"]["proposal_snapshot"] or {}).get("no_site_outreach", {})
+
+    assert result["step"] == "no_site_first"
+    assert result["message_text"] == "primeira B"
+    assert result["transport"] == "whatsapp_web_bridge"
+    assert metadata["source"] == "sales_outreach"
+    assert metadata["flow"] == "no_site_outreach"
+    assert metadata["no_site_outreach_stage"] == "first"
+    assert metadata["transport"] == "whatsapp_web_bridge"
+    assert snapshot["sent_stages"]["first"]["message_text"] == "primeira B"
+
+
+def test_send_no_site_outreach_bulk_queues_first_stage_for_all_without_site(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    first = _create_prospect(db_session)
+    second = ProspectAccount(
+        clinic_name="Clinica Sem Site Dois",
+        whatsapp_phone="+55 11 97777-2222",
+        city="Sao Paulo",
+        state="SP",
+        legal_basis="interesse_legitimo_b2b",
+    )
+    with_site = ProspectAccount(
+        clinic_name="Clinica Com Site",
+        whatsapp_phone="+55 11 96666-3333",
+        website="https://clinica-com-site.test",
+        city="Sao Paulo",
+        state="SP",
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add_all([second, with_site])
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    monkeypatch.setattr(sales_demo_service.secrets, "randbelow", lambda size: 0)
+
+    eligible = sales_demo_service.list_no_site_outreach_eligible(db_session, stage="first", limit=10)
+    result = sales_demo_service.send_no_site_outreach_bulk(
+        db_session,
+        stage="first",
+        actor_id=seeded_db["admin"].id,
+        limit=10,
+    )
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    db_session.refresh(with_site)
+
+    assert eligible["eligible_count"] == 2
+    assert result["queued_count"] == 2
+    assert result["errors"] == []
+    assert (first.proposal_snapshot or {}).get("no_site_outreach", {}).get("sent_stages", {}).get("first")
+    assert (second.proposal_snapshot or {}).get("no_site_outreach", {}).get("sent_stages", {}).get("first")
+    assert not (with_site.proposal_snapshot or {}).get("no_site_outreach")
+
+
+def test_send_no_site_outreach_stage_blocks_clinic_with_site(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+    prospect.website = "https://clinica.test"
+    db_session.add(prospect)
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+
+    with pytest.raises(ApiError) as exc_info:
+        sales_demo_service.send_no_site_outreach_stage(
+            db_session,
+            prospect=prospect,
+            stage="first",
+            actor_id=seeded_db["admin"].id,
+        )
+
+    assert exc_info.value.code == "NO_SITE_OUTREACH_REQUIRES_WITHOUT_SITE"
+
+
+def test_no_site_outreach_bulk_third_stage_lists_only_after_human_reply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    monkeypatch.setattr(sales_demo_service.secrets, "randbelow", lambda size: 0)
+
+    first = sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="first",
+        actor_id=seeded_db["admin"].id,
+    )
+    sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="second",
+        actor_id=seeded_db["admin"].id,
+    )
+
+    before_reply = sales_demo_service.list_no_site_outreach_eligible(db_session, stage="third", limit=10)
+    assert before_reply["eligible_count"] == 0
+    assert before_reply["blocked_summary"]["human_reply_required"] == 1
+
+    db_session.add(
+        Message(
+            tenant_id=sender_tenant.id,
+            conversation_id=first["conversation_id"],
+            direction=MessageDirection.INBOUND.value,
+            channel="whatsapp",
+            sender_type="patient",
+            body="Pode mandar o preview.",
+            message_type="text",
+            status=MessageStatus.RECEIVED.value,
+        )
+    )
+    db_session.commit()
+
+    after_reply = sales_demo_service.list_no_site_outreach_eligible(db_session, stage="third", limit=10)
+    result = sales_demo_service.send_no_site_outreach_bulk(
+        db_session,
+        stage="third",
+        actor_id=seeded_db["admin"].id,
+        limit=10,
+    )
+
+    assert after_reply["eligible_count"] == 1
+    assert result["queued_count"] == 1
+    assert result["queued"][0]["step"] == "no_site_third"
+
+
+def test_no_site_outreach_third_stage_requires_human_reply(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    prospect = _create_prospect(db_session)
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    monkeypatch.setattr(sales_demo_service.secrets, "randbelow", lambda size: 0)
+
+    first = sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="first",
+        actor_id=seeded_db["admin"].id,
+    )
+    sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="second",
+        actor_id=seeded_db["admin"].id,
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        sales_demo_service.send_no_site_outreach_stage(
+            db_session,
+            prospect=prospect,
+            stage="third",
+            actor_id=seeded_db["admin"].id,
+        )
+    assert exc_info.value.code == "NO_SITE_OUTREACH_THIRD_REQUIRES_HUMAN_REPLY"
+
+    inbound = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=first["conversation_id"],
+        direction=MessageDirection.INBOUND.value,
+        channel="whatsapp",
+        sender_type="patient",
+        body="Pode mandar para eu ver.",
+        message_type="text",
+        status=MessageStatus.RECEIVED.value,
+    )
+    db_session.add(inbound)
+    db_session.commit()
+
+    third = sales_demo_service.send_no_site_outreach_stage(
+        db_session,
+        prospect=prospect,
+        stage="third",
+        actor_id=seeded_db["admin"].id,
+    )
+
+    assert third["step"] == "no_site_third"
+
+
 def test_outreach_batch_processes_demo_and_first_step(monkeypatch, seeded_db, db_session):
     sender_tenant = _create_sender_tenant(db_session)
     prospect = _create_prospect(db_session)

@@ -94,6 +94,72 @@ type Runtime = {
   bridge_command?: string | null;
 };
 
+type NoSiteOutreachStage = "first" | "second" | "third";
+
+type NoSiteOutreachFlowConfig = {
+  first_messages: string[];
+  second_messages: string[];
+  third_messages: string[];
+};
+
+type NoSiteEligibilityResponse = {
+  stage: NoSiteOutreachStage;
+  eligible_count: number;
+  preview: ProspectPreview[];
+  blocked_summary: Record<string, number>;
+  limit: number;
+};
+
+type NoSiteBulkResponse = {
+  stage: NoSiteOutreachStage;
+  eligible_count: number;
+  requested_count: number;
+  queued_count: number;
+  skipped_count: number;
+  errors: Array<{ prospect_id?: string | null; clinic_name?: string | null; code: string; message: string }>;
+  blocked_summary: Record<string, number>;
+};
+
+const NO_SITE_OUTREACH_STAGES: Array<{ value: NoSiteOutreachStage; label: string; helper: string }> = [
+  {
+    value: "first",
+    label: "1a mensagem",
+    helper: "Primeiro contato para clinicas sem site.",
+  },
+  {
+    value: "second",
+    label: "2a mensagem",
+    helper: "Follow-up permitido depois da primeira etapa; o bridge segura se precisar aguardar intervalo.",
+  },
+  {
+    value: "third",
+    label: "3a mensagem",
+    helper: "Liberada somente quando ja existe resposta humana da clinica.",
+  },
+];
+
+const DEFAULT_NO_SITE_OUTREACH_FLOW: NoSiteOutreachFlowConfig = {
+  first_messages: [
+    "Oi, tudo bem?\n\nNotei que a clinica ainda nao possui um site profissional.\n\nEu ja montei um modelo de site para a clinica e gostaria de mostrar ao responsavel.\n\nQuem seria a pessoa ideal para eu encaminhar?",
+    "Oi, tudo bem? Encontrei a clinica no Google e vi que voces ainda nao aparecem com um site proprio. Aqui e o time comercial da ClinicFlux AI. Quem cuida dessa parte de site e WhatsApp por ai?",
+    "Bom dia! Aqui e o time comercial da ClinicFlux AI. Vi a clinica pelo Google e parece que ainda nao existe um site vinculado. Posso falar com quem decide sobre presenca online e WhatsApp?",
+  ],
+  second_messages: [
+    "Obrigado. Meu contato e comercial, nao e para agendamento de paciente. A ideia e mostrar um modelo simples de site local com WhatsApp, mapa e servicos. Quem seria o responsavel por isso?",
+    "So para alinhar: falo pela ClinicFlux AI, no contato comercial. Vi uma oportunidade de site local para ajudar pacientes a encontrarem a clinica no Google. Posso encaminhar ao responsavel?",
+    "Passando de forma bem objetiva: preparei um modelo de site para clinicas que ainda dependem so do Google e WhatsApp. Faz sentido eu mandar para quem cuida dessa decisao?",
+  ],
+  third_messages: [
+    "Perfeito. Posso te enviar o preview do modelo de site da clinica para voce avaliar se faz sentido levar adiante?",
+    "Boa. A proposta e simples: site local com WhatsApp, mapa, servicos e prova de confianca. Quer que eu te mostre o preview rapido?",
+    "Combinado. Se voce me autorizar, envio um preview curto do site e depois voces decidem se vale conversar.",
+  ],
+};
+
+function noSiteStageConfigKey(stage: NoSiteOutreachStage): keyof NoSiteOutreachFlowConfig {
+  return `${stage}_messages` as keyof NoSiteOutreachFlowConfig;
+}
+
 function humanize(value?: string | null) {
   if (!value) return "-";
   return value
@@ -126,6 +192,9 @@ export default function OutreachAutomationPage() {
   const [temperatureFilter, setTemperatureFilter] = useState("");
   const [demoStatusFilter, setDemoStatusFilter] = useState("");
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const [noSiteStage, setNoSiteStage] = useState<NoSiteOutreachStage>("first");
+  const [noSiteLimit, setNoSiteLimit] = useState("200");
+  const [noSiteFlowDraft, setNoSiteFlowDraft] = useState<NoSiteOutreachFlowConfig>(DEFAULT_NO_SITE_OUTREACH_FLOW);
 
   useEffect(() => {
     setHasToken(Boolean(getAdminAccessToken()));
@@ -161,6 +230,28 @@ export default function OutreachAutomationPage() {
     retry: false,
   });
 
+  const noSiteFlowQuery = useQuery<NoSiteOutreachFlowConfig>({
+    queryKey: ["adm-no-site-outreach-flow"],
+    queryFn: async () => (await api.get("/admin/outreach/no-site-flow")).data,
+    enabled: hasToken && canViewPage,
+    retry: false,
+  });
+
+  const noSiteEligibilityQuery = useQuery<NoSiteEligibilityResponse>({
+    queryKey: ["adm-no-site-outreach-eligible", noSiteStage, noSiteLimit],
+    queryFn: async () =>
+      (
+        await api.get("/admin/outreach/no-site/eligible", {
+          params: {
+            stage: noSiteStage,
+            limit: Math.min(Math.max(Number(noSiteLimit || 200), 1), 200),
+          },
+        })
+      ).data,
+    enabled: hasToken && canViewPage,
+    retry: false,
+  });
+
   const batchesQuery = useQuery<BatchListResponse>({
     queryKey: ["adm-outreach-automation-batches"],
     queryFn: async () => (await api.get("/admin/outreach/automation/batches", { params: { limit: 20 } })).data,
@@ -168,6 +259,15 @@ export default function OutreachAutomationPage() {
     retry: false,
     refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    if (!noSiteFlowQuery.data) return;
+    setNoSiteFlowDraft({
+      first_messages: noSiteFlowQuery.data.first_messages?.slice(0, 3) || DEFAULT_NO_SITE_OUTREACH_FLOW.first_messages,
+      second_messages: noSiteFlowQuery.data.second_messages?.slice(0, 3) || DEFAULT_NO_SITE_OUTREACH_FLOW.second_messages,
+      third_messages: noSiteFlowQuery.data.third_messages?.slice(0, 3) || DEFAULT_NO_SITE_OUTREACH_FLOW.third_messages,
+    });
+  }, [noSiteFlowQuery.data]);
 
   useEffect(() => {
     const batches = batchesQuery.data?.data || [];
@@ -208,6 +308,43 @@ export default function OutreachAutomationPage() {
     onError: () => toast.error("Nao foi possivel iniciar a automacao."),
   });
 
+  const updateNoSiteFlowMessage = (stage: NoSiteOutreachStage, index: number, value: string) => {
+    const key = noSiteStageConfigKey(stage);
+    setNoSiteFlowDraft((current) => {
+      const nextMessages = [...(current[key] || DEFAULT_NO_SITE_OUTREACH_FLOW[key])].slice(0, 3);
+      while (nextMessages.length < 3) nextMessages.push("");
+      nextMessages[index] = value;
+      return { ...current, [key]: nextMessages };
+    });
+  };
+
+  const saveNoSiteFlowMutation = useMutation({
+    mutationFn: async () => (await api.put<NoSiteOutreachFlowConfig>("/admin/outreach/no-site-flow", noSiteFlowDraft)).data,
+    onSuccess: (data) => {
+      setNoSiteFlowDraft(data);
+      toast.success("Mensagens para clinicas sem site salvas.");
+      queryClient.invalidateQueries({ queryKey: ["adm-no-site-outreach-flow"] });
+    },
+    onError: () => toast.error("Nao foi possivel salvar as mensagens sem-site."),
+  });
+
+  const sendAllNoSiteMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<NoSiteBulkResponse>("/admin/outreach/no-site/send-all", {
+          stage: noSiteStage,
+          limit: Math.min(Math.max(Number(noSiteLimit || 200), 1), 500),
+        })
+      ).data,
+    onSuccess: (data) => {
+      toast.success(`${data.queued_count} clinica(s) sem site entraram na fila da ${NO_SITE_OUTREACH_STAGES.find((stage) => stage.value === data.stage)?.label || "etapa"}.`);
+      queryClient.invalidateQueries({ queryKey: ["adm-no-site-outreach-eligible"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-automation-eligible"] });
+    },
+    onError: () => toast.error("Nao foi possivel disparar as mensagens sem-site."),
+  });
+
   const pauseMutation = useMutation({
     mutationFn: async (batchId: string) => (await api.post<Batch>(`/admin/outreach/automation/batches/${batchId}/pause`)).data,
     onSuccess: () => {
@@ -246,6 +383,10 @@ export default function OutreachAutomationPage() {
   });
 
   const selectedBatch = batchDetailQuery.data ?? null;
+  const noSiteStageMeta = NO_SITE_OUTREACH_STAGES.find((stage) => stage.value === noSiteStage) || NO_SITE_OUTREACH_STAGES[0];
+  const noSiteEligibleCount = noSiteEligibilityQuery.data?.eligible_count ?? 0;
+  const noSiteBulkLimit = Math.min(Math.max(Number(noSiteLimit || 200), 1), 500);
+  const noSiteSendCount = Math.min(noSiteEligibleCount, noSiteBulkLimit);
   const batchCards = useMemo(() => {
     const summary = selectedBatch?.summary || {};
     return [
@@ -340,6 +481,149 @@ export default function OutreachAutomationPage() {
               <MetricCard label="Bridge pendente" value={String(runtimeQuery.data?.bridge_pending ?? 0)} helper="Mensagens aguardando o whatsapp_web.py." />
               <MetricCard label="Bridge processando" value={String(runtimeQuery.data?.bridge_processing ?? 0)} helper="Itens ja reivindicados pelo bridge." />
               <MetricCard label="Falhas no bridge" value={String((runtimeQuery.data?.bridge_failed ?? 0) + (runtimeQuery.data?.bridge_dead_letter ?? 0))} helper={runtimeQuery.data?.bridge_command || "Configure o bridge para envio real."} />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="overflow-hidden border-cyan-200 bg-cyan-50">
+          <CardContent className="space-y-5 p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-800">Clinicas sem site</p>
+                <h2 className="mt-1 text-2xl font-black text-stone-950">Fluxo automatico em 3 mensagens</h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-cyan-950">
+                  Configure 3 variacoes para cada etapa. Ao disparar, o sistema escolhe uma variacao aleatoria da etapa
+                  selecionada, coloca no WhatsApp Web local e salva o historico no CRM.
+                </p>
+                <p className="mt-1 text-xs font-bold uppercase tracking-[0.16em] text-cyan-800">
+                  A 3a mensagem so fica elegivel depois de resposta humana da clinica.
+                </p>
+              </div>
+              <Button
+                type="button"
+                className="shrink-0 bg-cyan-700 text-white hover:bg-cyan-600"
+                onClick={() => saveNoSiteFlowMutation.mutate()}
+                disabled={!canEditPage || saveNoSiteFlowMutation.isPending || noSiteFlowQuery.isLoading}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                {saveNoSiteFlowMutation.isPending ? "Salvando..." : "Salvar mensagens"}
+              </Button>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[220px_160px_minmax(0,1fr)_260px]">
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-cyan-900">Etapa para disparar</span>
+                <select
+                  className="h-10 w-full rounded-lg border border-cyan-200 bg-white px-3 text-sm font-semibold text-stone-950"
+                  value={noSiteStage}
+                  onChange={(event) => setNoSiteStage(event.target.value as NoSiteOutreachStage)}
+                >
+                  {NO_SITE_OUTREACH_STAGES.map((stage) => (
+                    <option key={stage.value} value={stage.value}>
+                      {stage.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-cyan-900">Limite</span>
+                <Input value={noSiteLimit} onChange={(event) => setNoSiteLimit(event.target.value)} />
+              </label>
+
+              <div className="rounded-2xl border border-cyan-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-stone-950">{noSiteStageMeta.label}</p>
+                    <p className="mt-1 text-xs leading-5 text-stone-600">{noSiteStageMeta.helper}</p>
+                  </div>
+                  <Badge className="bg-cyan-100 text-cyan-800">{noSiteEligibleCount} elegivel(is)</Badge>
+                </div>
+                {Object.entries(noSiteEligibilityQuery.data?.blocked_summary || {}).length ? (
+                  <p className="mt-3 text-xs leading-5 text-stone-500">
+                    Bloqueios: {Object.entries(noSiteEligibilityQuery.data?.blocked_summary || {}).map(([key, value]) => `${humanize(key)} ${value}`).join(", ")}.
+                  </p>
+                ) : null}
+              </div>
+
+              <Button
+                type="button"
+                className="h-full min-h-16 bg-stone-950 text-white hover:bg-stone-800"
+                disabled={!canCreatePage || sendAllNoSiteMutation.isPending || noSiteSendCount <= 0}
+                onClick={() => {
+                  if (!noSiteSendCount) return;
+                  const confirmed = window.confirm(
+                    `Enviar ${noSiteStageMeta.label.toLowerCase()} para ${noSiteSendCount} clinica(s) sem site?`,
+                  );
+                  if (!confirmed) return;
+                  sendAllNoSiteMutation.mutate();
+                }}
+              >
+                <Send className="h-4 w-4" />
+                {sendAllNoSiteMutation.isPending ? "Enfileirando..." : `Enviar para ${noSiteSendCount || "todas"}`}
+              </Button>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="grid gap-4 lg:grid-cols-3">
+                {NO_SITE_OUTREACH_STAGES.map((stage) => {
+                  const key = noSiteStageConfigKey(stage.value);
+                  const messages = noSiteFlowDraft[key] || DEFAULT_NO_SITE_OUTREACH_FLOW[key];
+                  return (
+                    <div key={stage.value} className="rounded-2xl border border-cyan-200 bg-white p-4">
+                      <p className="font-black text-stone-950">{stage.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-stone-500">{stage.helper}</p>
+                      <div className="mt-3 space-y-2">
+                        {[0, 1, 2].map((index) => (
+                          <label key={`${stage.value}-${index}`} className="block">
+                            <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-stone-500">
+                              Variacao {index + 1}
+                            </span>
+                            <textarea
+                              className="min-h-[116px] w-full resize-y rounded-lg border border-cyan-200 bg-white px-3 py-2 text-sm leading-6 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+                              value={messages[index] || ""}
+                              onChange={(event) => updateNoSiteFlowMessage(stage.value, index, event.target.value)}
+                              disabled={!canEditPage}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-2xl border border-cyan-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-stone-950">Preview da etapa</p>
+                    <p className="mt-1 text-xs text-stone-500">Primeiras clinicas que receberao {noSiteStageMeta.label.toLowerCase()}.</p>
+                  </div>
+                  <Badge className="bg-stone-100 text-stone-700">Sem site</Badge>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {(noSiteEligibilityQuery.data?.preview || []).slice(0, 8).map((item) => (
+                    <div key={item.id} className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-bold text-stone-950">{item.clinic_name}</p>
+                          <p className="text-xs text-stone-500">{[item.city, item.state].filter(Boolean).join(" / ") || "Sem cidade"}</p>
+                        </div>
+                        <span className="text-sm font-black text-stone-900">{item.score}</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Badge className={batchStatusClass(item.status)}>{humanize(item.status)}</Badge>
+                        <Badge className={temperatureClass(item.temperature)}>{humanize(item.temperature)}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                  {!noSiteEligibilityQuery.isLoading && !(noSiteEligibilityQuery.data?.preview || []).length ? (
+                    <div className="rounded-xl border border-dashed border-cyan-200 bg-cyan-50 p-4 text-sm leading-6 text-cyan-900">
+                      Nenhuma clinica elegivel para esta etapa agora. Troque a etapa ou aguarde respostas para liberar o proximo passo.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>

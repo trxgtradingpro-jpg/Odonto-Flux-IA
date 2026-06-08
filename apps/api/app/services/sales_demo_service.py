@@ -444,6 +444,55 @@ SALES_OUTREACH_REPLY_CLASSIFICATIONS: dict[str, dict] = {
     },
 }
 SALES_OUTREACH_FLOW_SETTING_KEY = "sales.outreach_flow"
+NO_SITE_OUTREACH_FLOW_SETTING_KEY = "sales.no_site_outreach_flow"
+NO_SITE_OUTREACH_STAGES = ("first", "second", "third")
+NO_SITE_OUTREACH_STAGE_TO_STEP = {
+    "first": "no_site_first",
+    "second": "no_site_second",
+    "third": "no_site_third",
+}
+NO_SITE_OUTREACH_STAGE_LABELS = {
+    "first": "Primeira mensagem sem site",
+    "second": "Segunda mensagem sem site",
+    "third": "Terceira mensagem sem site",
+}
+NO_SITE_OUTREACH_MESSAGE_DEFAULTS = {
+    "first": [
+        (
+            "Oi, tudo bem?\n\n"
+            "Notei que a clinica ainda nao possui um site profissional.\n\n"
+            "Eu ja montei um modelo de site para a clinica e gostaria de mostrar ao responsavel.\n\n"
+            "Quem seria a pessoa ideal para eu encaminhar?"
+        ),
+        (
+            "Oi, tudo bem? Encontrei a clinica no Google e vi que voces ainda nao aparecem com um site proprio. "
+            "Aqui e o time comercial da ClinicFlux AI. Quem cuida dessa parte de site e WhatsApp por ai?"
+        ),
+        (
+            "Bom dia! Aqui e o time comercial da ClinicFlux AI. Vi a clinica pelo Google e parece que ainda nao existe um site vinculado. "
+            "Posso falar com quem decide sobre presenca online e WhatsApp?"
+        ),
+    ],
+    "second": [
+        (
+            "Obrigado. Meu contato e comercial, nao e para agendamento de paciente. "
+            "A ideia e mostrar um modelo simples de site local com WhatsApp, mapa e servicos. Quem seria o responsavel por isso?"
+        ),
+        (
+            "So para alinhar: falo pela ClinicFlux AI, no contato comercial. "
+            "Vi uma oportunidade de site local para ajudar pacientes a encontrarem a clinica no Google. Posso encaminhar ao responsavel?"
+        ),
+        (
+            "Passando de forma bem objetiva: preparei um modelo de site para clinicas que ainda dependem so do Google e WhatsApp. "
+            "Faz sentido eu mandar para quem cuida dessa decisao?"
+        ),
+    ],
+    "third": [
+        "Perfeito. Posso te enviar o preview do modelo de site da clinica para voce avaliar se faz sentido levar adiante?",
+        "Boa. A proposta e simples: site local com WhatsApp, mapa, servicos e prova de confianca. Quer que eu te mostre o preview rapido?",
+        "Combinado. Se voce me autorizar, envio um preview curto do site e depois voces decidem se vale conversar.",
+    ],
+}
 SALES_OUTREACH_STEP_MESSAGE_DEFAULTS = {
     "responsibility_check": [
         "Perfeito. Voce mesmo cuida dos agendamentos e do atendimento no WhatsApp da clinica?",
@@ -2095,6 +2144,20 @@ def _outreach_snapshot(prospect: ProspectAccount) -> dict:
     return dict(outreach) if isinstance(outreach, dict) else {}
 
 
+def _no_site_outreach_snapshot(prospect: ProspectAccount) -> dict:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    no_site_outreach = snapshot.get("no_site_outreach")
+    return dict(no_site_outreach) if isinstance(no_site_outreach, dict) else {}
+
+
+def _update_no_site_outreach_snapshot(prospect: ProspectAccount, *, patch: dict) -> None:
+    snapshot = dict(prospect.proposal_snapshot or {})
+    no_site_outreach = dict(snapshot.get("no_site_outreach") or {}) if isinstance(snapshot.get("no_site_outreach"), dict) else {}
+    no_site_outreach.update(jsonable_encoder(patch))
+    snapshot["no_site_outreach"] = no_site_outreach
+    prospect.proposal_snapshot = snapshot
+
+
 def _sales_outreach_skill_enabled() -> bool:
     return bool(getattr(settings, "sales_outreach_skill_enabled", True))
 
@@ -2366,6 +2429,45 @@ def save_sales_outreach_flow_config(db: Session, payload: dict) -> dict:
     return normalized
 
 
+def _normalize_no_site_outreach_flow_config(raw_value: dict | None, *, strict: bool = False) -> dict:
+    payload = raw_value if isinstance(raw_value, dict) else {}
+    normalized: dict[str, list[str]] = {}
+    for stage in NO_SITE_OUTREACH_STAGES:
+        key = f"{stage}_messages"
+        raw_messages = payload.get(key)
+        if isinstance(raw_messages, list):
+            messages = [str(item).strip() for item in raw_messages if str(item).strip()]
+        else:
+            messages = []
+        if strict and len(messages) != 3:
+            raise ApiError(
+                status_code=422,
+                code="NO_SITE_OUTREACH_MESSAGES_INVALID",
+                message="Configure exatamente 3 mensagens preenchidas para cada etapa sem site.",
+                details={"stage": stage, "expected": 3, "received": len(messages)},
+            )
+        defaults = [str(item).strip() for item in NO_SITE_OUTREACH_MESSAGE_DEFAULTS[stage] if str(item).strip()]
+        normalized[key] = (messages or defaults)[:3]
+        if len(normalized[key]) < 3:
+            normalized[key] = (normalized[key] + defaults)[:3]
+    return normalized
+
+
+def get_no_site_outreach_flow_config(db: Session) -> dict:
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    item = db.scalar(select(Setting).where(Setting.tenant_id == sender_tenant.id, Setting.key == NO_SITE_OUTREACH_FLOW_SETTING_KEY))
+    raw_value = item.value if item and isinstance(item.value, dict) else None
+    return _normalize_no_site_outreach_flow_config(raw_value)
+
+
+def save_no_site_outreach_flow_config(db: Session, payload: dict) -> dict:
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    normalized = _normalize_no_site_outreach_flow_config(payload, strict=True)
+    _upsert_setting(db, tenant_id=sender_tenant.id, key=NO_SITE_OUTREACH_FLOW_SETTING_KEY, value=normalized)
+    db.commit()
+    return normalized
+
+
 def _sales_outreach_ai_is_enabled() -> bool:
     provider = str(settings.llm_provider or "").strip().lower()
     return bool(
@@ -2513,6 +2615,16 @@ def _sales_outreach_complete_actual_transcript(
     return "\n".join(_sales_outreach_format_message_lines(rows))
 
 
+def _sales_outreach_conversation_has_human_reply(db: Session, *, conversation_id: UUID) -> bool:
+    for message in _sales_outreach_actual_conversation_messages(db, conversation_id=conversation_id):
+        if message.direction != MessageDirection.INBOUND.value:
+            continue
+        body = _sales_outreach_clean_ai_text(message.body)
+        if body and classify_sales_outreach_reply(body) != "automatica":
+            return True
+    return False
+
+
 def _sales_outreach_message_time(message: Message | None) -> datetime | None:
     if not message:
         return None
@@ -2620,14 +2732,16 @@ def review_sales_outreach_outbox_send_gate(
     latest_inbound = next((item for item in reversed(actual_messages) if item.direction == MessageDirection.INBOUND.value), None)
     latest_inbound_body = _sales_outreach_clean_ai_text(latest_inbound.body if latest_inbound else "")
     latest_inbound_classification = classify_sales_outreach_reply(latest_inbound_body) if latest_inbound_body else ""
+    no_site_stage = str(metadata.get("no_site_outreach_stage") or "").strip()
 
     if facts.get("last_actual_direction") == MessageDirection.INBOUND.value and (
         candidate_step == "auto_reply_hold" or latest_inbound_classification == "automatica"
     ):
-        return _sales_outreach_auto_reply_block_gate(
-            facts=facts,
-            reason="Clinica retornou com mensagem automatica/fora de horario; nao enviar nova mensagem ate retorno humano.",
-        )
+        if not (no_site_stage == "second" and latest_inbound_classification == "automatica"):
+            return _sales_outreach_auto_reply_block_gate(
+                facts=facts,
+                reason="Clinica retornou com mensagem automatica/fora de horario; nao enviar nova mensagem ate retorno humano.",
+            )
 
     if _sales_outreach_violates_sender_persona(candidate_message):
         repaired_message = (
@@ -2655,6 +2769,106 @@ def review_sales_outreach_outbox_send_gate(
                 "facts": facts,
             }
 
+    if no_site_stage:
+        outbound_count = len([item for item in actual_messages if item.direction == MessageDirection.OUTBOUND.value])
+        human_reply_received = (
+            _sales_outreach_conversation_has_human_reply(db, conversation_id=conversation.id)
+            if conversation.id
+            else False
+        )
+        if no_site_stage not in NO_SITE_OUTREACH_STAGES:
+            return {
+                "decision": "block",
+                "confidence": 1.0,
+                "reason": "Envio bloqueado: etapa sem-site invalida.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if not prospect:
+            return {
+                "decision": "block",
+                "confidence": 1.0,
+                "reason": "Envio bloqueado: prospect sem-site nao encontrado.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if str(prospect.website or "").strip():
+            return {
+                "decision": "block",
+                "confidence": 1.0,
+                "reason": "Envio bloqueado: a clinica ja possui site cadastrado.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if no_site_stage == "first" and outbound_count > 0:
+            return {
+                "decision": "block",
+                "confidence": 1.0,
+                "reason": "Envio bloqueado: a primeira mensagem sem-site ja passou nesta conversa.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if no_site_stage == "second" and outbound_count != 1:
+            return {
+                "decision": "block",
+                "confidence": 1.0,
+                "reason": "Envio bloqueado: a segunda mensagem sem-site exige exatamente uma mensagem anterior.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if no_site_stage == "third":
+            if outbound_count < 2:
+                return {
+                    "decision": "block",
+                    "confidence": 1.0,
+                    "reason": "Envio bloqueado: a terceira mensagem sem-site exige as duas primeiras etapas.",
+                    "wait_minutes": None,
+                    "facts": facts,
+                }
+            if not human_reply_received:
+                return {
+                    "decision": "block",
+                    "confidence": 1.0,
+                    "reason": "Envio bloqueado: terceira mensagem fria sem resposta humana nao e permitida.",
+                    "wait_minutes": None,
+                    "facts": facts,
+                }
+        minutes_since_last_outbound = facts.get("minutes_since_last_outbound")
+        if no_site_stage == "first" and outbound_count == 0:
+            return {
+                "decision": "send",
+                "confidence": 1.0,
+                "reason": "Primeira mensagem sem-site liberada.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if no_site_stage == "second" and not human_reply_received:
+            if facts.get("last_actual_direction") == MessageDirection.OUTBOUND.value and isinstance(minutes_since_last_outbound, int):
+                min_wait_minutes = _sales_outreach_send_gate_min_wait_minutes()
+                if minutes_since_last_outbound < min_wait_minutes:
+                    return {
+                        "decision": "wait",
+                        "confidence": 1.0,
+                        "reason": f"Aguardar pelo menos {min_wait_minutes} minutos antes da segunda mensagem sem-site.",
+                        "wait_minutes": max(1, min_wait_minutes - minutes_since_last_outbound),
+                        "facts": facts,
+                    }
+            return {
+                "decision": "send",
+                "confidence": 1.0,
+                "reason": "Segunda mensagem sem-site liberada dentro do limite de cold outreach.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+        if human_reply_received:
+            return {
+                "decision": "send",
+                "confidence": 1.0,
+                "reason": "Mensagem sem-site liberada porque existe resposta humana registrada.",
+                "wait_minutes": None,
+                "facts": facts,
+            }
+
     minutes_since_last_outbound = facts.get("minutes_since_last_outbound")
     if (
         facts.get("last_actual_direction") == MessageDirection.OUTBOUND.value
@@ -2672,10 +2886,11 @@ def review_sales_outreach_outbox_send_gate(
 
     if facts.get("last_actual_direction") == MessageDirection.INBOUND.value:
         if candidate_step == "auto_reply_hold" or latest_inbound_classification == "automatica":
-            return _sales_outreach_auto_reply_block_gate(
-                facts=facts,
-                reason="Clinica retornou com mensagem automatica/fora de horario; nao enviar nova mensagem ate retorno humano.",
-            )
+            if not (no_site_stage == "second" and latest_inbound_classification == "automatica"):
+                return _sales_outreach_auto_reply_block_gate(
+                    facts=facts,
+                    reason="Clinica retornou com mensagem automatica/fora de horario; nao enviar nova mensagem ate retorno humano.",
+                )
         if candidate_step == "reception_intro" and facts.get("total_actual_messages", 0) > 1:
             return {
                 "decision": "send",
@@ -5257,6 +5472,405 @@ def send_sales_outreach_step(
     }
 
 
+def send_no_site_outreach_stage(
+    db: Session,
+    *,
+    prospect: ProspectAccount,
+    stage: str,
+    actor_id: UUID | None,
+    commit: bool = True,
+) -> dict:
+    stage = str(stage or "").strip()
+    if stage not in NO_SITE_OUTREACH_STAGES:
+        raise ApiError(status_code=400, code="NO_SITE_OUTREACH_STAGE_INVALID", message="Etapa sem-site invalida.")
+    if str(prospect.website or "").strip():
+        raise ApiError(
+            status_code=409,
+            code="NO_SITE_OUTREACH_REQUIRES_WITHOUT_SITE",
+            message="Envio sem-site bloqueado: esta clinica ja possui site cadastrado.",
+        )
+    if prospect.do_not_contact:
+        raise ApiError(
+            status_code=409,
+            code="NO_SITE_OUTREACH_BLOCKED_OPT_OUT",
+            message="Envio sem-site bloqueado: a clinica esta marcada como nao contactar.",
+        )
+
+    sender_tenant = _sales_outreach_sender_tenant(db)
+    conversation = _ensure_outreach_conversation(db, sender_tenant=sender_tenant, prospect=prospect)
+    if _latest_sales_outreach_inbound_is_opt_out(db, conversation_id=conversation.id):
+        prospect.do_not_contact = True
+        prospect.status = "fechado_perdido"
+        prospect.opt_out_at = prospect.opt_out_at or _now()
+        db.add(prospect)
+        db.flush()
+        raise ApiError(
+            status_code=409,
+            code="NO_SITE_OUTREACH_BLOCKED_OPT_OUT",
+            message="Envio sem-site bloqueado: a ultima resposta da clinica recusou contato.",
+        )
+
+    no_site_snapshot = _no_site_outreach_snapshot(prospect)
+    sent_stages = (
+        dict(no_site_snapshot.get("sent_stages"))
+        if isinstance(no_site_snapshot.get("sent_stages"), dict)
+        else {}
+    )
+    if sent_stages.get(stage):
+        raise ApiError(
+            status_code=409,
+            code="NO_SITE_OUTREACH_STAGE_ALREADY_SENT",
+            message=f"{NO_SITE_OUTREACH_STAGE_LABELS[stage]} ja foi enviada para esta clinica.",
+        )
+    if stage == "second" and not sent_stages.get("first"):
+        raise ApiError(
+            status_code=409,
+            code="NO_SITE_OUTREACH_FIRST_REQUIRED",
+            message="Envie a primeira mensagem sem-site antes da segunda.",
+        )
+    human_reply_received = _sales_outreach_conversation_has_human_reply(db, conversation_id=conversation.id)
+    if stage == "third":
+        if not sent_stages.get("second"):
+            raise ApiError(
+                status_code=409,
+                code="NO_SITE_OUTREACH_SECOND_REQUIRED",
+                message="Envie a segunda mensagem sem-site antes da terceira.",
+            )
+        if not human_reply_received:
+            raise ApiError(
+                status_code=409,
+                code="NO_SITE_OUTREACH_THIRD_REQUIRES_HUMAN_REPLY",
+                message="Terceira mensagem sem-site bloqueada: so envie depois de uma resposta humana da clinica.",
+            )
+
+    config = get_no_site_outreach_flow_config(db)
+    stage_key = f"{stage}_messages"
+    messages = [str(item).strip() for item in config.get(stage_key, []) if str(item).strip()]
+    if not messages:
+        raise ApiError(
+            status_code=422,
+            code="NO_SITE_OUTREACH_MESSAGES_EMPTY",
+            message="Configure as mensagens sem-site antes de enviar.",
+        )
+    variant_index = secrets.randbelow(len(messages))
+    message_text = messages[variant_index]
+    step = NO_SITE_OUTREACH_STAGE_TO_STEP[stage]
+    raw_phone, _ = _prospect_outreach_destination(prospect)
+    dispatch_transport = resolve_sales_outreach_transport()
+
+    outbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.OUTBOUND.value,
+        channel="whatsapp",
+        sender_type="user",
+        sender_user_id=actor_id,
+        body=message_text,
+        message_type="text",
+        payload={
+            "source": "sales_outreach",
+            "flow": "no_site_outreach",
+            "prospect_account_id": str(prospect.id),
+            "step": step,
+            "no_site_outreach_stage": stage,
+            "variant_index": variant_index,
+        },
+        status=MessageStatus.QUEUED.value,
+    )
+    db.add(outbound_message)
+    db.flush()
+
+    outbox = queue_outbound_message(
+        db,
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        to=raw_phone,
+        body=message_text,
+        message_type="text",
+        metadata={
+            "source": "sales_outreach",
+            "flow": "no_site_outreach",
+            "prospect_account_id": str(prospect.id),
+            "step": step,
+            "no_site_outreach_stage": stage,
+            "variant_index": variant_index,
+            "outbound_message_id": str(outbound_message.id),
+            "transport": dispatch_transport,
+        },
+        immediate_dispatch=False if dispatch_transport == WHATSAPP_WEB_BRIDGE_TRANSPORT else None,
+        commit=False,
+    )
+
+    if outbox.status in {OutboxStatus.FAILED.value, OutboxStatus.DEAD_LETTER.value}:
+        failed_at = _now()
+        _update_no_site_outreach_snapshot(
+            prospect,
+            patch={
+                "last_stage": stage,
+                "last_attempted_at": failed_at.isoformat(),
+                "last_dispatch_status": outbox.status,
+                "last_dispatch_error": outbox.last_error,
+                "last_outbox_id": str(outbox.id),
+            },
+        )
+        db.add(prospect)
+        db.commit()
+        raise ApiError(
+            status_code=400,
+            code="NO_SITE_OUTREACH_DISPATCH_FAILED",
+            message=outbox.last_error or "Falha ao enviar mensagem sem-site pelo WhatsApp.",
+        )
+
+    now_value = _now()
+    outbound_message.payload = {
+        **(outbound_message.payload if isinstance(outbound_message.payload, dict) else {}),
+        "queued_outbox_id": str(outbox.id),
+    }
+    db.add(outbound_message)
+
+    if not prospect.first_contact_at:
+        prospect.first_contact_at = now_value
+    if not prospect.first_contact_channel:
+        prospect.first_contact_channel = "whatsapp_no_site_outreach"
+    if stage == "first" and prospect.status in {"novo", "pesquisado"}:
+        prospect.status = "contato_iniciado"
+    elif stage in {"second", "third"} and prospect.status in {"novo", "pesquisado", "contato_iniciado"}:
+        prospect.status = "followup"
+    prospect.last_activity_at = now_value
+
+    sent_stages[stage] = {
+        "sent_at": now_value.isoformat(),
+        "message_text": message_text,
+        "variant_index": variant_index,
+        "outbox_id": str(outbox.id),
+        "outbound_message_id": str(outbound_message.id),
+    }
+    _update_no_site_outreach_snapshot(
+        prospect,
+        patch={
+            "last_stage": stage,
+            "last_step": step,
+            "last_sent_at": now_value.isoformat(),
+            "last_message_text": message_text,
+            "last_variant_index": variant_index,
+            "last_dispatch_status": outbox.status,
+            "last_outbox_id": str(outbox.id),
+            "sender_tenant_id": str(sender_tenant.id),
+            "conversation_id": str(conversation.id),
+            "dispatch_transport": dispatch_transport,
+            "human_reply_received": human_reply_received,
+            "sent_stages": sent_stages,
+        },
+    )
+    _update_outreach_snapshot(
+        prospect,
+        patch={
+            "last_step": step,
+            "last_sent_at": now_value.isoformat(),
+            "last_outbox_id": str(outbox.id),
+            "last_dispatch_status": outbox.status,
+            "sender_tenant_id": str(sender_tenant.id),
+            "conversation_id": str(conversation.id),
+            "dispatch_transport": dispatch_transport,
+        },
+    )
+    add_timeline(
+        db,
+        prospect,
+        event_type=f"prospect.outreach.{step}",
+        event_label=f"{NO_SITE_OUTREACH_STAGE_LABELS[stage]} enviada no WhatsApp",
+        actor_id=actor_id,
+        actor_type="admin",
+        payload={
+            "destination": raw_phone,
+            "sender_tenant_id": str(sender_tenant.id),
+            "conversation_id": str(conversation.id),
+            "outbox_id": str(outbox.id),
+            "message_text": message_text,
+            "stage": stage,
+            "variant_index": variant_index,
+        },
+    )
+    db.add(prospect)
+    _apply_recalculated_score(db, prospect)
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(prospect)
+        db.refresh(outbound_message)
+
+    return {
+        "prospect": serialize_prospect(db, prospect),
+        "step": step,
+        "destination": raw_phone,
+        "message_text": message_text,
+        "demo_login_url": None,
+        "video_url": None,
+        "sender_tenant_id": sender_tenant.id,
+        "conversation_id": conversation.id,
+        "outbound_message_id": outbound_message.id,
+        "transport": dispatch_transport,
+    }
+
+
+def _no_site_outreach_has_human_reply(db: Session, prospect: ProspectAccount, snapshot: dict) -> bool:
+    if bool(snapshot.get("human_reply_received")):
+        return True
+    conversation_id = _sales_outreach_uuid_from_value(snapshot.get("conversation_id"))
+    if not conversation_id:
+        return False
+    return _sales_outreach_conversation_has_human_reply(db, conversation_id=conversation_id)
+
+
+def _no_site_outreach_temperature_rank(value: str | None) -> int:
+    ranks = {"muito_quente": 4, "quente": 3, "morno": 2, "frio": 1}
+    return ranks.get(str(value or "").strip(), 0)
+
+
+def _no_site_outreach_stage_eligibility(db: Session, prospect: ProspectAccount, *, stage: str) -> tuple[bool, str | None]:
+    if stage not in NO_SITE_OUTREACH_STAGES:
+        return False, "invalid_stage"
+    if str(prospect.website or "").strip():
+        return False, "with_site"
+    if prospect.do_not_contact:
+        return False, "do_not_contact"
+    if not normalize_phone(prospect.whatsapp_phone or prospect.phone):
+        return False, "phone_invalid"
+    if str(prospect.status or "").strip() in {"fechado_ganho", "fechado_perdido"}:
+        return False, "closed"
+
+    snapshot = _no_site_outreach_snapshot(prospect)
+    sent_stages = dict(snapshot.get("sent_stages") or {}) if isinstance(snapshot.get("sent_stages"), dict) else {}
+    if sent_stages.get(stage):
+        return False, "stage_already_sent"
+    if stage == "first":
+        return True, None
+    if stage == "second":
+        return (True, None) if sent_stages.get("first") else (False, "first_required")
+    if stage == "third":
+        if not sent_stages.get("second"):
+            return False, "second_required"
+        if not _no_site_outreach_has_human_reply(db, prospect, snapshot):
+            return False, "human_reply_required"
+        return True, None
+    return False, "invalid_stage"
+
+
+def list_no_site_outreach_eligible(
+    db: Session,
+    *,
+    stage: str,
+    limit: int = 50,
+) -> dict:
+    stage = str(stage or "").strip()
+    if stage not in NO_SITE_OUTREACH_STAGES:
+        raise ApiError(status_code=400, code="NO_SITE_OUTREACH_STAGE_INVALID", message="Etapa sem-site invalida.")
+
+    preview_limit = min(max(int(limit or 50), 1), 200)
+    prospects = db.execute(
+        select(ProspectAccount)
+        .where(
+            ProspectAccount.do_not_contact.is_(False),
+            or_(ProspectAccount.whatsapp_phone.is_not(None), ProspectAccount.phone.is_not(None)),
+            or_(ProspectAccount.website.is_(None), func.length(func.trim(ProspectAccount.website)) == 0),
+            ProspectAccount.status.not_in(["fechado_ganho", "fechado_perdido"]),
+        )
+        .order_by(ProspectAccount.score.desc(), ProspectAccount.created_at.asc())
+    ).scalars().all()
+
+    eligible: list[ProspectAccount] = []
+    blocked_summary: dict[str, int] = {}
+    for prospect in prospects:
+        is_eligible, reason = _no_site_outreach_stage_eligibility(db, prospect, stage=stage)
+        if is_eligible:
+            eligible.append(prospect)
+            continue
+        reason_key = reason or "blocked"
+        blocked_summary[reason_key] = blocked_summary.get(reason_key, 0) + 1
+
+    eligible.sort(
+        key=lambda item: (_no_site_outreach_temperature_rank(item.temperature), item.score, item.created_at.timestamp()),
+        reverse=True,
+    )
+    return {
+        "stage": stage,
+        "eligible_count": len(eligible),
+        "preview": [serialize_prospect(db, prospect, include_children=False) for prospect in eligible[:preview_limit]],
+        "blocked_summary": blocked_summary,
+        "limit": preview_limit,
+    }
+
+
+def send_no_site_outreach_bulk(
+    db: Session,
+    *,
+    stage: str,
+    actor_id: UUID | None,
+    limit: int = 200,
+) -> dict:
+    stage = str(stage or "").strip()
+    if stage not in NO_SITE_OUTREACH_STAGES:
+        raise ApiError(status_code=400, code="NO_SITE_OUTREACH_STAGE_INVALID", message="Etapa sem-site invalida.")
+
+    batch_limit = min(max(int(limit or 200), 1), 500)
+    eligible_payload = list_no_site_outreach_eligible(db, stage=stage, limit=batch_limit)
+    prospects = [
+        db.get(ProspectAccount, UUID(str(item["id"])))
+        for item in eligible_payload.get("preview", [])
+        if item.get("id")
+    ]
+
+    queued: list[dict] = []
+    errors: list[dict] = []
+    for prospect in [item for item in prospects if item is not None]:
+        try:
+            result = send_no_site_outreach_stage(
+                db,
+                prospect=prospect,
+                stage=stage,
+                actor_id=actor_id,
+                commit=True,
+            )
+            queued.append(
+                {
+                    "prospect": result["prospect"],
+                    "step": result["step"],
+                    "conversation_id": result["conversation_id"],
+                    "outbound_message_id": result["outbound_message_id"],
+                    "transport": result.get("transport"),
+                }
+            )
+        except ApiError as exc:
+            errors.append(
+                {
+                    "prospect_id": prospect.id,
+                    "clinic_name": prospect.clinic_name,
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "prospect_id": prospect.id,
+                    "clinic_name": prospect.clinic_name,
+                    "code": "NO_SITE_OUTREACH_BULK_ITEM_FAILED",
+                    "message": str(exc)[:1000],
+                }
+            )
+
+    return {
+        "stage": stage,
+        "eligible_count": eligible_payload["eligible_count"],
+        "requested_count": min(batch_limit, eligible_payload["eligible_count"]),
+        "queued_count": len(queued),
+        "skipped_count": max(0, min(batch_limit, eligible_payload["eligible_count"]) - len(queued)),
+        "errors": errors,
+        "queued": queued,
+        "blocked_summary": eligible_payload.get("blocked_summary", {}),
+    }
+
+
 def start_sales_outreach_automation(
     db: Session,
     *,
@@ -5365,6 +5979,19 @@ def sync_prospect_outreach_reply(
             "last_reply_ai_review": jsonable_encoder(inbound_ai_review) if isinstance(inbound_ai_review, dict) else None,
         },
     )
+    no_site_snapshot = _no_site_outreach_snapshot(prospect)
+    if no_site_snapshot:
+        _update_no_site_outreach_snapshot(
+            prospect,
+            patch={
+                "last_reply_at": prospect.last_activity_at.isoformat(),
+                "last_reply_preview": body_preview,
+                "last_reply_classification": reply_classification,
+                "last_reply_ai_review": jsonable_encoder(inbound_ai_review) if isinstance(inbound_ai_review, dict) else None,
+                "human_reply_received": reply_classification != "automatica",
+                "conversation_id": str(conversation.id),
+            },
+        )
     add_timeline(
         db,
         prospect,

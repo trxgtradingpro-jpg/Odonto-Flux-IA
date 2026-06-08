@@ -189,6 +189,28 @@ type OutreachResult = {
   transport?: string | null;
 };
 
+type NoSiteOutreachStage = "first" | "second" | "third";
+
+type NoSiteOutreachStageSnapshot = {
+  sent_at?: string | null;
+  message_text?: string | null;
+  variant_index?: number | null;
+  outbox_id?: string | null;
+  outbound_message_id?: string | null;
+};
+
+type NoSiteOutreachSnapshot = {
+  last_stage?: NoSiteOutreachStage | string | null;
+  last_step?: string | null;
+  last_sent_at?: string | null;
+  last_reply_at?: string | null;
+  last_reply_preview?: string | null;
+  last_reply_classification?: string | null;
+  human_reply_received?: boolean;
+  dispatch_transport?: string | null;
+  sent_stages?: Partial<Record<NoSiteOutreachStage, NoSiteOutreachStageSnapshot>>;
+};
+
 type OutreachSnapshot = {
   automation_active?: boolean;
   automation_mode?: string | null;
@@ -385,7 +407,13 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
 
-const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.25fr)_130px_100px_110px_110px_70px_110px_228px]";
+const NO_SITE_OUTREACH_STAGES: Array<{ value: NoSiteOutreachStage; label: string; shortLabel: string }> = [
+  { value: "first", label: "1a mensagem", shortLabel: "1a" },
+  { value: "second", label: "2a mensagem", shortLabel: "2a" },
+  { value: "third", label: "3a mensagem", shortLabel: "3a" },
+];
+
+const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.25fr)_130px_100px_110px_110px_70px_110px_264px]";
 
 type WebsiteStatusFilter = "" | "without_site" | "with_site";
 
@@ -806,6 +834,24 @@ function getOutreachSnapshot(prospect: Prospect): OutreachSnapshot {
   const raw = prospect.proposal_snapshot?.outreach;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   return raw as OutreachSnapshot;
+}
+
+function getNoSiteOutreachSnapshot(prospect: Prospect): NoSiteOutreachSnapshot {
+  const raw = prospect.proposal_snapshot?.no_site_outreach;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return raw as NoSiteOutreachSnapshot;
+}
+
+function getNextNoSiteOutreachStage(prospect: Prospect): NoSiteOutreachStage | null {
+  const sentStages = getNoSiteOutreachSnapshot(prospect).sent_stages || {};
+  if (!sentStages.first) return "first";
+  if (!sentStages.second) return "second";
+  if (!sentStages.third) return "third";
+  return null;
+}
+
+function noSiteStageLabel(stage?: NoSiteOutreachStage | string | null) {
+  return NO_SITE_OUTREACH_STAGES.find((item) => item.value === stage)?.label || "Sem envio";
 }
 
 function getOutreachLabSnapshot(prospect: Prospect): OutreachLabSnapshot {
@@ -2551,6 +2597,27 @@ export default function AdmPage() {
     },
   });
 
+  const noSiteOutreachMutation = useMutation({
+    mutationFn: async ({ prospectId, stage }: { prospectId: string; stage: NoSiteOutreachStage }) =>
+      (await api.post<OutreachResult>(`/admin/prospects/${prospectId}/outreach/no-site`, { stage })).data,
+    onSuccess: (data) => {
+      const stageLabel = data.step === "no_site_second" ? "2a mensagem" : data.step === "no_site_third" ? "3a mensagem" : "1a mensagem";
+      toast.success(
+        data.transport === "whatsapp_web_bridge"
+          ? `${stageLabel} sem-site entrou na fila do WhatsApp Web local.`
+          : `${stageLabel} sem-site enviada para a fila do WhatsApp.`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-prospect-timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-whatsapp-conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel enviar mensagem sem-site."));
+    },
+  });
+
   const outreachMutation = useMutation({
     mutationFn: async ({
       prospectId,
@@ -2994,6 +3061,7 @@ export default function AdmPage() {
                     const prospectWebsite = getProspectWebsite(prospect);
                     const ownerLabel = prospectOwnerLabel(prospect, isAffiliateUser);
                     const ownerDetail = prospectOwnerDetail(prospect, isAffiliateUser);
+                    const nextNoSiteStage = getNextNoSiteOutreachStage(prospect);
                     return (
                     <div
                       key={prospect.id}
@@ -3040,7 +3108,7 @@ export default function AdmPage() {
                       </span>
                       <span className="font-bold">{prospect.score}</span>
                       <span className="text-xs text-stone-600">{prospect.demo_tenant_id ? humanize(prospect.demo_status) : "Nao criada"}</span>
-                      <span className="flex min-w-[228px] gap-1">
+                      <span className="flex min-w-[264px] gap-1">
                         <Button
                           type="button"
                           className="h-8 w-8 px-0"
@@ -3104,6 +3172,27 @@ export default function AdmPage() {
                           }}
                         >
                           <PhoneCall size={14} />
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-8 w-8 px-0"
+                          variant="outline"
+                          title={
+                            prospectWebsite
+                              ? "Disponivel apenas para clinicas sem site"
+                              : nextNoSiteStage
+                                ? `Enviar ${noSiteStageLabel(nextNoSiteStage)} sem-site`
+                                : "Fluxo sem-site concluido"
+                          }
+                          aria-label={`Enviar mensagem sem-site para ${prospect.clinic_name}`}
+                          disabled={Boolean(prospectWebsite) || !nextNoSiteStage || !canEditCrm || noSiteOutreachMutation.isPending}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (prospectWebsite || !nextNoSiteStage || !canEditCrm) return;
+                            noSiteOutreachMutation.mutate({ prospectId: prospect.id, stage: nextNoSiteStage });
+                          }}
+                        >
+                          <Globe2 size={14} />
                         </Button>
                         <Button
                           type="button"
@@ -3306,6 +3395,10 @@ export default function AdmPage() {
             recipientName: selectedProspect.owner_name || selectedProspect.manager_name,
           });
         }}
+        onSendNoSiteOutreach={(stage) => {
+          if (!selectedProspect) return;
+          noSiteOutreachMutation.mutate({ prospectId: selectedProspect.id, stage });
+        }}
         onRunOutreachLab={(scenario) => {
           if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
@@ -3319,6 +3412,7 @@ export default function AdmPage() {
           statusMutation.mutate({ prospectId: selectedProspect.id, status });
         }}
         automationPending={automationMutation.isPending}
+        noSiteOutreachPending={noSiteOutreachMutation.isPending}
         outreachLabPending={outreachLabMutation.isPending}
         canEdit={canEditCrm}
         canViewSiteTemplates={canViewSiteTemplates}
@@ -3486,9 +3580,11 @@ function ProspectDetailModal({
   onSendReceptionOutreach,
   onSendDecisionMakerPitch,
   onSendVideoFollowup,
+  onSendNoSiteOutreach,
   onRunOutreachLab,
   onStatusChange,
   automationPending,
+  noSiteOutreachPending,
   outreachLabPending,
   canEdit,
   canViewSiteTemplates,
@@ -3511,9 +3607,11 @@ function ProspectDetailModal({
   onSendReceptionOutreach: () => void;
   onSendDecisionMakerPitch: () => void;
   onSendVideoFollowup: () => void;
+  onSendNoSiteOutreach: (stage: NoSiteOutreachStage) => void;
   onRunOutreachLab: (scenario: string) => void;
   onStatusChange: (status: string) => void;
   automationPending: boolean;
+  noSiteOutreachPending: boolean;
   outreachLabPending: boolean;
   canEdit: boolean;
   canViewSiteTemplates: boolean;
@@ -3553,9 +3651,11 @@ function ProspectDetailModal({
             onSendReceptionOutreach={onSendReceptionOutreach}
             onSendDecisionMakerPitch={onSendDecisionMakerPitch}
             onSendVideoFollowup={onSendVideoFollowup}
+            onSendNoSiteOutreach={onSendNoSiteOutreach}
             onRunOutreachLab={onRunOutreachLab}
             onStatusChange={onStatusChange}
             automationPending={automationPending}
+            noSiteOutreachPending={noSiteOutreachPending}
             outreachLabPending={outreachLabPending}
             canEdit={canEdit}
             canViewSiteTemplates={canViewSiteTemplates}
@@ -3779,9 +3879,11 @@ function ProspectDetail({
   onSendReceptionOutreach,
   onSendDecisionMakerPitch,
   onSendVideoFollowup,
+  onSendNoSiteOutreach,
   onRunOutreachLab,
   onStatusChange,
   automationPending,
+  noSiteOutreachPending,
   outreachLabPending,
   canEdit,
   canViewSiteTemplates,
@@ -3802,9 +3904,11 @@ function ProspectDetail({
   onSendReceptionOutreach: () => void;
   onSendDecisionMakerPitch: () => void;
   onSendVideoFollowup: () => void;
+  onSendNoSiteOutreach: (stage: NoSiteOutreachStage) => void;
   onRunOutreachLab: (scenario: string) => void;
   onStatusChange: (status: string) => void;
   automationPending: boolean;
+  noSiteOutreachPending: boolean;
   outreachLabPending: boolean;
   canEdit: boolean;
   canViewSiteTemplates: boolean;
@@ -3819,6 +3923,7 @@ function ProspectDetail({
   const googlePlaces = getGooglePlacesSnapshot(prospect);
   const savedSiteTemplate = getSiteTemplateSelectionSnapshot(prospect);
   const outreach = getOutreachSnapshot(prospect);
+  const noSiteOutreach = getNoSiteOutreachSnapshot(prospect);
   const outreachLab = getOutreachLabSnapshot(prospect);
   const lastLabRun = outreachLab.last_run && typeof outreachLab.last_run === "object" ? outreachLab.last_run : null;
   const automationLabel = outreachAutomationLabel(outreach);
@@ -3835,6 +3940,7 @@ function ProspectDetail({
         ? "Iniciar automacao no WhatsApp Web"
         : "Iniciar automacao comercial";
   const [labScenario, setLabScenario] = useState<string>("manager_interested");
+  const [noSiteStage, setNoSiteStage] = useState<NoSiteOutreachStage>(getNextNoSiteOutreachStage(prospect) || "first");
   const [siteTemplateSlug, setSiteTemplateSlug] = useState<string>(savedSiteTemplate?.selected_template_slug || SITE_TEMPLATES[0]?.slug || "");
   const [sitePreviewPath, setSitePreviewPath] = useState<string>(savedSiteTemplate?.personalized_preview_path || "");
   const resolvedBookingLink = lastBookingLink || bookingLink;
@@ -3849,6 +3955,9 @@ function ProspectDetail({
   const resolvedSitePreviewUrl = buildAbsoluteAppUrl(resolveBrowserOrigin(), sitePreviewPath || personalizedSitePreviewPath);
   const prospectWebsite = getProspectWebsite(prospect);
   const prospectWebsiteUrl = buildExternalWebsiteUrl(prospectWebsite);
+  const nextNoSiteStage = getNextNoSiteOutreachStage(prospect);
+  const selectedNoSiteStageSent = Boolean(noSiteOutreach.sent_stages?.[noSiteStage]);
+  const noSiteThirdBlocked = noSiteStage === "third" && !noSiteOutreach.human_reply_received;
 
   const siteTemplateMutation = useMutation({
     mutationFn: async () => {
@@ -3888,6 +3997,10 @@ function ProspectDetail({
     const fallbackScenario = typeof lastLabRun?.scenario === "string" ? lastLabRun.scenario : "manager_interested";
     setLabScenario(fallbackScenario);
   }, [prospect.id, lastLabRun?.scenario]);
+
+  useEffect(() => {
+    setNoSiteStage(getNextNoSiteOutreachStage(prospect) || "first");
+  }, [prospect, prospect.id, noSiteOutreach.last_stage, noSiteOutreach.last_sent_at]);
 
   useEffect(() => {
     setSiteTemplateSlug(savedSiteTemplate?.selected_template_slug || SITE_TEMPLATES[0]?.slug || "");
@@ -4098,6 +4211,68 @@ function ProspectDetail({
               {!canManageSiteTemplates ? (
                 <p className="mt-3 text-xs leading-5 text-sky-900/80">
                   Para criar a demo do site daqui, o usuario precisa editar CRM comercial e Modelos de Sites.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!prospectWebsite ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-semibold">WhatsApp para clinica sem site</p>
+                  <p className="mt-1 max-w-xl leading-6">
+                    Envia uma das 3 variacoes configuradas para a etapa escolhida. O envio entra na mesma fila do bridge local do WhatsApp Web quando esse canal estiver ativo.
+                  </p>
+                </div>
+                <Badge className={noSiteOutreach.human_reply_received ? "bg-emerald-100 text-emerald-700" : "bg-white text-amber-800"}>
+                  {noSiteOutreach.human_reply_received ? "Resposta humana registrada" : "Lead frio"}
+                </Badge>
+              </div>
+
+              <div className="mt-3 grid gap-2 text-xs text-amber-900/85 sm:grid-cols-3">
+                <span>Proxima etapa: {nextNoSiteStage ? noSiteStageLabel(nextNoSiteStage) : "Fluxo concluido"}</span>
+                <span>Ultima etapa: {noSiteStageLabel(noSiteOutreach.last_stage)}</span>
+                <span>Canal: {noSiteOutreach.dispatch_transport === "whatsapp_web_bridge" || usesWhatsAppWebBridge ? "WhatsApp Web local" : "WhatsApp oficial/fila"}</span>
+              </div>
+
+              {noSiteOutreach.last_reply_preview ? (
+                <p className="mt-3 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-xs leading-5 text-amber-950/90">
+                  Ultima resposta: {noSiteOutreach.last_reply_preview}
+                </p>
+              ) : null}
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <select
+                  className="h-10 rounded-lg border border-amber-200 bg-white px-3 text-sm"
+                  value={noSiteStage}
+                  onChange={(event) => setNoSiteStage(event.target.value as NoSiteOutreachStage)}
+                  disabled={noSiteOutreachPending}
+                >
+                  {NO_SITE_OUTREACH_STAGES.map((stage) => (
+                    <option key={stage.value} value={stage.value}>
+                      {stage.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  className="bg-amber-700 text-white hover:bg-amber-600"
+                  onClick={() => onSendNoSiteOutreach(noSiteStage)}
+                  disabled={!canEdit || noSiteOutreachPending || selectedNoSiteStageSent || noSiteThirdBlocked}
+                >
+                  <Globe2 size={16} />
+                  {noSiteOutreachPending ? "Enviando..." : `Enviar ${noSiteStageLabel(noSiteStage)}`}
+                </Button>
+              </div>
+
+              {selectedNoSiteStageSent ? (
+                <p className="mt-3 text-xs leading-5 text-amber-900/80">
+                  Esta etapa ja foi enviada para evitar repeticao acidental. Escolha a proxima etapa pendente se quiser continuar.
+                </p>
+              ) : null}
+              {noSiteThirdBlocked ? (
+                <p className="mt-3 text-xs leading-5 text-amber-900/80">
+                  A terceira mensagem fica bloqueada ate existir resposta humana. Isso protege a reputacao do numero e evita insistencia fria.
                 </p>
               ) : null}
             </div>

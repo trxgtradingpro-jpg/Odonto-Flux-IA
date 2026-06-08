@@ -168,6 +168,10 @@ class ProspectOutreachInput(BaseModel):
     video_url: str | None = None
 
 
+class ProspectNoSiteOutreachInput(BaseModel):
+    stage: Literal["first", "second", "third"] = "first"
+
+
 class ProspectOutreachOutput(BaseModel):
     prospect: "ProspectOutput"
     step: str
@@ -603,6 +607,57 @@ class SalesOutreachFlowConfigInput(BaseModel):
     classifications: list[SalesOutreachClassificationRuleInput] = Field(default_factory=list)
 
 
+class SalesNoSiteOutreachFlowConfigOutput(BaseModel):
+    first_messages: list[str]
+    second_messages: list[str]
+    third_messages: list[str]
+
+
+class SalesNoSiteOutreachFlowConfigInput(BaseModel):
+    first_messages: list[str] = Field(min_length=3, max_length=3)
+    second_messages: list[str] = Field(min_length=3, max_length=3)
+    third_messages: list[str] = Field(min_length=3, max_length=3)
+
+
+class SalesNoSiteOutreachEligibilityOutput(BaseModel):
+    stage: Literal["first", "second", "third"]
+    eligible_count: int
+    preview: list["ProspectOutput"]
+    blocked_summary: dict = Field(default_factory=dict)
+    limit: int
+
+
+class SalesNoSiteOutreachBulkInput(BaseModel):
+    stage: Literal["first", "second", "third"] = "first"
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class SalesNoSiteOutreachBulkQueuedItemOutput(BaseModel):
+    prospect: "ProspectOutput"
+    step: str
+    conversation_id: UUID
+    outbound_message_id: UUID
+    transport: str | None = None
+
+
+class SalesNoSiteOutreachBulkErrorOutput(BaseModel):
+    prospect_id: UUID | None = None
+    clinic_name: str | None = None
+    code: str
+    message: str
+
+
+class SalesNoSiteOutreachBulkOutput(BaseModel):
+    stage: Literal["first", "second", "third"]
+    eligible_count: int
+    requested_count: int
+    queued_count: int
+    skipped_count: int
+    errors: list[SalesNoSiteOutreachBulkErrorOutput] = Field(default_factory=list)
+    queued: list[SalesNoSiteOutreachBulkQueuedItemOutput] = Field(default_factory=list)
+    blocked_summary: dict = Field(default_factory=dict)
+
+
 class DemoProvisionOutput(BaseModel):
     prospect: ProspectOutput
     access_token: str
@@ -668,6 +723,9 @@ class DemoGuideStateOutput(BaseModel):
 
 ProspectOutreachOutput.model_rebuild()
 SalesMessageTemplateOutput.model_rebuild()
+SalesNoSiteOutreachEligibilityOutput.model_rebuild()
+SalesNoSiteOutreachBulkQueuedItemOutput.model_rebuild()
+SalesNoSiteOutreachBulkOutput.model_rebuild()
 SalesOutreachAutomationEligibilityOutput.model_rebuild()
 SalesOutreachAutomationBatchItemOutput.model_rebuild()
 SalesOutreachAutomationBatchOutput.model_rebuild()

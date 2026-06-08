@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -55,6 +56,7 @@ from app.schemas.admin_sales import (
     ProspectCreate,
     ProspectInsightsOutput,
     ProspectListOutput,
+    ProspectNoSiteOutreachInput,
     ProspectNoteInput,
     ProspectNoteOutput,
     ProspectOutput,
@@ -75,6 +77,11 @@ from app.schemas.admin_sales import (
     SalesClinicMessageListOutput,
     SalesClinicMessagePreviewInput,
     SalesClinicMessagePreviewOutput,
+    SalesNoSiteOutreachFlowConfigInput,
+    SalesNoSiteOutreachFlowConfigOutput,
+    SalesNoSiteOutreachBulkInput,
+    SalesNoSiteOutreachBulkOutput,
+    SalesNoSiteOutreachEligibilityOutput,
     SalesOutreachAutomationBatchListOutput,
     SalesOutreachAutomationBatchOutput,
     SalesOutreachAutomationBatchStartInput,
@@ -862,6 +869,32 @@ def outreach_automation_eligible(
     )
 
 
+@router.get("/admin/outreach/no-site/eligible", response_model=SalesNoSiteOutreachEligibilityOutput)
+def no_site_outreach_eligible(
+    stage: Literal["first", "second", "third"] = "first",
+    limit: int = 50,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "view")
+    return sales.list_no_site_outreach_eligible(db, stage=stage, limit=min(max(limit, 1), 200))
+
+
+@router.post("/admin/outreach/no-site/send-all", response_model=SalesNoSiteOutreachBulkOutput)
+def send_no_site_outreach_to_all(
+    payload: SalesNoSiteOutreachBulkInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "create")
+    return sales.send_no_site_outreach_bulk(
+        db,
+        stage=payload.stage,
+        actor_id=principal.user.id,
+        limit=payload.limit,
+    )
+
+
 @router.get("/admin/outreach/automation/batches", response_model=SalesOutreachAutomationBatchListOutput)
 def list_outreach_automation_batches(
     limit: int = 20,
@@ -1030,6 +1063,25 @@ def update_sales_outreach_flow(
     }
     saved = sales.save_sales_outreach_flow_config(db, config_payload)
     return _serialize_sales_outreach_flow_config(saved)
+
+
+@router.get("/admin/outreach/no-site-flow", response_model=SalesNoSiteOutreachFlowConfigOutput)
+def get_no_site_outreach_flow(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "view")
+    return sales.get_no_site_outreach_flow_config(db)
+
+
+@router.put("/admin/outreach/no-site-flow", response_model=SalesNoSiteOutreachFlowConfigOutput)
+def update_no_site_outreach_flow(
+    payload: SalesNoSiteOutreachFlowConfigInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_outreach_automation", "edit")
+    return sales.save_no_site_outreach_flow_config(db, payload.model_dump())
 
 
 @router.post("/admin/clinic-messages/templates", response_model=SalesMessageTemplateOutput)
@@ -1450,6 +1502,22 @@ def send_outreach(
         explicit_video_url=payload.video_url,
     )
     return result
+
+
+@router.post("/admin/prospects/{prospect_id}/outreach/no-site", response_model=ProspectOutreachOutput)
+def send_no_site_outreach(
+    prospect_id: UUID,
+    payload: ProspectNoSiteOutreachInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
+    return sales.send_no_site_outreach_stage(
+        db,
+        prospect=_get_visible_prospect(db, prospect_id, principal),
+        stage=payload.stage,
+        actor_id=principal.user.id,
+    )
 
 
 @router.post("/admin/prospects/{prospect_id}/outreach/automation/start", response_model=ProspectOutreachOutput)
