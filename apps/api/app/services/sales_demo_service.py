@@ -621,7 +621,6 @@ ADM_DEFAULT_AFFILIATE_PERMISSIONS = {
     "adm_crm": {"view": True, "create": True, "edit": True, "delete": False},
     "adm_messages": {"view": True, "create": True, "edit": True, "delete": False},
     "adm_site_templates": {"view": True, "create": True, "edit": True, "delete": False},
-    "adm_outreach_automation": {"view": True, "create": False, "edit": False, "delete": False},
 }
 ADM_VIEWER_DEFAULT_PERMISSIONS = {
     "adm_crm": {"view": True, "create": False, "edit": False, "delete": False},
@@ -1333,6 +1332,13 @@ def require_adm_page_permission(principal, page_key: str, action: str = "view") 
         raise ApiError(status_code=400, code="ADM_PERMISSION_ACTION_INVALID", message="Acao de permissao invalida")
     if set(principal.roles).intersection(ADM_FULL_ACCESS_ROLE_NAMES):
         return
+    if page_key == "adm_outreach_automation" and ADM_AFFILIATE_ROLE_NAME in set(principal.roles):
+        raise ApiError(
+            status_code=403,
+            code="ADM_PAGE_FORBIDDEN",
+            message="Afiliados nao acessam a automacao comercial interna",
+            details={"page": page_key, "action": action},
+        )
     permissions = normalize_adm_page_permissions(principal.user.page_permissions or {}, principal.roles)
     if permissions.get(page_key, {}).get(action):
         return
@@ -1509,6 +1515,30 @@ def serialize_service(service: ProspectService) -> dict:
     }
 
 
+def _serialize_prospect_created_by_user(db: Session, user_id: UUID | None) -> dict[str, object]:
+    if not user_id:
+        return {
+            "created_by_user_id": None,
+            "created_by_user_name": None,
+            "created_by_user_email": None,
+            "created_by_user_is_affiliate": False,
+        }
+    user = db.get(User, user_id)
+    if not user:
+        return {
+            "created_by_user_id": user_id,
+            "created_by_user_name": None,
+            "created_by_user_email": None,
+            "created_by_user_is_affiliate": False,
+        }
+    return {
+        "created_by_user_id": user.id,
+        "created_by_user_name": user.full_name,
+        "created_by_user_email": user.email,
+        "created_by_user_is_affiliate": ADM_AFFILIATE_ROLE_NAME in set(_user_role_names(db, user.id)),
+    }
+
+
 def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_children: bool = True) -> dict:
     units: list[dict] = []
     services: list[dict] = []
@@ -1533,6 +1563,7 @@ def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_childr
         "id": prospect.id,
         "slug": prospect_slug,
         "clinic_name": prospect.clinic_name,
+        **_serialize_prospect_created_by_user(db, prospect.created_by),
         "owner_name": prospect.owner_name,
         "manager_name": prospect.manager_name,
         "phone": prospect.phone,

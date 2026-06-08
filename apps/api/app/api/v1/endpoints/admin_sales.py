@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_principal
@@ -163,6 +163,33 @@ def _get_prospect(db: Session, prospect_id: UUID) -> ProspectAccount:
     prospect = db.get(ProspectAccount, prospect_id)
     if not prospect:
         raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado")
+    return prospect
+
+
+def _is_affiliate_prospect_scope(principal) -> bool:
+    roles = set(principal.roles)
+    return sales.ADM_AFFILIATE_ROLE_NAME in roles and not roles.intersection(sales.ADM_FULL_ACCESS_ROLE_NAMES)
+
+
+def _prospect_visibility_filter(principal):
+    if _is_affiliate_prospect_scope(principal):
+        return ProspectAccount.created_by == principal.user.id
+    return None
+
+
+def _apply_prospect_visibility(query, principal):
+    visibility_filter = _prospect_visibility_filter(principal)
+    return query.where(visibility_filter) if visibility_filter is not None else query
+
+
+def _require_prospect_visible_to_principal(prospect: ProspectAccount, principal) -> None:
+    if _is_affiliate_prospect_scope(principal) and prospect.created_by != principal.user.id:
+        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado")
+
+
+def _get_visible_prospect(db: Session, prospect_id: UUID, principal) -> ProspectAccount:
+    prospect = _get_prospect(db, prospect_id)
+    _require_prospect_visible_to_principal(prospect, principal)
     return prospect
 
 
@@ -563,7 +590,7 @@ def list_admin_whatsapp_conversations(
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
 
-    prospect_stmt = select(ProspectAccount)
+    prospect_stmt = _apply_prospect_visibility(select(ProspectAccount), principal)
     if prospect_id:
         prospect_stmt = prospect_stmt.where(ProspectAccount.id == prospect_id)
     prospects = db.execute(prospect_stmt).scalars().all()
@@ -639,6 +666,7 @@ def list_admin_whatsapp_messages(
 ):
     sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
     _prospect, conversation, source = _resolve_admin_whatsapp_conversation(db, conversation_id)
+    _require_prospect_visible_to_principal(_prospect, principal)
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
 
@@ -686,6 +714,7 @@ def simulate_admin_whatsapp_inbound(
 ):
     sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
     prospect, conversation, source = _resolve_admin_whatsapp_conversation(db, conversation_id)
+    _require_prospect_visible_to_principal(prospect, principal)
     if source != "comercial" or sales.ADM_INTERNAL_WHATSAPP_SIMULATION_TAG not in (conversation.tags or []):
         raise ApiError(
             status_code=400,
@@ -741,9 +770,7 @@ def ensure_admin_whatsapp_test_contact(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_whatsapp", "view")
-    prospect = db.get(ProspectAccount, payload.prospect_id)
-    if not prospect:
-        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado.")
+    prospect = _get_visible_prospect(db, payload.prospect_id, principal)
     conversation = sales.ensure_admin_whatsapp_test_contact(db, prospect=prospect)
     return {
         "conversation_id": str(conversation.id),
@@ -905,6 +932,7 @@ def delete_outreach_automation_batch(
 def list_prospects(
     status: str | None = None,
     temperature: str | None = None,
+    website_status: str | None = Query(default=None),
     q: str | None = None,
     limit: int = 100,
     offset: int = 0,
@@ -919,6 +947,20 @@ def list_prospects(
         filters.append(ProspectAccount.status == status)
     if temperature:
         filters.append(ProspectAccount.temperature == temperature)
+    visibility_filter = _prospect_visibility_filter(principal)
+    if visibility_filter is not None:
+        filters.append(visibility_filter)
+    if website_status:
+        website_present_filter = and_(
+            ProspectAccount.website.is_not(None),
+            func.length(func.trim(ProspectAccount.website)) > 0,
+        )
+        if website_status == "with_site":
+            filters.append(website_present_filter)
+        elif website_status == "without_site":
+            filters.append(or_(ProspectAccount.website.is_(None), func.length(func.trim(ProspectAccount.website)) == 0))
+        else:
+            raise ApiError(status_code=400, code="PROSPECT_WEBSITE_STATUS_INVALID", message="Filtro de site invalido")
     if q:
         term = f"%{q.lower()}%"
         filters.append(
@@ -1049,6 +1091,9 @@ def list_clinic_messages(
         filters.append(ProspectAccount.demo_tenant_id.is_not(None))
     elif has_demo is False:
         filters.append(ProspectAccount.demo_tenant_id.is_(None))
+    visibility_filter = _prospect_visibility_filter(principal)
+    if visibility_filter is not None:
+        filters.append(visibility_filter)
     if q:
         term = f"%{q.lower()}%"
         filters.append(
@@ -1092,7 +1137,7 @@ def preview_clinic_message(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_messages", "create")
-    prospect = _get_prospect(db, payload.prospect_id)
+    prospect = _get_visible_prospect(db, payload.prospect_id, principal)
     return sales_messages.build_sales_message_preview(
         db,
         prospect=prospect,
@@ -1115,7 +1160,7 @@ def record_clinic_message_event(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_messages", "create")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     event = sales_messages.record_sales_message_event(
         db,
         prospect=prospect,
@@ -1184,7 +1229,7 @@ def create_prospect(payload: ProspectCreate, principal=Depends(get_current_princ
 @router.get("/admin/prospects/{prospect_id}", response_model=ProspectOutput)
 def get_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
-    return sales.serialize_prospect(db, _get_prospect(db, prospect_id))
+    return sales.serialize_prospect(db, _get_visible_prospect(db, prospect_id, principal))
 
 
 @router.patch("/admin/prospects/{prospect_id}", response_model=ProspectOutput)
@@ -1195,14 +1240,14 @@ def update_prospect(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = sales.update_prospect(db, _get_prospect(db, prospect_id), payload, actor_id=principal.user.id)
+    prospect = sales.update_prospect(db, _get_visible_prospect(db, prospect_id, principal), payload, actor_id=principal.user.id)
     return sales.serialize_prospect(db, prospect)
 
 
 @router.delete("/admin/prospects/{prospect_id}")
 def delete_prospect(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "delete")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     if prospect.demo_tenant_id or prospect.demo_user_id:
         sales.cleanup_demo_resources(
             db,
@@ -1224,7 +1269,7 @@ def add_unit(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     unit = ProspectUnit(
         prospect_account_id=prospect.id,
         unit_name=payload.unit_name,
@@ -1248,7 +1293,7 @@ def add_service(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     service = ProspectService(
         prospect_account_id=prospect.id,
         service_name=payload.service_name,
@@ -1272,7 +1317,7 @@ def add_note(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     note = ProspectNote(
         prospect_account_id=prospect.id,
         author_user_id=principal.user.id,
@@ -1295,7 +1340,7 @@ def add_note(
 @router.get("/admin/prospects/{prospect_id}/timeline", response_model=list[ProspectTimelineEventOutput])
 def timeline(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
-    _get_prospect(db, prospect_id)
+    _get_visible_prospect(db, prospect_id, principal)
     rows = db.execute(
         select(ProspectTimelineEvent)
         .where(ProspectTimelineEvent.prospect_account_id == prospect_id)
@@ -1323,7 +1368,7 @@ def generate_demo(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    result = sales.generate_demo(db, _get_prospect(db, prospect_id), actor_id=principal.user.id, base_url=_base_url(request))
+    result = sales.generate_demo(db, _get_visible_prospect(db, prospect_id, principal), actor_id=principal.user.id, base_url=_base_url(request))
     return {
         "prospect": sales.serialize_prospect(db, result["prospect"]),
         "access_token": result["access_token"],
@@ -1343,7 +1388,7 @@ def send_demo_access(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     demo_booking_path = sales.resolve_demo_booking_path(db, prospect=prospect)
     demo_booking_url = None
@@ -1366,7 +1411,7 @@ def record_contact(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     prospect.first_contact_channel = prospect.first_contact_channel or payload.channel
     prospect.first_contact_at = prospect.first_contact_at or datetime.now(UTC)
     if prospect.status in {"novo", "pesquisado"}:
@@ -1397,7 +1442,7 @@ def send_outreach(
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.send_sales_outreach_step(
         db,
-        prospect=_get_prospect(db, prospect_id),
+        prospect=_get_visible_prospect(db, prospect_id, principal),
         step=payload.step,
         actor_id=principal.user.id,
         base_url=_base_url(request),
@@ -1417,7 +1462,7 @@ def start_outreach_automation(
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.start_sales_outreach_automation(
         db,
-        prospect=_get_prospect(db, prospect_id),
+        prospect=_get_visible_prospect(db, prospect_id, principal),
         actor_id=principal.user.id,
         base_url=_base_url(request),
     )
@@ -1435,7 +1480,7 @@ def run_outreach_lab(
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
     result = sales.simulate_sales_outreach_lab(
         db,
-        prospect=_get_prospect(db, prospect_id),
+        prospect=_get_visible_prospect(db, prospect_id, principal),
         actor_id=principal.user.id,
         base_url=_base_url(request),
         scenario=payload.scenario,
@@ -1453,7 +1498,7 @@ def mark_status(
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
     if payload.status not in sales.PROSPECT_STATUSES:
         raise ApiError(status_code=400, code="PROSPECT_STATUS_INVALID", message="Status comercial invalido")
-    prospect = _get_prospect(db, prospect_id)
+    prospect = _get_visible_prospect(db, prospect_id, principal)
     old_status = prospect.status
     prospect.status = payload.status
     sales.add_timeline(
@@ -1474,14 +1519,14 @@ def mark_status(
 @router.post("/admin/prospects/{prospect_id}/score/recalculate", response_model=ProspectOutput)
 def recalculate_score(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "edit")
-    prospect = sales.recalculate_score(db, _get_prospect(db, prospect_id))
+    prospect = sales.recalculate_score(db, _get_visible_prospect(db, prospect_id, principal))
     return sales.serialize_prospect(db, prospect)
 
 
 @router.get("/admin/prospects/{prospect_id}/activity", response_model=list[DemoActivityOutput])
 def activity(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
-    _get_prospect(db, prospect_id)
+    _get_visible_prospect(db, prospect_id, principal)
     rows = db.execute(
         select(DemoActivityEvent)
         .where(DemoActivityEvent.prospect_account_id == prospect_id)
@@ -1503,7 +1548,7 @@ def activity(prospect_id: UUID, principal=Depends(get_current_principal), db: Se
 @router.get("/admin/prospects/{prospect_id}/insights", response_model=ProspectInsightsOutput)
 def insights(prospect_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
-    return sales.get_insights(db, _get_prospect(db, prospect_id))
+    return sales.get_insights(db, _get_visible_prospect(db, prospect_id, principal))
 
 
 @router.post("/demo/events")
@@ -1614,7 +1659,7 @@ def demo_magic_link(
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_messages", "create")
-    prospect = _get_prospect(db, payload.prospect_account_id)
+    prospect = _get_visible_prospect(db, payload.prospect_account_id, principal)
     raw_token = sales.issue_demo_access(db, prospect, actor_id=principal.user.id)
     return {
         "access_token": raw_token,

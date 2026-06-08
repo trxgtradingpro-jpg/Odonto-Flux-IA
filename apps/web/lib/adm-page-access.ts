@@ -112,7 +112,6 @@ export const DEFAULT_AFFILIATE_ADM_PERMISSIONS: Partial<AdmPagePermissionMap> = 
   adm_crm: { view: true, create: true, edit: true, delete: false },
   adm_messages: { view: true, create: true, edit: true, delete: false },
   adm_site_templates: { view: true, create: true, edit: true, delete: false },
-  adm_outreach_automation: { view: true, create: false, edit: false, delete: false },
 };
 
 function cloneFlags(source?: Partial<AdmPagePermissionFlags> | null): AdmPagePermissionFlags {

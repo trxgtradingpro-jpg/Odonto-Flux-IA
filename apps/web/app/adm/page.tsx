@@ -41,12 +41,22 @@ import { api } from "@/lib/api";
 import { clearAdminAccessToken, getAdminAccessToken, setAdminAccessToken } from "@/lib/auth";
 import { BRAND_MONOGRAM, BRAND_NAME, BRAND_SALES_TEAM, BRAND_TAGLINE } from "@/lib/brand";
 import { formatDateTimeBR, formatRelativeTime, initials, numberFormatter } from "@/lib/formatters";
+import {
+  SITE_TEMPLATES,
+  buildSiteTemplatePreviewPath,
+  buildSiteTemplateSelectionSnapshot,
+  getSiteTemplateBySlug,
+} from "@/lib/site-templates";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, cn } from "@odontoflux/ui";
 
 type Prospect = {
   id: string;
   slug?: string | null;
   clinic_name: string;
+  created_by_user_id?: string | null;
+  created_by_user_name?: string | null;
+  created_by_user_email?: string | null;
+  created_by_user_is_affiliate?: boolean;
   owner_name?: string | null;
   manager_name?: string | null;
   phone?: string | null;
@@ -87,6 +97,27 @@ type Prospect = {
   updated_at: string;
   units: Array<{ id: string; unit_name: string; address: string; phone?: string | null; email?: string | null; is_primary: boolean }>;
   services: Array<{ id: string; service_name: string; category?: string | null; duration_minutes: number; price_range?: string | null; description: string }>;
+};
+
+type GooglePlacesSnapshot = {
+  place_id: string | null;
+  maps_url: string | null;
+  business_status: string | null;
+  types: string[];
+  location: { latitude: number | null; longitude: number | null } | null;
+  imported_at: string | null;
+  field_mask: string | null;
+  rating: number | null;
+  user_rating_count: number | null;
+};
+
+type ProspectSiteTemplateSnapshot = {
+  selected_template_slug: string | null;
+  selected_template_name: string | null;
+  personalized_preview_path: string | null;
+  public_preview_path: string | null;
+  public_catalog_path: string | null;
+  selected_at: string | null;
 };
 
 type Overview = {
@@ -354,7 +385,9 @@ const OUTREACH_LAB_SCENARIOS = [
   { value: "reception_blocks", label: "Recepcao bloqueia" },
 ] as const;
 
-const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.2fr)_110px_110px_70px_110px_228px]";
+const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.25fr)_130px_100px_110px_110px_70px_110px_228px]";
+
+type WebsiteStatusFilter = "" | "without_site" | "with_site";
 
 type AdmSection = "crm" | "stats" | "adm_whatsapp" | "whatsapp_settings";
 
@@ -414,6 +447,35 @@ function buildAbsoluteAppUrl(origin: string, rawUrlOrPath?: string | null) {
   } catch {
     return value;
   }
+}
+
+function getProspectWebsite(prospect: Prospect | null | undefined) {
+  return `${prospect?.website || ""}`.trim();
+}
+
+function buildExternalWebsiteUrl(rawWebsite?: string | null) {
+  const value = `${rawWebsite || ""}`.trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://${value}`;
+}
+
+function prospectOwnerLabel(prospect: Prospect, isAffiliateUser = false) {
+  if (isAffiliateUser && prospect.created_by_user_id) return "Minha conta";
+  if (!prospect.created_by_user_id) return "Sem dono";
+  if (prospect.created_by_user_is_affiliate) return "Afiliado";
+  return "Interno";
+}
+
+function prospectOwnerDetail(prospect: Prospect, isAffiliateUser = false) {
+  if (isAffiliateUser && prospect.created_by_user_id) return prospect.created_by_user_name || "Voce";
+  return prospect.created_by_user_name || prospect.created_by_user_email || "Nao atribuido";
+}
+
+function prospectOwnerBadgeClass(prospect: Prospect) {
+  if (!prospect.created_by_user_id) return "bg-stone-200 text-stone-700";
+  if (prospect.created_by_user_is_affiliate) return "bg-sky-100 text-sky-800";
+  return "bg-emerald-100 text-emerald-700";
 }
 
 function resolveProspectBookingLink(prospect: Prospect | null, origin: string) {
@@ -750,6 +812,72 @@ function getOutreachLabSnapshot(prospect: Prospect): OutreachLabSnapshot {
   const raw = prospect.proposal_snapshot?.outreach_lab;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   return raw as OutreachLabSnapshot;
+}
+
+function getGooglePlacesSnapshot(prospect: Prospect): GooglePlacesSnapshot | null {
+  const raw = prospect.proposal_snapshot?.google_places;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+
+  const value = raw as Record<string, unknown>;
+  const locationValue = value.location && typeof value.location === "object" && !Array.isArray(value.location)
+    ? (value.location as Record<string, unknown>)
+    : null;
+  const parsedLatitude = locationValue ? Number(locationValue.latitude) : Number.NaN;
+  const parsedLongitude = locationValue ? Number(locationValue.longitude) : Number.NaN;
+  const parsedRating = Number(value.rating);
+  const parsedUserRatingCount = Number(value.user_rating_count);
+
+  return {
+    place_id: typeof value.place_id === "string" && value.place_id.trim() ? value.place_id.trim() : null,
+    maps_url: typeof value.maps_url === "string" && value.maps_url.trim() ? value.maps_url.trim() : null,
+    business_status: typeof value.business_status === "string" && value.business_status.trim() ? value.business_status.trim() : null,
+    types: Array.isArray(value.types)
+      ? value.types
+          .map((item) => `${item ?? ""}`.trim())
+          .filter(Boolean)
+      : [],
+    location:
+      Number.isFinite(parsedLatitude) || Number.isFinite(parsedLongitude)
+        ? {
+            latitude: Number.isFinite(parsedLatitude) ? parsedLatitude : null,
+            longitude: Number.isFinite(parsedLongitude) ? parsedLongitude : null,
+          }
+        : null,
+    imported_at: typeof value.imported_at === "string" && value.imported_at.trim() ? value.imported_at.trim() : null,
+    field_mask: typeof value.field_mask === "string" && value.field_mask.trim() ? value.field_mask.trim() : null,
+    rating: Number.isFinite(parsedRating) ? parsedRating : null,
+    user_rating_count: Number.isFinite(parsedUserRatingCount) ? parsedUserRatingCount : null,
+  };
+}
+
+function getSiteTemplateSelectionSnapshot(prospect: Prospect): ProspectSiteTemplateSnapshot | null {
+  const raw = prospect.proposal_snapshot?.site_template;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+
+  const value = raw as Record<string, unknown>;
+  return {
+    selected_template_slug:
+      typeof value.selected_template_slug === "string" && value.selected_template_slug.trim()
+        ? value.selected_template_slug.trim()
+        : null,
+    selected_template_name:
+      typeof value.selected_template_name === "string" && value.selected_template_name.trim()
+        ? value.selected_template_name.trim()
+        : null,
+    personalized_preview_path:
+      typeof value.personalized_preview_path === "string" && value.personalized_preview_path.trim()
+        ? value.personalized_preview_path.trim()
+        : null,
+    public_preview_path:
+      typeof value.public_preview_path === "string" && value.public_preview_path.trim()
+        ? value.public_preview_path.trim()
+        : null,
+    public_catalog_path:
+      typeof value.public_catalog_path === "string" && value.public_catalog_path.trim()
+        ? value.public_catalog_path.trim()
+        : null,
+    selected_at: typeof value.selected_at === "string" && value.selected_at.trim() ? value.selected_at.trim() : null,
+  };
 }
 
 function outreachAutomationLabel(snapshot: OutreachSnapshot) {
@@ -2157,6 +2285,7 @@ export default function AdmPage() {
   const [officialMessagePreview, setOfficialMessagePreview] = useState<MessagePreview | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [websiteStatusFilter, setWebsiteStatusFilter] = useState<WebsiteStatusFilter>("");
   const [appOrigin, setAppOrigin] = useState("");
   const [lastDemoLink, setLastDemoLink] = useState("");
   const [lastBookingLink, setLastBookingLink] = useState("");
@@ -2173,7 +2302,10 @@ export default function AdmPage() {
   const canEditCrm = canAccessAdmPage(admPermissions, "adm_crm", "edit");
   const canViewMessages = canAccessAdmPage(admPermissions, "adm_messages", "view");
   const canViewSiteTemplates = canAccessAdmPage(admPermissions, "adm_site_templates", "view");
+  const canEditSiteTemplates = canAccessAdmPage(admPermissions, "adm_site_templates", "edit");
   const canViewOutreachAutomation = canAccessAdmPage(admPermissions, "adm_outreach_automation", "view");
+  const isAffiliateUser = Boolean(admSessionQuery.data?.is_affiliate || admSessionQuery.data?.roles.includes("sales_affiliate"));
+  const canViewCommercialOutreach = canViewOutreachAutomation && !isAffiliateUser;
   const canCreateMessages = canAccessAdmPage(admPermissions, "adm_messages", "create");
   const canViewImportPlaces = canAccessAdmPage(admPermissions, "adm_import_places", "view");
   const canViewAdmWhatsapp = canAccessAdmPage(admPermissions, "adm_whatsapp", "view");
@@ -2225,11 +2357,17 @@ export default function AdmPage() {
   });
 
   const prospectsQuery = useQuery<{ data: Prospect[]; total: number }>({
-    queryKey: ["adm-prospects", statusFilter, search],
+    queryKey: ["adm-prospects", statusFilter, websiteStatusFilter, search],
     queryFn: async () =>
       (
         await api.get("/admin/prospects", {
-          params: { status: statusFilter || undefined, q: search || undefined, limit: 200, offset: 0 },
+          params: {
+            status: statusFilter || undefined,
+            website_status: websiteStatusFilter || undefined,
+            q: search || undefined,
+            limit: 200,
+            offset: 0,
+          },
         })
       ).data,
     enabled: sessionReady && canViewCrm,
@@ -2811,6 +2949,15 @@ export default function AdmPage() {
               </div>
               <select
                 className="h-10 rounded-lg border border-stone-200 bg-white px-3 text-sm"
+                value={websiteStatusFilter}
+                onChange={(event) => setWebsiteStatusFilter(event.target.value as WebsiteStatusFilter)}
+              >
+                <option value="">Todos os sites</option>
+                <option value="without_site">Sem site</option>
+                <option value="with_site">Com site</option>
+              </select>
+              <select
+                className="h-10 rounded-lg border border-stone-200 bg-white px-3 text-sm"
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value)}
               >
@@ -2830,6 +2977,8 @@ export default function AdmPage() {
             <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
               <div className={cn("hidden gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500 md:grid", CRM_PROSPECT_GRID_CLASS)}>
                 <span>Clinica</span>
+                <span>Dono</span>
+                <span>Site</span>
                 <span>Status</span>
                 <span>Temperatura</span>
                 <span>Score</span>
@@ -2842,6 +2991,9 @@ export default function AdmPage() {
                 ) : prospects.length ? (
                   prospects.map((prospect) => {
                     const officialWhatsAppLink = resolveOfficialWhatsAppLink(prospect);
+                    const prospectWebsite = getProspectWebsite(prospect);
+                    const ownerLabel = prospectOwnerLabel(prospect, isAffiliateUser);
+                    const ownerDetail = prospectOwnerDetail(prospect, isAffiliateUser);
                     return (
                     <div
                       key={prospect.id}
@@ -2869,6 +3021,16 @@ export default function AdmPage() {
                           {[prospect.city, prospect.whatsapp_phone || prospect.phone].filter(Boolean).join(" - ") || "Sem contato"}
                         </span>
                         <span className="block truncate text-xs text-stone-400">Criada em {formatDateTimeBR(prospect.created_at)}</span>
+                      </span>
+                      <span className="min-w-0">
+                        <Badge className={prospectOwnerBadgeClass(prospect)}>{ownerLabel}</Badge>
+                        <span className="mt-1 block truncate text-xs text-stone-500">{ownerDetail}</span>
+                      </span>
+                      <span className="min-w-0">
+                        <Badge className={prospectWebsite ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
+                          {prospectWebsite ? "Com site" : "Sem site"}
+                        </Badge>
+                        {prospectWebsite ? <span className="mt-1 block truncate text-xs text-stone-500">{prospectWebsite}</span> : null}
                       </span>
                       <span>
                         <Badge className={statusClass(prospect.status)}>{humanize(prospect.status)}</Badge>
@@ -3117,14 +3279,17 @@ export default function AdmPage() {
           contactMutation.mutate(selectedProspect.id);
         }}
         onStartAutomation={() => {
+          if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
           automationMutation.mutate(selectedProspect.id);
         }}
         onSendReceptionOutreach={() => {
+          if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
           outreachMutation.mutate({ prospectId: selectedProspect.id, step: "reception_intro" });
         }}
         onSendDecisionMakerPitch={() => {
+          if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
           outreachMutation.mutate({
             prospectId: selectedProspect.id,
@@ -3133,6 +3298,7 @@ export default function AdmPage() {
           });
         }}
         onSendVideoFollowup={() => {
+          if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
           outreachMutation.mutate({
             prospectId: selectedProspect.id,
@@ -3141,6 +3307,7 @@ export default function AdmPage() {
           });
         }}
         onRunOutreachLab={(scenario) => {
+          if (!canViewCommercialOutreach) return;
           if (!selectedProspect) return;
           outreachLabMutation.mutate({
             prospectId: selectedProspect.id,
@@ -3154,6 +3321,9 @@ export default function AdmPage() {
         automationPending={automationMutation.isPending}
         outreachLabPending={outreachLabMutation.isPending}
         canEdit={canEditCrm}
+        canViewSiteTemplates={canViewSiteTemplates}
+        canManageSiteTemplates={canEditCrm && canEditSiteTemplates}
+        canViewCommercialOutreach={canViewCommercialOutreach}
       />
     </main>
   );
@@ -3321,6 +3491,9 @@ function ProspectDetailModal({
   automationPending,
   outreachLabPending,
   canEdit,
+  canViewSiteTemplates,
+  canManageSiteTemplates,
+  canViewCommercialOutreach,
 }: {
   open: boolean;
   prospect: Prospect | null;
@@ -3343,6 +3516,9 @@ function ProspectDetailModal({
   automationPending: boolean;
   outreachLabPending: boolean;
   canEdit: boolean;
+  canViewSiteTemplates: boolean;
+  canManageSiteTemplates: boolean;
+  canViewCommercialOutreach: boolean;
 }) {
   if (!open || !prospect) return null;
 
@@ -3382,6 +3558,9 @@ function ProspectDetailModal({
             automationPending={automationPending}
             outreachLabPending={outreachLabPending}
             canEdit={canEdit}
+            canViewSiteTemplates={canViewSiteTemplates}
+            canManageSiteTemplates={canManageSiteTemplates}
+            canViewCommercialOutreach={canViewCommercialOutreach}
           />
         </div>
       </div>
@@ -3605,6 +3784,9 @@ function ProspectDetail({
   automationPending,
   outreachLabPending,
   canEdit,
+  canViewSiteTemplates,
+  canManageSiteTemplates,
+  canViewCommercialOutreach,
 }: {
   prospect: Prospect;
   outreachRuntime: OutreachRuntime | null;
@@ -3625,11 +3807,17 @@ function ProspectDetail({
   automationPending: boolean;
   outreachLabPending: boolean;
   canEdit: boolean;
+  canViewSiteTemplates: boolean;
+  canManageSiteTemplates: boolean;
+  canViewCommercialOutreach: boolean;
 }) {
+  const queryClient = useQueryClient();
   const checklistValues = Object.values(prospect.demo_checklist || {});
   const checklistDone = checklistValues.filter(Boolean).length;
   const checklistTotal = checklistValues.length || 12;
   const proposal = buildProposalText(prospect);
+  const googlePlaces = getGooglePlacesSnapshot(prospect);
+  const savedSiteTemplate = getSiteTemplateSelectionSnapshot(prospect);
   const outreach = getOutreachSnapshot(prospect);
   const outreachLab = getOutreachLabSnapshot(prospect);
   const lastLabRun = outreachLab.last_run && typeof outreachLab.last_run === "object" ? outreachLab.last_run : null;
@@ -3647,12 +3835,64 @@ function ProspectDetail({
         ? "Iniciar automacao no WhatsApp Web"
         : "Iniciar automacao comercial";
   const [labScenario, setLabScenario] = useState<string>("manager_interested");
+  const [siteTemplateSlug, setSiteTemplateSlug] = useState<string>(savedSiteTemplate?.selected_template_slug || SITE_TEMPLATES[0]?.slug || "");
+  const [sitePreviewPath, setSitePreviewPath] = useState<string>(savedSiteTemplate?.personalized_preview_path || "");
   const resolvedBookingLink = lastBookingLink || bookingLink;
+  const selectedSiteTemplate = getSiteTemplateBySlug(siteTemplateSlug) ?? SITE_TEMPLATES[0] ?? null;
+  const personalizedSitePreviewPath = selectedSiteTemplate
+    ? buildSiteTemplatePreviewPath(selectedSiteTemplate, {
+        clinic: prospect.clinic_name,
+        city: prospect.city,
+        whatsapp: prospect.whatsapp_phone || prospect.phone,
+      })
+    : "";
+  const resolvedSitePreviewUrl = buildAbsoluteAppUrl(resolveBrowserOrigin(), sitePreviewPath || personalizedSitePreviewPath);
+  const prospectWebsite = getProspectWebsite(prospect);
+  const prospectWebsiteUrl = buildExternalWebsiteUrl(prospectWebsite);
+
+  const siteTemplateMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSiteTemplate) throw new Error("Selecione um modelo de site.");
+      const selectedAt = new Date().toISOString();
+      const snapshot = buildSiteTemplateSelectionSnapshot(selectedSiteTemplate, selectedAt, {
+        clinic: prospect.clinic_name,
+        city: prospect.city,
+        whatsapp: prospect.whatsapp_phone || prospect.phone,
+      });
+      return (
+        await api.patch<Prospect>(`/admin/prospects/${prospect.id}`, {
+          proposal_snapshot: {
+            ...(prospect.proposal_snapshot || {}),
+            site_template: snapshot,
+          },
+        })
+      ).data;
+    },
+    onSuccess: (updatedProspect) => {
+      const updatedSnapshot = getSiteTemplateSelectionSnapshot(updatedProspect);
+      setSiteTemplateSlug(updatedSnapshot?.selected_template_slug || selectedSiteTemplate?.slug || siteTemplateSlug);
+      setSitePreviewPath(updatedSnapshot?.personalized_preview_path || personalizedSitePreviewPath);
+      queryClient.invalidateQueries({ queryKey: ["adm-prospects"] });
+      toast.success("Demo do site preparada para este prospect.");
+      const previewUrl = buildAbsoluteAppUrl(resolveBrowserOrigin(), updatedSnapshot?.personalized_preview_path || personalizedSitePreviewPath);
+      if (previewUrl) {
+        window.open(previewUrl, "_blank", "noopener,noreferrer");
+      }
+    },
+    onError: (error) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel criar a demo do site agora."));
+    },
+  });
 
   useEffect(() => {
     const fallbackScenario = typeof lastLabRun?.scenario === "string" ? lastLabRun.scenario : "manager_interested";
     setLabScenario(fallbackScenario);
   }, [prospect.id, lastLabRun?.scenario]);
+
+  useEffect(() => {
+    setSiteTemplateSlug(savedSiteTemplate?.selected_template_slug || SITE_TEMPLATES[0]?.slug || "");
+    setSitePreviewPath(savedSiteTemplate?.personalized_preview_path || "");
+  }, [prospect.id, savedSiteTemplate?.personalized_preview_path, savedSiteTemplate?.selected_template_slug]);
 
   return (
     <>
@@ -3667,10 +3907,11 @@ function ProspectDetail({
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="grid gap-3 text-sm sm:grid-cols-4">
             <Info label="Score" value={String(prospect.score)} icon={<BarChart3 size={16} />} />
             <Info label="Status" value={humanize(prospect.status)} icon={<Activity size={16} />} />
             <Info label="Demo" value={prospect.demo_tenant_id ? humanize(prospect.demo_status) : "Nao criada"} icon={<ShieldCheck size={16} />} />
+            <Info label="Dono" value={`${prospectOwnerLabel(prospect)} - ${prospectOwnerDetail(prospect)}`} icon={<UserRound size={16} />} />
           </div>
 
           <div className="grid gap-2 text-sm">
@@ -3736,6 +3977,134 @@ function ProspectDetail({
             </select>
           </div>
 
+          {canViewSiteTemplates || savedSiteTemplate ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="font-semibold">Demo do site</p>
+                  <p className="mt-1 max-w-xl leading-6">
+                    Escolha um modelo do catalogo, salve no prospect e abra o preview personalizado sem sair do CRM.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <Badge className={prospectWebsite ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}>
+                    {prospectWebsite ? "Com site" : "Sem site"}
+                  </Badge>
+                  <Badge className="bg-white text-sky-800">
+                    {savedSiteTemplate?.selected_template_name || selectedSiteTemplate?.name || "Modelo ainda nao selecionado"}
+                  </Badge>
+                </div>
+              </div>
+
+              <div
+                className={cn(
+                  "mt-3 flex flex-col gap-3 rounded-lg border bg-white p-3 sm:flex-row sm:items-center sm:justify-between",
+                  prospectWebsite ? "border-emerald-200" : "border-amber-200",
+                )}
+              >
+                <div className="flex min-w-0 items-start gap-2">
+                  <Globe2 className={cn("mt-0.5 h-4 w-4 shrink-0", prospectWebsite ? "text-emerald-700" : "text-amber-700")} />
+                  <div className="min-w-0">
+                    <p className="font-semibold">{prospectWebsite ? "Site cadastrado" : "Sem site cadastrado"}</p>
+                    {prospectWebsite ? (
+                      <a
+                        href={prospectWebsiteUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 block truncate text-xs font-semibold text-sky-800 underline-offset-2 hover:underline"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {prospectWebsite}
+                      </a>
+                    ) : (
+                      <p className="mt-1 text-xs leading-5 text-amber-900">
+                        Boa candidata para demo de site com mapa, WhatsApp, servicos e prova de confianca.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {prospectWebsiteUrl ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={() => window.open(prospectWebsiteUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <Globe2 size={16} />
+                    Abrir site
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                <select
+                  className="h-10 rounded-lg border border-sky-200 bg-white px-3 text-sm"
+                  value={siteTemplateSlug}
+                  onChange={(event) => setSiteTemplateSlug(event.target.value)}
+                  disabled={!canViewSiteTemplates || !SITE_TEMPLATES.length}
+                >
+                  {SITE_TEMPLATES.map((template) => (
+                    <option key={template.slug} value={template.slug}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!resolvedSitePreviewUrl) return;
+                    window.open(resolvedSitePreviewUrl, "_blank", "noopener,noreferrer");
+                  }}
+                  disabled={!resolvedSitePreviewUrl}
+                >
+                  <Eye size={16} />
+                  Ver preview
+                </Button>
+                <Button
+                  className="bg-sky-700 text-white hover:bg-sky-600"
+                  onClick={() => siteTemplateMutation.mutate()}
+                  disabled={!canManageSiteTemplates || siteTemplateMutation.isPending || !selectedSiteTemplate}
+                >
+                  <Globe2 size={16} />
+                  {siteTemplateMutation.isPending ? "Criando..." : "Criar demo do site"}
+                </Button>
+              </div>
+
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <Button
+                  variant="outline"
+                  onClick={() => navigator.clipboard?.writeText(resolvedSitePreviewUrl)}
+                  disabled={!resolvedSitePreviewUrl}
+                >
+                  <Clipboard size={16} />
+                  Copiar preview
+                </Button>
+                <Link
+                  href="/adm/modelos-sites"
+                  target="_blank"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-sky-200 bg-white px-4 text-sm font-semibold text-sky-950 transition hover:bg-sky-100"
+                >
+                  <ArrowRight size={16} />
+                  Studio completo
+                </Link>
+              </div>
+
+              {savedSiteTemplate?.selected_at ? (
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.16em] text-sky-900/75">
+                  Ultima selecao salva em {formatDateTimeBR(savedSiteTemplate.selected_at)}
+                </p>
+              ) : null}
+
+              {!canManageSiteTemplates ? (
+                <p className="mt-3 text-xs leading-5 text-sky-900/80">
+                  Para criar a demo do site daqui, o usuario precisa editar CRM comercial e Modelos de Sites.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {canViewCommercialOutreach ? (
+            <>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -3873,6 +4242,8 @@ function ProspectDetail({
               </div>
             ) : null}
           </div>
+            </>
+          ) : null}
 
           {lastDemoLink || resolvedBookingLink ? (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
@@ -3903,6 +4274,93 @@ function ProspectDetail({
           ) : null}
         </CardContent>
       </Card>
+
+      {googlePlaces ? (
+        <Card className="border-stone-200">
+          <CardHeader>
+            <CardTitle className="text-base">Google Places</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Info
+                label="Rating"
+                value={googlePlaces.rating !== null ? googlePlaces.rating.toFixed(1) : "Nao informado"}
+                icon={<BarChart3 size={16} />}
+              />
+              <Info
+                label="Reviews"
+                value={googlePlaces.user_rating_count !== null ? numberFormatter.format(googlePlaces.user_rating_count) : "Nao informado"}
+                icon={<MessageSquareText size={16} />}
+              />
+              <Info
+                label="Status"
+                value={googlePlaces.business_status ? humanize(googlePlaces.business_status.toLowerCase()) : "Nao informado"}
+                icon={<Activity size={16} />}
+              />
+              <Info
+                label="Importado em"
+                value={googlePlaces.imported_at ? formatDateTimeBR(googlePlaces.imported_at) : "Nao informado"}
+                icon={<CalendarClock size={16} />}
+              />
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="rounded-lg border border-stone-200 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Identificacao</p>
+                <div className="mt-3 space-y-2 text-sm text-stone-700">
+                  <p>
+                    <span className="font-semibold text-stone-900">Place ID:</span>{" "}
+                    <span className="break-all">{googlePlaces.place_id || "Nao informado"}</span>
+                  </p>
+                  <p>
+                    <span className="font-semibold text-stone-900">Coordenadas:</span>{" "}
+                    {googlePlaces.location
+                      ? `${googlePlaces.location.latitude ?? "?"}, ${googlePlaces.location.longitude ?? "?"}`
+                      : "Nao informadas"}
+                  </p>
+                  <p>
+                    <span className="font-semibold text-stone-900">Maps:</span>{" "}
+                    {googlePlaces.maps_url ? (
+                      <a
+                        href={googlePlaces.maps_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="break-all text-emerald-700 underline underline-offset-2"
+                      >
+                        {googlePlaces.maps_url}
+                      </a>
+                    ) : (
+                      "Nao informado"
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-stone-200 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Tipos do Google</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {googlePlaces.types.length ? (
+                    googlePlaces.types.map((type) => (
+                      <Badge key={type} className="bg-stone-100 text-stone-700">
+                        {humanize(type.toLowerCase())}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-sm text-stone-500">Nenhum tipo salvo.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">Campos salvos no snapshot</p>
+              <p className="mt-2 break-all font-mono text-xs leading-6 text-stone-700">
+                {googlePlaces.field_mask || "Nao informado"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card className="border-stone-200">
         <CardHeader>

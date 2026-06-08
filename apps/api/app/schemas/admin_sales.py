@@ -374,6 +374,10 @@ class ProspectOutput(BaseModel):
     id: UUID
     slug: str | None = None
     clinic_name: str
+    created_by_user_id: UUID | None = None
+    created_by_user_name: str | None = None
+    created_by_user_email: str | None = None
+    created_by_user_is_affiliate: bool = False
     owner_name: str | None
     manager_name: str | None
     phone: str | None
