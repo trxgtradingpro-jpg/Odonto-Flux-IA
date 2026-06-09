@@ -64,6 +64,17 @@ class AdminAffiliateListOutput(BaseModel):
     total: int
 
 
+class AffiliateCrmStatsOutput(BaseModel):
+    contacts_today: int
+    contacts_week: int
+    contacts_month: int
+    total_contacted: int
+    current_portfolio: int
+    portfolio_with_site: int
+    portfolio_without_site: int
+    last_contact_at: datetime | None = None
+
+
 class AdminPageDefinitionOutput(BaseModel):
     key: str
     href: str
@@ -136,6 +147,7 @@ class ProspectUpdate(BaseModel):
     uses_whatsapp_heavily: bool | None = None
     estimated_volume: int | None = Field(default=None, ge=0)
     main_pain: str | None = None
+    temperature: str | None = Field(default=None, max_length=40)
     status: str | None = None
     tags: list[str] | None = None
     test_phone_number: str | None = None

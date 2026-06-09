@@ -2651,8 +2651,27 @@ def _affiliate_available_prospect_query():
     )
 
 
-def get_next_affiliate_prospect(db: Session) -> ProspectAccount | None:
-    candidates = db.execute(_affiliate_available_prospect_query().limit(100)).scalars().all()
+def _apply_affiliate_website_status_filter(query, *, website_status: str | None):
+    if website_status == "with_site":
+        has_website = func.nullif(func.trim(func.coalesce(ProspectAccount.website, "")), "")
+        return query.where(has_website.is_not(None))
+    if website_status == "without_site":
+        has_website = func.nullif(func.trim(func.coalesce(ProspectAccount.website, "")), "")
+        return query.where(has_website.is_(None))
+    return query
+
+
+def get_next_affiliate_prospect(
+    db: Session,
+    *,
+    website_status: str | None = None,
+    exclude_prospect_id: UUID | None = None,
+) -> ProspectAccount | None:
+    query = _affiliate_available_prospect_query()
+    query = _apply_affiliate_website_status_filter(query, website_status=website_status)
+    if exclude_prospect_id:
+        query = query.where(ProspectAccount.id != exclude_prospect_id)
+    candidates = db.execute(query.limit(100)).scalars().all()
     return next(
         (
             prospect
@@ -2667,10 +2686,22 @@ def list_affiliate_claimed_prospects(
     db: Session,
     *,
     user_id: UUID,
+    q: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> dict:
     filters = [ProspectAccount.affiliate_owner_user_id == user_id]
+    if q:
+        pattern = f"%{q.strip()}%"
+        filters.append(
+            or_(
+                ProspectAccount.clinic_name.ilike(pattern),
+                ProspectAccount.city.ilike(pattern),
+                ProspectAccount.state.ilike(pattern),
+                ProspectAccount.phone.ilike(pattern),
+                ProspectAccount.whatsapp_phone.ilike(pattern),
+            )
+        )
     rows = db.execute(
         select(ProspectAccount)
         .where(*filters)
@@ -2684,6 +2715,55 @@ def list_affiliate_claimed_prospects(
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+def get_affiliate_crm_stats(db: Session, *, user_id: UUID) -> dict:
+    timezone = _resolve_demo_timezone(settings.app_timezone)
+    now_local = _now().astimezone(timezone)
+    start_today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_week_local = _start_of_week_monday(now_local)
+    start_month_local = start_today_local.replace(day=1)
+
+    start_today = start_today_local.astimezone(UTC)
+    start_week = start_week_local.astimezone(UTC)
+    start_month = start_month_local.astimezone(UTC)
+
+    base_filters = [
+        ProspectAccount.affiliate_owner_user_id == user_id,
+        ProspectAccount.affiliate_claimed_at.is_not(None),
+    ]
+    has_website = func.nullif(func.trim(func.coalesce(ProspectAccount.website, "")), "")
+
+    total_contacted = db.scalar(select(func.count(ProspectAccount.id)).where(*base_filters)) or 0
+    contacts_today = db.scalar(
+        select(func.count(ProspectAccount.id)).where(*base_filters, ProspectAccount.affiliate_claimed_at >= start_today)
+    ) or 0
+    contacts_week = db.scalar(
+        select(func.count(ProspectAccount.id)).where(*base_filters, ProspectAccount.affiliate_claimed_at >= start_week)
+    ) or 0
+    contacts_month = db.scalar(
+        select(func.count(ProspectAccount.id)).where(*base_filters, ProspectAccount.affiliate_claimed_at >= start_month)
+    ) or 0
+    portfolio_with_site = db.scalar(
+        select(func.count(ProspectAccount.id)).where(*base_filters, has_website.is_not(None))
+    ) or 0
+    portfolio_without_site = db.scalar(
+        select(func.count(ProspectAccount.id)).where(*base_filters, has_website.is_(None))
+    ) or 0
+    last_contact_at = db.scalar(
+        select(func.max(ProspectAccount.affiliate_claimed_at)).where(*base_filters)
+    )
+
+    return {
+        "contacts_today": int(contacts_today),
+        "contacts_week": int(contacts_week),
+        "contacts_month": int(contacts_month),
+        "total_contacted": int(total_contacted),
+        "current_portfolio": int(total_contacted),
+        "portfolio_with_site": int(portfolio_with_site),
+        "portfolio_without_site": int(portfolio_without_site),
+        "last_contact_at": last_contact_at,
     }
 
 

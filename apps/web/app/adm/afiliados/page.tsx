@@ -27,6 +27,17 @@ type AffiliatesResponse = {
   total: number;
 };
 
+type AffiliateCrmStats = {
+  contacts_today: number;
+  contacts_week: number;
+  contacts_month: number;
+  total_contacted: number;
+  current_portfolio: number;
+  portfolio_with_site: number;
+  portfolio_without_site: number;
+  last_contact_at?: string | null;
+};
+
 const ACTIONS: AdmAction[] = ["view", "create", "edit", "delete"];
 
 function extractApiErrorMessage(error: unknown, fallback: string) {
@@ -137,6 +148,12 @@ export default function AdmAffiliatesPage() {
     () => affiliates.find((affiliate) => affiliate.id === selectedId) ?? affiliates[0] ?? null,
     [affiliates, selectedId],
   );
+  const affiliateStatsQuery = useQuery<AffiliateCrmStats>({
+    queryKey: ["adm-affiliate-stats", selectedAffiliate?.id],
+    queryFn: async () => (await api.get(`/admin/affiliates/${selectedAffiliate?.id}/stats`)).data,
+    enabled: hasToken && canView && Boolean(selectedAffiliate?.id),
+    retry: false,
+  });
 
   useEffect(() => {
     if (!selectedId && selectedAffiliate) setSelectedId(selectedAffiliate.id);
@@ -361,6 +378,22 @@ export default function AdmAffiliatesPage() {
                       <strong className="text-stone-900">E-mail:</strong> {selectedAffiliate.email}
                     </div>
                   </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <AffiliateStatCard label="Hoje" value={affiliateStatsQuery.data?.contacts_today ?? 0} />
+                    <AffiliateStatCard label="Semana" value={affiliateStatsQuery.data?.contacts_week ?? 0} />
+                    <AffiliateStatCard label="Mes" value={affiliateStatsQuery.data?.contacts_month ?? 0} />
+                    <AffiliateStatCard label="Total contatadas" value={affiliateStatsQuery.data?.total_contacted ?? 0} />
+                    <AffiliateStatCard label="Carteira" value={affiliateStatsQuery.data?.current_portfolio ?? 0} />
+                    <AffiliateStatCard label="Com site" value={affiliateStatsQuery.data?.portfolio_with_site ?? 0} />
+                    <AffiliateStatCard label="Sem site" value={affiliateStatsQuery.data?.portfolio_without_site ?? 0} />
+                    <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-stone-500">Ultimo contato</p>
+                      <p className="mt-2 text-sm font-semibold text-stone-900">
+                        {affiliateStatsQuery.data?.last_contact_at ? formatDateTimeBR(affiliateStatsQuery.data.last_contact_at) : "Ainda nao iniciou"}
+                      </p>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -374,5 +407,14 @@ export default function AdmAffiliatesPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+function AffiliateStatCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-stone-500">{label}</p>
+      <p className="mt-2 text-2xl font-black text-stone-950">{value}</p>
+    </div>
   );
 }

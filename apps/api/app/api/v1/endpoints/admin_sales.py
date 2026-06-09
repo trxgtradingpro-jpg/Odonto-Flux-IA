@@ -33,6 +33,7 @@ from app.schemas.admin_sales import (
     AdminAffiliateRegisterInput,
     AdminAffiliateUpdateInput,
     AdminChangeInitialPasswordInput,
+    AffiliateCrmStatsOutput,
     AdminLoginInput,
     AdminLoginOutput,
     AdminPageDefinitionOutput,
@@ -433,6 +434,13 @@ def list_affiliates(principal=Depends(get_current_principal), db: Session = Depe
     return {"data": data, "total": len(data)}
 
 
+@router.get("/admin/affiliates/{user_id}/stats", response_model=AffiliateCrmStatsOutput)
+def affiliate_stats(user_id: UUID, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
+    sales.require_adm_page_permission(principal, "adm_affiliates", "view")
+    sales._get_affiliate_user(db, user_id)
+    return sales.get_affiliate_crm_stats(db, user_id=user_id)
+
+
 @router.get("/admin/agent-settings/tenants")
 def list_agent_settings_tenants(
     search: str | None = Query(default=None, max_length=80),
@@ -819,12 +827,18 @@ def prospects_overview(principal=Depends(get_current_principal), db: Session = D
 
 @router.get("/admin/affiliate-crm/available", response_model=AffiliateCrmAvailableOutput)
 def affiliate_crm_available(
+    website_status: Literal["with_site", "without_site"] | None = Query(default=None),
+    exclude_prospect_id: UUID | None = Query(default=None),
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
     _require_affiliate_principal(principal)
-    prospect = sales.get_next_affiliate_prospect(db)
+    prospect = sales.get_next_affiliate_prospect(
+        db,
+        website_status=website_status,
+        exclude_prospect_id=exclude_prospect_id,
+    )
     return {
         "prospect": sales.serialize_prospect(db, prospect) if prospect else None,
         "available": bool(prospect),
@@ -835,6 +849,7 @@ def affiliate_crm_available(
 def affiliate_crm_mine(
     limit: int = 200,
     offset: int = 0,
+    q: str | None = Query(default=None, max_length=120),
     principal=Depends(get_current_principal),
     db: Session = Depends(get_db),
 ):
@@ -843,9 +858,20 @@ def affiliate_crm_mine(
     return sales.list_affiliate_claimed_prospects(
         db,
         user_id=principal.user.id,
+        q=q,
         limit=min(max(limit, 1), 500),
         offset=max(offset, 0),
     )
+
+
+@router.get("/admin/affiliate-crm/stats", response_model=AffiliateCrmStatsOutput)
+def affiliate_crm_stats(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+    _require_affiliate_principal(principal)
+    return sales.get_affiliate_crm_stats(db, user_id=principal.user.id)
 
 
 @router.get(

@@ -1383,6 +1383,103 @@ def test_prepare_affiliate_whatsapp_contact_claims_without_queue_and_guards_thir
     assert [item["stage"] for item in history] == ["first", "second", "third"]
 
 
+def test_get_next_affiliate_prospect_supports_site_filter_and_exclude(seeded_db, db_session):
+    first = ProspectAccount(
+        clinic_name="Clinica Com Site",
+        whatsapp_phone="+55 11 97777-1000",
+        website="https://clinicacomsite.test",
+        city="Sao Paulo",
+        state="SP",
+        score=80,
+        legal_basis="interesse_legitimo_b2b",
+    )
+    second = ProspectAccount(
+        clinic_name="Clinica Sem Site",
+        whatsapp_phone="+55 11 97777-2000",
+        city="Sao Paulo",
+        state="SP",
+        score=75,
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add_all([first, second])
+    db_session.commit()
+
+    assert sales_demo_service.get_next_affiliate_prospect(db_session, website_status="with_site").id == first.id
+    assert sales_demo_service.get_next_affiliate_prospect(db_session, website_status="without_site").id == second.id
+    assert sales_demo_service.get_next_affiliate_prospect(db_session, exclude_prospect_id=first.id).id == second.id
+
+
+def test_list_affiliate_claimed_prospects_supports_search_and_stats(monkeypatch, seeded_db, db_session):
+    frozen_now = datetime(2026, 6, 9, 15, 0, tzinfo=UTC)
+    monkeypatch.setattr(sales_demo_service, "_now", lambda: frozen_now)
+
+    affiliate = User(
+        tenant_id=None,
+        email="affiliate-stats@test.com",
+        full_name="Affiliate Stats",
+        hashed_password="test",
+        is_active=True,
+    )
+    db_session.add(affiliate)
+    db_session.flush()
+
+    recent = ProspectAccount(
+        clinic_name="Clinica Busca Azul",
+        whatsapp_phone="+55 11 97777-3000",
+        city="Campinas",
+        state="SP",
+        website="https://azul.test",
+        affiliate_owner_user_id=affiliate.id,
+        affiliate_claimed_at=frozen_now - timedelta(hours=2),
+        first_contact_at=frozen_now - timedelta(hours=2),
+        legal_basis="interesse_legitimo_b2b",
+    )
+    week_only = ProspectAccount(
+        clinic_name="Clinica Semana Verde",
+        whatsapp_phone="+55 11 97777-4000",
+        city="Santos",
+        state="SP",
+        affiliate_owner_user_id=affiliate.id,
+        affiliate_claimed_at=frozen_now - timedelta(days=3),
+        first_contact_at=frozen_now - timedelta(days=3),
+        legal_basis="interesse_legitimo_b2b",
+    )
+    month_only = ProspectAccount(
+        clinic_name="Clinica Mes Laranja",
+        whatsapp_phone="+55 11 97777-5000",
+        city="Sorocaba",
+        state="SP",
+        affiliate_owner_user_id=affiliate.id,
+        affiliate_claimed_at=frozen_now - timedelta(days=20),
+        first_contact_at=frozen_now - timedelta(days=20),
+        legal_basis="interesse_legitimo_b2b",
+    )
+    older = ProspectAccount(
+        clinic_name="Clinica Antiga Roxa",
+        whatsapp_phone="+55 11 97777-6000",
+        city="Ribeirao Preto",
+        state="SP",
+        affiliate_owner_user_id=affiliate.id,
+        affiliate_claimed_at=frozen_now - timedelta(days=45),
+        first_contact_at=frozen_now - timedelta(days=45),
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add_all([recent, week_only, month_only, older])
+    db_session.commit()
+
+    listed = sales_demo_service.list_affiliate_claimed_prospects(db_session, user_id=affiliate.id, q="Azul")
+    stats = sales_demo_service.get_affiliate_crm_stats(db_session, user_id=affiliate.id)
+
+    assert listed["total"] == 1
+    assert listed["data"][0]["clinic_name"] == "Clinica Busca Azul"
+    assert stats["contacts_today"] == 1
+    assert stats["contacts_week"] == 1
+    assert stats["contacts_month"] == 2
+    assert stats["total_contacted"] == 4
+    assert stats["portfolio_with_site"] == 1
+    assert stats["portfolio_without_site"] == 3
+
+
 def test_send_no_site_outreach_bulk_queues_first_stage_for_all_without_site(monkeypatch, seeded_db, db_session):
     sender_tenant = _create_sender_tenant(db_session)
     first = _create_prospect(db_session)

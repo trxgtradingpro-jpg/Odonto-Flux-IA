@@ -198,6 +198,17 @@ type AffiliateCrmAvailable = {
   available: boolean;
 };
 
+type AffiliateCrmStats = {
+  contacts_today: number;
+  contacts_week: number;
+  contacts_month: number;
+  total_contacted: number;
+  current_portfolio: number;
+  portfolio_with_site: number;
+  portfolio_without_site: number;
+  last_contact_at?: string | null;
+};
+
 type NoSiteOutreachStage = "first" | "second" | "third";
 
 type AffiliateContactStage = NoSiteOutreachStage;
@@ -445,6 +456,18 @@ const CRM_PROSPECT_GRID_CLASS = "md:grid-cols-[minmax(220px,1.25fr)_130px_100px_
 type WebsiteStatusFilter = "" | "without_site" | "with_site";
 
 type AdmSection = "crm" | "stats" | "adm_whatsapp" | "whatsapp_settings";
+
+const AFFILIATE_TEMPERATURE_OPTIONS: Array<{
+  value: Prospect["temperature"];
+  label: string;
+  helper: string;
+  className: string;
+}> = [
+  { value: "frio", label: "Frio", helper: "Sem resposta ou pouco interesse", className: "bg-stone-200 text-stone-700" },
+  { value: "morno", label: "Morno", helper: "Contato aberto, mas ainda cedo", className: "bg-amber-100 text-amber-800" },
+  { value: "quente", label: "Quente", helper: "Interesse real ou conversa andando", className: "bg-orange-100 text-orange-700" },
+  { value: "muito_quente", label: "Muito quente", helper: "Prioridade total para fechar", className: "bg-red-100 text-red-700" },
+];
 
 type AdmWhatsappConversation = {
   id: string;
@@ -2468,6 +2491,13 @@ export default function AdmPage() {
     return rows.find((item) => item.id === selectedId) ?? null;
   }, [affiliateSelectedProspect, isAffiliateUser, prospectsQuery.data?.data, selectedId]);
   const outreachRuntime = outreachRuntimeQuery.data ?? null;
+  const affiliateCrmStatsQuery = useQuery<AffiliateCrmStats>({
+    queryKey: ["adm-affiliate-crm-stats"],
+    queryFn: async () => (await api.get("/admin/affiliate-crm/stats")).data,
+    enabled: sessionReady && canViewCrm && isAffiliateUser,
+    retry: false,
+  });
+  const affiliateCrmStats = affiliateCrmStatsQuery.data ?? null;
   const usesWhatsAppWebBridge = outreachRuntime?.transport === "whatsapp_web_bridge";
 
   const platformAccounts = useMemo(
@@ -2967,17 +2997,33 @@ export default function AdmPage() {
           <section className="space-y-4">
             <Card className="border-stone-200 bg-white">
               <CardHeader>
-                <CardTitle className="text-xl">Estatisticas do CRM</CardTitle>
+                <CardTitle className="text-xl">{isAffiliateUser ? "Suas estatisticas comerciais" : "Estatisticas do CRM"}</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  <MetricCard icon={<Building2 size={18} />} label="Prospects" value={overview?.total_prospects ?? 0} />
-                  <MetricCard icon={<ShieldCheck size={18} />} label="Demos criadas" value={overview?.demos_created ?? 0} />
-                  <MetricCard icon={<Eye size={18} />} label="Demos acessadas" value={overview?.demos_accessed ?? 0} />
-                  <MetricCard icon={<Flame size={18} />} label="Quentes" value={overview?.hot_leads ?? 0} />
-                  <MetricCard icon={<CalendarClock size={18} />} label="Reunioes" value={overview?.meetings_scheduled ?? 0} />
-                  <MetricCard icon={<CheckCircle2 size={18} />} label="Ganhos" value={overview?.won ?? 0} />
+                  {isAffiliateUser ? (
+                    <>
+                      <MetricCard icon={<Send size={18} />} label="Contatos hoje" value={affiliateCrmStats?.contacts_today ?? 0} />
+                      <MetricCard icon={<CalendarClock size={18} />} label="Contatos na semana" value={affiliateCrmStats?.contacts_week ?? 0} />
+                      <MetricCard icon={<BarChart3 size={18} />} label="Contatos no mes" value={affiliateCrmStats?.contacts_month ?? 0} />
+                      <MetricCard icon={<Building2 size={18} />} label="Clinicas contatadas" value={affiliateCrmStats?.total_contacted ?? 0} />
+                      <MetricCard icon={<Globe2 size={18} />} label="Carteira com site" value={affiliateCrmStats?.portfolio_with_site ?? 0} />
+                      <MetricCard icon={<MapPin size={18} />} label="Carteira sem site" value={affiliateCrmStats?.portfolio_without_site ?? 0} />
+                    </>
+                  ) : (
+                    <>
+                      <MetricCard icon={<Building2 size={18} />} label="Prospects" value={overview?.total_prospects ?? 0} />
+                      <MetricCard icon={<ShieldCheck size={18} />} label="Demos criadas" value={overview?.demos_created ?? 0} />
+                      <MetricCard icon={<Eye size={18} />} label="Demos acessadas" value={overview?.demos_accessed ?? 0} />
+                      <MetricCard icon={<Flame size={18} />} label="Quentes" value={overview?.hot_leads ?? 0} />
+                      <MetricCard icon={<CalendarClock size={18} />} label="Reunioes" value={overview?.meetings_scheduled ?? 0} />
+                      <MetricCard icon={<CheckCircle2 size={18} />} label="Ganhos" value={overview?.won ?? 0} />
+                    </>
+                  )}
                 </div>
+                {isAffiliateUser && affiliateCrmStats?.last_contact_at ? (
+                  <p className="mt-4 text-sm text-stone-500">Ultimo primeiro contato: {formatDateTimeBR(affiliateCrmStats.last_contact_at)}</p>
+                ) : null}
               </CardContent>
             </Card>
           </section>
@@ -2987,6 +3033,7 @@ export default function AdmPage() {
           isAffiliateUser ? (
             <AffiliateCrm
               canEdit={canEditCrm}
+              stats={affiliateCrmStats}
               usesWhatsAppWebBridge={usesWhatsAppWebBridge}
               onOpenProspect={(prospect) => {
                 setAffiliateSelectedProspect(prospect);
@@ -3467,15 +3514,21 @@ export default function AdmPage() {
 
 function AffiliateCrm({
   canEdit,
+  stats,
   usesWhatsAppWebBridge,
   onOpenProspect,
 }: {
   canEdit: boolean;
+  stats: AffiliateCrmStats | null;
   usesWhatsAppWebBridge: boolean;
   onOpenProspect: (prospect: Prospect) => void;
 }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<"available" | "mine">("available");
+  const [availableWebsiteStatus, setAvailableWebsiteStatus] = useState<WebsiteStatusFilter>("");
+  const [availableExcludeProspectId, setAvailableExcludeProspectId] = useState<string | null>(null);
+  const [mineSearch, setMineSearch] = useState("");
+  const [mineTemperatureFilter, setMineTemperatureFilter] = useState<string>("");
   const [messageDraft, setMessageDraft] = useState<AffiliateContactMessageConfig>({
     first_messages: ["", "", "", "", ""],
     second_messages: ["", "", "", "", ""],
@@ -3496,13 +3549,26 @@ function AffiliateCrm({
   const [consentResponsible, setConsentResponsible] = useState(false);
 
   const availableQuery = useQuery<AffiliateCrmAvailable>({
-    queryKey: ["adm-affiliate-crm-available"],
-    queryFn: async () => (await api.get("/admin/affiliate-crm/available")).data,
+    queryKey: ["adm-affiliate-crm-available", availableWebsiteStatus, availableExcludeProspectId],
+    queryFn: async () =>
+      (
+        await api.get("/admin/affiliate-crm/available", {
+          params: {
+            website_status: availableWebsiteStatus || undefined,
+            exclude_prospect_id: availableExcludeProspectId || undefined,
+          },
+        })
+      ).data,
     retry: false,
   });
   const mineQuery = useQuery<{ data: Prospect[]; total: number }>({
-    queryKey: ["adm-affiliate-crm-mine"],
-    queryFn: async () => (await api.get("/admin/affiliate-crm/mine", { params: { limit: 200, offset: 0 } })).data,
+    queryKey: ["adm-affiliate-crm-mine", mineSearch],
+    queryFn: async () =>
+      (
+        await api.get("/admin/affiliate-crm/mine", {
+          params: { limit: 200, offset: 0, q: mineSearch || undefined },
+        })
+      ).data,
     retry: false,
   });
   const messagesQuery = useQuery<AffiliateContactMessageConfig>({
@@ -3569,7 +3635,21 @@ function AffiliateCrm({
     },
   });
 
+  const updateTemperatureMutation = useMutation({
+    mutationFn: async ({ prospectId, temperature }: { prospectId: string; temperature: string }) =>
+      (await api.patch<Prospect>(`/admin/prospects/${prospectId}`, { temperature })).data,
+    onSuccess: () => {
+      toast.success("Temperatura atualizada.");
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-mine"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel atualizar a temperatura."));
+    },
+  });
+
   const availableProspect = availableQuery.data?.prospect ?? null;
+  const mineRows = (mineQuery.data?.data || []).filter((prospect) => (mineTemperatureFilter ? prospect.temperature === mineTemperatureFilter : true));
   const allMessagesValid = (["first", "second", "third"] as AffiliateContactStage[]).every((stage) => {
     const messages = messageDraft[affiliateContactMessagesKey(stage)];
     return messages.length === 5 && messages.every((message) => message.trim().length >= 2);
@@ -3603,15 +3683,7 @@ function AffiliateCrm({
       <section className="space-y-4">
         <Card className="overflow-hidden border-sky-200 bg-[radial-gradient(circle_at_top_right,_rgba(14,165,233,0.14),_transparent_42%),linear-gradient(135deg,#ffffff,#f0f9ff)]">
           <CardContent className="space-y-4 p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-700">CRM do afiliado</p>
-                <h2 className="mt-1 text-2xl font-black text-stone-950">Uma clinica por vez, sem disputa duplicada</h2>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
-                  A clinica fica reservada quando voce confirma o combinado e abre o primeiro contato. Depois disso,
-                  nenhum outro afiliado consegue visualizar ou utilizar esse lead.
-                </p>
-              </div>
+            <div className="flex items-center justify-end">
               <Badge className={usesWhatsAppWebBridge ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
                 {usesWhatsAppWebBridge ? "WhatsApp Web disponivel" : "Mensagem pronta no WhatsApp"}
               </Badge>
@@ -3640,7 +3712,11 @@ function AffiliateCrm({
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  availableQuery.refetch();
+                  if (activeTab === "available" && availableProspect?.id) {
+                    setAvailableExcludeProspectId(availableProspect.id);
+                  } else {
+                    availableQuery.refetch();
+                  }
                   mineQuery.refetch();
                 }}
                 disabled={availableQuery.isFetching || mineQuery.isFetching}
@@ -3648,102 +3724,94 @@ function AffiliateCrm({
                 <RefreshCw size={16} />
                 Atualizar
               </Button>
+              <Button type="button" variant="outline" onClick={() => openEditor("first")} disabled={!canEdit}>
+                <Pencil size={16} />
+                Mensagens
+              </Button>
             </div>
+
+            {stats ? (
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <AffiliateInfo label="Hoje" value={`${stats.contacts_today} contato(s)`} />
+                <AffiliateInfo label="Semana" value={`${stats.contacts_week} contato(s)`} />
+                <AffiliateInfo label="Mes" value={`${stats.contacts_month} contato(s)`} />
+                <AffiliateInfo label="Carteira" value={`${stats.current_portfolio} clinica(s)`} />
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 
         {activeTab === "available" ? (
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
-            <Card className="border-stone-200 bg-white">
-              <CardContent className="p-5">
-                {availableQuery.isLoading ? (
-                  <div className="py-16 text-center text-sm text-stone-500">Buscando a proxima clinica...</div>
-                ) : availableProspect ? (
-                  <div className="space-y-5">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Clinica disponivel agora</p>
-                        <h3 className="mt-1 text-2xl font-black text-stone-950">{availableProspect.clinic_name}</h3>
-                        <p className="mt-2 text-sm text-stone-600">
-                          {[availableProspect.city, availableProspect.state].filter(Boolean).join(" / ") || "Localizacao nao informada"}
-                        </p>
-                      </div>
-                      <Badge className={getProspectWebsite(availableProspect) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
-                        {getProspectWebsite(availableProspect) ? "Com site" : "Sem site"}
-                      </Badge>
-                    </div>
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="p-5">
+              {availableQuery.isLoading ? (
+                <div className="py-16 text-center text-sm text-stone-500">Buscando a proxima clinica...</div>
+              ) : availableProspect ? (
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <select
+                      className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm"
+                      value={availableWebsiteStatus}
+                      onChange={(event) => {
+                        setAvailableWebsiteStatus(event.target.value as WebsiteStatusFilter);
+                        setAvailableExcludeProspectId(null);
+                      }}
+                    >
+                      <option value="">Todas as clinicas</option>
+                      <option value="without_site">Sem site</option>
+                      <option value="with_site">Com site</option>
+                    </select>
+                    <p className="text-xs text-stone-500">Atualizar mostra outra clinica dentro do filtro atual.</p>
+                  </div>
 
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <AffiliateInfo label="WhatsApp" value={availableProspect.whatsapp_phone || availableProspect.phone || "Nao informado"} />
-                      <AffiliateInfo label="Origem" value={humanize(availableProspect.lead_source || "nao informada")} />
-                      <AffiliateInfo label="Score" value={String(availableProspect.score)} />
-                    </div>
-
-                    <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Como funciona</p>
-                      <p className="mt-2 text-sm leading-6 text-stone-700">
-                        Escolha uma das suas mensagens, confirme o combinado e o WhatsApp abrira com o texto pronto para revisar e enviar.
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Clinica disponivel agora</p>
+                      <h3 className="mt-1 text-2xl font-black text-stone-950">{availableProspect.clinic_name}</h3>
+                      <p className="mt-2 text-sm text-stone-600">
+                        {[availableProspect.city, availableProspect.state].filter(Boolean).join(" / ") || "Localizacao nao informada"}
                       </p>
                     </div>
-
-                    <Button
-                      type="button"
-                      className="h-12 w-full bg-sky-700 text-white hover:bg-sky-600"
-                      disabled={!canEdit || !allMessagesValid || messagesQuery.isLoading}
-                      onClick={() => openContactSelection(availableProspect, "first")}
-                    >
-                      <Send size={17} />
-                      Enviar primeira mensagem e assumir clinica
-                    </Button>
-                    <p className="text-center text-xs leading-5 text-stone-500">
-                      Apenas a confirmacao final reserva a clinica para voce.
-                    </p>
+                    <Badge className={getProspectWebsite(availableProspect) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                      {getProspectWebsite(availableProspect) ? "Com site" : "Sem site"}
+                    </Badge>
                   </div>
-                ) : (
-                  <div className="py-14">
-                    <EmptyState
-                      title="Nenhuma clinica disponivel agora"
-                      description="As clinicas em uso ficam protegidas. Atualize mais tarde para receber a proxima oportunidade livre."
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
-            <Card className="border-stone-200 bg-white">
-              <CardContent className="space-y-4 p-5">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Suas mensagens</p>
-                  <h3 className="mt-1 text-xl font-black text-stone-950">15 textos organizados por contato</h3>
-                  <p className="mt-2 text-sm leading-6 text-stone-600">
-                    Sao 5 opcoes para cada etapa. Edite seus textos quando quiser e escolha a melhor antes de abrir o WhatsApp.
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <AffiliateInfo label="WhatsApp" value={availableProspect.whatsapp_phone || availableProspect.phone || "Nao informado"} />
+                    <AffiliateInfo label="Origem" value={humanize(availableProspect.lead_source || "nao informada")} />
+                    <AffiliateInfo label="Score" value={String(availableProspect.score)} />
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="h-12 w-full bg-sky-700 text-white hover:bg-sky-600"
+                    disabled={!canEdit || !allMessagesValid || messagesQuery.isLoading}
+                    onClick={() => openContactSelection(availableProspect, "first")}
+                  >
+                    <Send size={17} />
+                    Enviar primeira mensagem e assumir clinica
+                  </Button>
+                  <p className="text-center text-xs leading-5 text-stone-500">
+                    Apenas a confirmacao final reserva a clinica para voce.
                   </p>
                 </div>
-
-                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                  {(["first", "second", "third"] as AffiliateContactStage[]).map((stage) => (
-                    <button
-                      key={stage}
-                      type="button"
-                      className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-sky-300 hover:bg-sky-50"
-                      onClick={() => openEditor(stage)}
-                    >
-                      <span>
-                        <span className="block text-sm font-black text-stone-950">{affiliateContactStageLabel(stage)}</span>
-                        <span className="mt-1 block text-xs text-stone-500">5 mensagens editaveis</span>
-                      </span>
-                      <Pencil size={16} className="text-sky-700" />
-                    </button>
-                  ))}
+              ) : (
+                <div className="py-14">
+                  <EmptyState
+                    title="Nenhuma clinica disponivel agora"
+                    description={
+                      availableWebsiteStatus === "with_site"
+                        ? "Nao ha outra clinica com site disponivel neste momento."
+                        : availableWebsiteStatus === "without_site"
+                          ? "Nao ha outra clinica sem site disponivel neste momento."
+                          : "As clinicas em uso ficam protegidas. Atualize mais tarde para receber a proxima oportunidade livre."
+                    }
+                  />
                 </div>
-
-                <Button type="button" variant="outline" className="w-full" onClick={() => openEditor("first")} disabled={!canEdit}>
-                  <Pencil size={16} />
-                  Editar todas as mensagens
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
+              )}
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-stone-200 bg-white">
             <CardContent className="space-y-4 p-5">
@@ -3755,11 +3823,35 @@ function AffiliateCrm({
                 </p>
               </div>
 
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                  <Input
+                    className="pl-9"
+                    placeholder="Buscar clinica, cidade ou telefone"
+                    value={mineSearch}
+                    onChange={(event) => setMineSearch(event.target.value)}
+                  />
+                </div>
+                <select
+                  className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm"
+                  value={mineTemperatureFilter}
+                  onChange={(event) => setMineTemperatureFilter(event.target.value)}
+                >
+                  <option value="">Todas as temperaturas</option>
+                  {AFFILIATE_TEMPERATURE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {mineQuery.isLoading ? (
                 <div className="py-12 text-center text-sm text-stone-500">Carregando suas clinicas...</div>
-              ) : (mineQuery.data?.data || []).length ? (
+              ) : mineRows.length ? (
                 <div className="grid gap-3 lg:grid-cols-2">
-                  {(mineQuery.data?.data || []).map((prospect) => (
+                  {mineRows.map((prospect) => (
                     <div key={prospect.id} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -3776,6 +3868,32 @@ function AffiliateCrm({
                       <Badge className="bg-sky-100 text-sky-800">
                         Desde {formatDateTimeBR(prospect.affiliate_claimed_at || prospect.first_contact_at)}
                       </Badge>
+                    </div>
+                    <div className="mt-4 rounded-2xl border border-stone-200 bg-white p-3">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-stone-500">Temperatura da clinica</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {AFFILIATE_TEMPERATURE_OPTIONS.map((option) => {
+                          const selected = prospect.temperature === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={cn(
+                                "rounded-full border px-3 py-1.5 text-xs font-bold transition",
+                                selected ? option.className : "border-stone-200 bg-white text-stone-500 hover:border-stone-300",
+                              )}
+                              onClick={() => updateTemperatureMutation.mutate({ prospectId: prospect.id, temperature: option.value })}
+                              disabled={!canEdit || updateTemperatureMutation.isPending}
+                              title={option.helper}
+                            >
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-xs text-stone-500">
+                        {AFFILIATE_TEMPERATURE_OPTIONS.find((option) => option.value === prospect.temperature)?.helper || "Ajuste rapido da prioridade comercial."}
+                      </p>
                     </div>
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
                       <Button type="button" variant="outline" onClick={() => onOpenProspect(prospect)}>
@@ -3798,8 +3916,12 @@ function AffiliateCrm({
               ) : (
                 <div className="py-12">
                   <EmptyState
-                    title="Sua carteira ainda esta vazia"
-                    description="Envie a primeira mensagem na aba Nova clinica para assumir seu primeiro lead."
+                    title={mineSearch || mineTemperatureFilter ? "Nenhuma clinica encontrada" : "Sua carteira ainda esta vazia"}
+                    description={
+                      mineSearch || mineTemperatureFilter
+                        ? "Tente limpar a busca ou o filtro de temperatura para ver outras clinicas."
+                        : "Envie a primeira mensagem na aba Nova clinica para assumir seu primeiro lead."
+                    }
                   />
                 </div>
               )}
