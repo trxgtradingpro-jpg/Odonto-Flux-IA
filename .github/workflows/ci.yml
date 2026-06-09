@@ -47,7 +47,7 @@ jobs:
               sed -n 's#^apps/api/\(.*\.py\)$#\1#p'
           )
           if ((${#files[@]})); then
-            ruff check --select E9,F63,F7,F82 "${files[@]}"
+            ruff check --isolated --select E9,F63,F7,F82 "${files[@]}"
           fi
       - name: Test
         env:
