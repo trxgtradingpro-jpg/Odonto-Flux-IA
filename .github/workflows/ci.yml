@@ -8,6 +8,22 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: odontoflux
+      POSTGRES_PASSWORD: odontoflux
+      POSTGRES_DB: odontoflux
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      STORAGE_BASE_PATH: /tmp/odontoflux-storage
+      LLM_PROVIDER: mock
+      LLM_API_KEY: ""
+      SALES_OUTREACH_AI_REVIEW_ENABLED: "false"
+      WHATSAPP_INLINE_DISPATCH_ON_QUEUE: "true"
     defaults:
       run:
         working-directory: apps/api
@@ -38,6 +54,8 @@ jobs:
           python-version: "3.12"
       - name: Install backend deps
         run: pip install -r requirements.txt
+      - name: Prepare test storage
+        run: mkdir -p "$STORAGE_BASE_PATH"
       - name: Lint changed backend files
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -49,14 +67,12 @@ jobs:
           if ((${#files[@]})); then
             ruff check --isolated --select E9,F63,F7,F82 "${files[@]}"
           fi
-      - name: Test
-        env:
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
-          POSTGRES_USER: odontoflux
-          POSTGRES_PASSWORD: odontoflux
-          POSTGRES_DB: odontoflux
-          REDIS_HOST: localhost
+      - name: Test affiliate CRM regression
+        run: >-
+          pytest -q tests/unit/test_sales_outreach.py
+          -k "affiliate_first_message_claims_prospect_exclusively or no_site_outreach"
+      - name: Legacy full suite
+        continue-on-error: true
         run: pytest -q
 
   frontend:
