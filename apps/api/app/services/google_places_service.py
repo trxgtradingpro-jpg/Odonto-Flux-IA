@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -17,6 +18,8 @@ from app.utils.phone import normalize_phone
 
 PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
+IBGE_MUNICIPALITIES_URL = "https://servicodados.ibge.gov.br/api/v1/localidades/estados/{state}/municipios"
+IBGE_DISTRICTS_URL = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios/{municipality_id}/distritos"
 
 # Search stays intentionally cheap: no phone, website, rating or reviews here.
 PLACES_SEARCH_FIELD_MASK = ",".join(
@@ -49,6 +52,11 @@ PLACES_DETAILS_FIELD_MASK = ",".join(
 
 PLACES_RATING_FIELDS = "rating,userRatingCount"
 
+AUTOMATION_SEARCH_TERMS = {
+    "dentist": ("clinica odontologica", "dentista"),
+    "doctor": ("clinica medica", "medico"),
+}
+
 
 def _require_api_key() -> str:
     api_key = str(settings.google_places_api_key or "").strip()
@@ -66,6 +74,127 @@ def _place_id(value: str | None) -> str:
     if raw.startswith("places/"):
         return raw.split("/", 1)[1].strip()
     return raw
+
+
+def _normalized_location_name(value: str | None) -> str:
+    raw = unicodedata.normalize("NFKD", str(value or "").strip())
+    return "".join(character for character in raw if not unicodedata.combining(character)).casefold()
+
+
+def _automation_search_terms(included_type: str | None) -> tuple[str, ...]:
+    if included_type in AUTOMATION_SEARCH_TERMS:
+        return AUTOMATION_SEARCH_TERMS[included_type]
+    return ("clinica", "consultorio")
+
+
+def build_google_places_automation_plan(
+    *,
+    state: str,
+    city: str,
+    target_limit: int,
+    included_type: str | None = "dentist",
+) -> dict[str, Any]:
+    clean_state = str(state or "").strip().upper()
+    clean_city = " ".join(str(city or "").strip().split())
+    if len(clean_state) != 2:
+        raise ApiError(
+            status_code=422,
+            code="PLACES_AUTOMATION_STATE_INVALID",
+            message="Informe uma UF valida com 2 letras.",
+        )
+    if len(clean_city) < 2:
+        raise ApiError(
+            status_code=422,
+            code="PLACES_AUTOMATION_CITY_INVALID",
+            message="Informe a cidade da busca automatica.",
+        )
+
+    try:
+        with httpx.Client(timeout=settings.google_places_timeout_seconds) as client:
+            municipalities_response = client.get(
+                IBGE_MUNICIPALITIES_URL.format(state=clean_state),
+                params={"orderBy": "nome"},
+            )
+            municipalities_response.raise_for_status()
+            municipalities = municipalities_response.json()
+            if not isinstance(municipalities, list):
+                municipalities = []
+
+            normalized_city = _normalized_location_name(clean_city)
+            municipality = next(
+                (
+                    item
+                    for item in municipalities
+                    if isinstance(item, dict) and _normalized_location_name(item.get("nome")) == normalized_city
+                ),
+                None,
+            )
+            if not municipality:
+                raise ApiError(
+                    status_code=404,
+                    code="PLACES_AUTOMATION_CITY_NOT_FOUND",
+                    message=f"Nao encontrei a cidade {clean_city} na UF {clean_state}.",
+                )
+
+            municipality_id = int(municipality["id"])
+            canonical_city = str(municipality.get("nome") or clean_city).strip()
+            districts_response = client.get(
+                IBGE_DISTRICTS_URL.format(municipality_id=municipality_id),
+                params={"orderBy": "nome"},
+            )
+            districts_response.raise_for_status()
+            districts = districts_response.json()
+            if not isinstance(districts, list):
+                districts = []
+    except ApiError:
+        raise
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        raise ApiError(
+            status_code=502,
+            code="PLACES_AUTOMATION_AREAS_UNAVAILABLE",
+            message="Nao consegui carregar os distritos oficiais da cidade no IBGE.",
+            details={"error": str(exc)},
+        ) from exc
+
+    areas: list[str] = []
+    for district in districts:
+        if not isinstance(district, dict):
+            continue
+        area = " ".join(str(district.get("nome") or "").strip().split())
+        if area and area not in areas:
+            areas.append(area)
+
+    source = "ibge_districts" if areas else "city_fallback"
+    if not areas:
+        areas = [canonical_city]
+
+    queries: list[dict[str, str]] = []
+    for term in _automation_search_terms(included_type):
+        for area in areas:
+            is_city_wide = _normalized_location_name(area) == _normalized_location_name(canonical_city)
+            location = (
+                f"{canonical_city} - {clean_state}"
+                if is_city_wide
+                else f"{area}, {canonical_city} - {clean_state}"
+            )
+            queries.append(
+                {
+                    "area": area,
+                    "term": term,
+                    "query": f"{term} em {location}",
+                }
+            )
+
+    return {
+        "state": clean_state,
+        "city": canonical_city,
+        "municipality_id": municipality_id,
+        "target_limit": int(target_limit),
+        "source": source,
+        "areas": areas,
+        "queries": queries,
+        "estimated_max_search_calls": len(queries),
+    }
 
 
 def _display_name(place: dict[str, Any]) -> str:

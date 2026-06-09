@@ -29,6 +29,25 @@ class _FakeGoogleClient:
         return _FakeGoogleResponse(self.payload)
 
 
+class _FakeIbgeClient:
+    def __init__(self, *, municipalities, districts):
+        self.municipalities = municipalities
+        self.districts = districts
+        self.gets = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def get(self, url, params=None):
+        self.gets.append({"url": url, "params": params})
+        if "/estados/" in url:
+            return _FakeGoogleResponse(self.municipalities)
+        return _FakeGoogleResponse(self.districts)
+
+
 def test_search_google_places_filters_existing_and_repeated_clinics(monkeypatch, seeded_db, db_session):
     existing = ProspectAccount(
         clinic_name="Clinica Ja Cadastrada",
@@ -83,3 +102,76 @@ def test_search_google_places_filters_existing_and_repeated_clinics(monkeypatch,
     assert result["results"][0]["duplicate_prospect_id"] is None
     assert result["results"][0]["duplicate_clinic_name"] is None
     assert len(fake_client.posts) == 1
+
+
+def test_build_google_places_automation_plan_uses_ibge_districts(monkeypatch):
+    fake_client = _FakeIbgeClient(
+        municipalities=[
+            {"id": 3550308, "nome": "São Paulo"},
+            {"id": 3509502, "nome": "Campinas"},
+        ],
+        districts=[
+            {"id": 355030801, "nome": "Água Rasa"},
+            {"id": 355030890, "nome": "Vila Mariana"},
+        ],
+    )
+    monkeypatch.setattr(google_places_service.httpx, "Client", lambda timeout: fake_client)
+
+    result = google_places_service.build_google_places_automation_plan(
+        state="sp",
+        city="Sao Paulo",
+        target_limit=50,
+        included_type="dentist",
+    )
+
+    assert result["state"] == "SP"
+    assert result["city"] == "São Paulo"
+    assert result["municipality_id"] == 3550308
+    assert result["source"] == "ibge_districts"
+    assert result["areas"] == ["Água Rasa", "Vila Mariana"]
+    assert result["estimated_max_search_calls"] == 4
+    assert result["queries"] == [
+        {
+            "area": "Água Rasa",
+            "term": "clinica odontologica",
+            "query": "clinica odontologica em Água Rasa, São Paulo - SP",
+        },
+        {
+            "area": "Vila Mariana",
+            "term": "clinica odontologica",
+            "query": "clinica odontologica em Vila Mariana, São Paulo - SP",
+        },
+        {
+            "area": "Água Rasa",
+            "term": "dentista",
+            "query": "dentista em Água Rasa, São Paulo - SP",
+        },
+        {
+            "area": "Vila Mariana",
+            "term": "dentista",
+            "query": "dentista em Vila Mariana, São Paulo - SP",
+        },
+    ]
+    assert len(fake_client.gets) == 2
+
+
+def test_build_google_places_automation_plan_falls_back_to_city(monkeypatch):
+    fake_client = _FakeIbgeClient(
+        municipalities=[{"id": 3509502, "nome": "Campinas"}],
+        districts=[],
+    )
+    monkeypatch.setattr(google_places_service.httpx, "Client", lambda timeout: fake_client)
+
+    result = google_places_service.build_google_places_automation_plan(
+        state="SP",
+        city="Campinas",
+        target_limit=20,
+        included_type=None,
+    )
+
+    assert result["source"] == "city_fallback"
+    assert result["areas"] == ["Campinas"]
+    assert result["queries"] == [
+        {"area": "Campinas", "term": "clinica", "query": "clinica em Campinas - SP"},
+        {"area": "Campinas", "term": "consultorio", "query": "consultorio em Campinas - SP"},
+    ]

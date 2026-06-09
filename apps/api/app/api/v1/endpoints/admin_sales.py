@@ -28,14 +28,13 @@ from app.models import (
 )
 from app.models.enums import OutboxStatus
 from app.schemas.admin_sales import (
-    AdminOutreachRuntimeOutput,
     AdminAffiliateListOutput,
     AdminAffiliateRegisterInput,
     AdminAffiliateUpdateInput,
     AdminChangeInitialPasswordInput,
-    AffiliateCrmStatsOutput,
     AdminLoginInput,
     AdminLoginOutput,
+    AdminOutreachRuntimeOutput,
     AdminPageDefinitionOutput,
     AdminSessionOutput,
     AffiliateContactMessageConfigInput,
@@ -43,6 +42,7 @@ from app.schemas.admin_sales import (
     AffiliateContactPrepareInput,
     AffiliateContactPrepareOutput,
     AffiliateCrmAvailableOutput,
+    AffiliateCrmStatsOutput,
     AffiliateFirstMessageConfigInput,
     AffiliateFirstMessageConfigOutput,
     AffiliateFirstMessageSendInput,
@@ -56,6 +56,8 @@ from app.schemas.admin_sales import (
     DemoGuideStateOutput,
     DemoProvisionOutput,
     DemoRedeemTokenInput,
+    GooglePlacesAutomationPlanInput,
+    GooglePlacesAutomationPlanOutput,
     GooglePlacesImportInput,
     GooglePlacesImportOutput,
     GooglePlacesSearchInput,
@@ -86,30 +88,42 @@ from app.schemas.admin_sales import (
     SalesClinicMessageListOutput,
     SalesClinicMessagePreviewInput,
     SalesClinicMessagePreviewOutput,
-    SalesNoSiteOutreachFlowConfigInput,
-    SalesNoSiteOutreachFlowConfigOutput,
+    SalesMessageTemplateInput,
+    SalesMessageTemplateOutput,
     SalesNoSiteOutreachBulkInput,
     SalesNoSiteOutreachBulkOutput,
     SalesNoSiteOutreachEligibilityOutput,
+    SalesNoSiteOutreachFlowConfigInput,
+    SalesNoSiteOutreachFlowConfigOutput,
     SalesOutreachAutomationBatchListOutput,
     SalesOutreachAutomationBatchOutput,
     SalesOutreachAutomationBatchStartInput,
     SalesOutreachAutomationEligibilityOutput,
     SalesOutreachFlowConfigInput,
     SalesOutreachFlowConfigOutput,
-    SalesMessageTemplateInput,
-    SalesMessageTemplateOutput,
 )
-from app.services import sales_demo_service as sales
 from app.services import google_places_service
-from app.services import sales_outreach_automation_service as outreach_automation
+from app.services import sales_demo_service as sales
 from app.services import sales_message_service as sales_messages
-from app.services.ai_autoresponder_service import get_global_config as get_ai_agent_config
-from app.services.ai_autoresponder_service import get_platform_global_config as get_ai_agent_platform_config
-from app.services.ai_autoresponder_service import set_global_config as set_ai_agent_config
-from app.services.ai_autoresponder_service import set_platform_global_config as set_ai_agent_platform_config
+from app.services import sales_outreach_automation_service as outreach_automation
+from app.services.ai_autoresponder_service import (
+    get_global_config as get_ai_agent_config,
+)
+from app.services.ai_autoresponder_service import (
+    get_platform_global_config as get_ai_agent_platform_config,
+)
+from app.services.ai_autoresponder_service import (
+    set_global_config as set_ai_agent_config,
+)
+from app.services.ai_autoresponder_service import (
+    set_platform_global_config as set_ai_agent_platform_config,
+)
 from app.services.audit_service import record_audit
-from app.services.whatsapp_bridge_support import WHATSAPP_WEB_BRIDGE_TRANSPORT, payload_uses_whatsapp_web_bridge, resolve_sales_outreach_transport
+from app.services.whatsapp_bridge_support import (
+    WHATSAPP_WEB_BRIDGE_TRANSPORT,
+    payload_uses_whatsapp_web_bridge,
+    resolve_sales_outreach_transport,
+)
 
 router = APIRouter(tags=["admin_sales"])
 
@@ -1434,6 +1448,20 @@ def search_google_places(
         query=payload.query,
         limit=payload.limit,
         region_code=payload.region_code,
+        included_type=payload.included_type,
+    )
+
+
+@router.post("/admin/google-places/automation-plan", response_model=GooglePlacesAutomationPlanOutput)
+def google_places_automation_plan(
+    payload: GooglePlacesAutomationPlanInput,
+    principal=Depends(get_current_principal),
+):
+    sales.require_adm_page_permission(principal, "adm_import_places", "create")
+    return google_places_service.build_google_places_automation_plan(
+        state=payload.state,
+        city=payload.city,
+        target_limit=payload.target_limit,
         included_type=payload.included_type,
     )
 

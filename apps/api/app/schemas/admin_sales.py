@@ -509,6 +509,30 @@ class GooglePlacesSearchOutput(BaseModel):
     results: list[GooglePlaceCandidateOutput]
 
 
+class GooglePlacesAutomationPlanInput(BaseModel):
+    state: str = Field(min_length=2, max_length=2)
+    city: str = Field(min_length=2, max_length=120)
+    target_limit: int = Field(default=100, ge=1, le=500)
+    included_type: str | None = Field(default="dentist", max_length=80)
+
+
+class GooglePlacesAutomationQueryOutput(BaseModel):
+    area: str
+    term: str
+    query: str
+
+
+class GooglePlacesAutomationPlanOutput(BaseModel):
+    state: str
+    city: str
+    municipality_id: int
+    target_limit: int
+    source: Literal["ibge_districts", "city_fallback"]
+    areas: list[str]
+    queries: list[GooglePlacesAutomationQueryOutput]
+    estimated_max_search_calls: int
+
+
 class GooglePlacesImportInput(BaseModel):
     place_ids: list[str] = Field(min_length=1, max_length=20)
     lead_source: str = Field(default="google_places", max_length=120)
