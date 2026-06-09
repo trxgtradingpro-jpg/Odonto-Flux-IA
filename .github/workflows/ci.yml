@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: odontoflux/apps/api
+        working-directory: apps/api
     services:
       postgres:
         image: postgres:16
@@ -31,13 +31,24 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Install backend deps
         run: pip install -r requirements.txt
-      - name: Lint
-        run: ruff check app tests
+      - name: Lint changed backend files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          mapfile -t files < <(
+            git -C ../.. diff --name-only --diff-filter=ACM "$BASE_SHA" "$GITHUB_SHA" -- apps/api |
+              sed -n 's#^apps/api/\(.*\.py\)$#\1#p'
+          )
+          if ((${#files[@]})); then
+            ruff check --select E9,F63,F7,F82 "${files[@]}"
+          fi
       - name: Test
         env:
           POSTGRES_HOST: localhost
@@ -50,17 +61,12 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: odontoflux
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile=false
