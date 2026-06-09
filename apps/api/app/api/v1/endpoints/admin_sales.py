@@ -37,6 +37,10 @@ from app.schemas.admin_sales import (
     AdminLoginOutput,
     AdminPageDefinitionOutput,
     AdminSessionOutput,
+    AffiliateContactMessageConfigInput,
+    AffiliateContactMessageConfigOutput,
+    AffiliateContactPrepareInput,
+    AffiliateContactPrepareOutput,
     AffiliateCrmAvailableOutput,
     AffiliateFirstMessageConfigInput,
     AffiliateFirstMessageConfigOutput,
@@ -872,6 +876,61 @@ def update_affiliate_crm_first_messages(
         db,
         user_id=principal.user.id,
         payload=payload.model_dump(),
+    )
+
+
+@router.get(
+    "/admin/affiliate-crm/contact-messages",
+    response_model=AffiliateContactMessageConfigOutput,
+)
+def affiliate_crm_contact_messages(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+    _require_affiliate_principal(principal)
+    return sales.get_affiliate_contact_message_config(db, user_id=principal.user.id)
+
+
+@router.put(
+    "/admin/affiliate-crm/contact-messages",
+    response_model=AffiliateContactMessageConfigOutput,
+)
+def update_affiliate_crm_contact_messages(
+    payload: AffiliateContactMessageConfigInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
+    _require_affiliate_principal(principal)
+    return sales.save_affiliate_contact_message_config(
+        db,
+        user_id=principal.user.id,
+        payload=payload.model_dump(),
+    )
+
+
+@router.post(
+    "/admin/affiliate-crm/prospects/{prospect_id}/prepare-contact",
+    response_model=AffiliateContactPrepareOutput,
+)
+def affiliate_crm_prepare_contact(
+    prospect_id: UUID,
+    payload: AffiliateContactPrepareInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
+    _require_affiliate_principal(principal)
+    return sales.prepare_affiliate_whatsapp_contact(
+        db,
+        prospect_id=prospect_id,
+        affiliate_user_id=principal.user.id,
+        stage=payload.stage,
+        message_index=payload.message_index,
+        consent_exclusive=payload.consent_exclusive,
+        consent_responsible_use=payload.consent_responsible_use,
+        human_reply_confirmed=payload.human_reply_confirmed,
     )
 
 

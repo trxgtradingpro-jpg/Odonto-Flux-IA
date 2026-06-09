@@ -180,6 +180,34 @@ class AffiliateFirstMessageSendInput(BaseModel):
     message_index: int = Field(default=0, ge=0, le=4)
 
 
+class AffiliateContactMessageConfigInput(BaseModel):
+    first_messages: list[str] = Field(min_length=5, max_length=5)
+    second_messages: list[str] = Field(min_length=5, max_length=5)
+    third_messages: list[str] = Field(min_length=5, max_length=5)
+
+
+class AffiliateContactMessageConfigOutput(AffiliateContactMessageConfigInput):
+    pass
+
+
+class AffiliateContactPrepareInput(BaseModel):
+    stage: Literal["first", "second", "third"] = "first"
+    message_index: int = Field(default=0, ge=0, le=4)
+    consent_exclusive: bool = False
+    consent_responsible_use: bool = False
+    human_reply_confirmed: bool = False
+
+
+class AffiliateContactPrepareOutput(BaseModel):
+    prospect: "ProspectOutput"
+    stage: Literal["first", "second", "third"]
+    message_index: int
+    destination: str
+    message_text: str
+    whatsapp_url: str
+    claimed_now: bool
+
+
 class ProspectNoSiteOutreachInput(BaseModel):
     stage: Literal["first", "second", "third"] = "first"
 

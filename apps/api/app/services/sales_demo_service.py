@@ -480,6 +480,55 @@ AFFILIATE_FIRST_MESSAGE_DEFAULTS = [
         "Com quem posso falar sobre WhatsApp, recepcao e agendamentos?"
     ),
 ]
+AFFILIATE_SECOND_MESSAGE_DEFAULTS = [
+    (
+        "Oi! Passando so para confirmar se conseguiu ver minha mensagem anterior. "
+        "Se fizer sentido, posso explicar a ideia em dois minutos por aqui."
+    ),
+    (
+        "Ola! Retomando meu contato comercial sobre WhatsApp e agendamentos. "
+        "Posso falar com a pessoa responsavel por essa area?"
+    ),
+    (
+        "Oi, tudo bem? So fazendo um acompanhamento rapido da mensagem que enviei. "
+        "Se nao for o momento, pode me avisar sem problema."
+    ),
+    (
+        "Bom dia! Queria apenas confirmar se este e o melhor canal para falar sobre "
+        "atendimento e agenda da clinica."
+    ),
+    (
+        "Ola! Voltei de forma breve sobre a oportunidade que encontrei para a clinica. "
+        "Posso encaminhar um resumo para o responsavel?"
+    ),
+]
+AFFILIATE_THIRD_MESSAGE_DEFAULTS = [
+    (
+        "Obrigado por responder. Para facilitar, posso te enviar um resumo curto da ideia "
+        "e um exemplo preparado para a clinica?"
+    ),
+    (
+        "Perfeito, obrigado pelo retorno. Posso mostrar em poucos minutos como a ClinicFlux AI "
+        "ajuda no WhatsApp e nos agendamentos?"
+    ),
+    (
+        "Obrigado pela abertura. Se preferir, eu envio primeiro um exemplo e voce avalia "
+        "sem compromisso antes de continuarmos."
+    ),
+    (
+        "Entendi. Posso adaptar a apresentacao ao que mais pesa hoje para voces: atendimento, "
+        "agenda ou presenca no Google?"
+    ),
+    (
+        "Obrigado pelo retorno. Qual seria a melhor forma de seguir: um resumo por aqui "
+        "ou uma conversa rapida com o responsavel?"
+    ),
+]
+AFFILIATE_CONTACT_MESSAGE_DEFAULTS = {
+    "first": AFFILIATE_FIRST_MESSAGE_DEFAULTS,
+    "second": AFFILIATE_SECOND_MESSAGE_DEFAULTS,
+    "third": AFFILIATE_THIRD_MESSAGE_DEFAULTS,
+}
 NO_SITE_OUTREACH_MESSAGE_DEFAULTS = {
     "first": [
         (
@@ -2513,22 +2562,44 @@ def _affiliate_first_messages_setting_key(user_id: UUID) -> str:
     return f"{AFFILIATE_FIRST_MESSAGES_SETTING_PREFIX}.{user_id}"
 
 
-def _normalize_affiliate_first_messages(raw_value: dict | None, *, strict: bool = False) -> dict:
+def _normalize_affiliate_contact_messages(raw_value: dict | None, *, strict: bool = False) -> dict:
     payload = raw_value if isinstance(raw_value, dict) else {}
-    raw_messages = payload.get("messages")
-    messages = [str(item).strip() for item in raw_messages] if isinstance(raw_messages, list) else []
-    if strict and (len(messages) != 5 or any(len(item) < 2 or len(item) > 5000 for item in messages)):
-        raise ApiError(
-            status_code=422,
-            code="AFFILIATE_FIRST_MESSAGES_INVALID",
-            message="Configure exatamente 5 mensagens preenchidas, com ate 5000 caracteres cada.",
-        )
-    if len(messages) != 5 or any(not item for item in messages):
-        messages = list(AFFILIATE_FIRST_MESSAGE_DEFAULTS)
-    return {"messages": messages[:5]}
+    normalized: dict[str, list[str]] = {}
+    for stage in ("first", "second", "third"):
+        key = f"{stage}_messages"
+        raw_messages = payload.get(key)
+        if stage == "first" and not isinstance(raw_messages, list):
+            raw_messages = payload.get("messages")
+        messages = [str(item).strip() for item in raw_messages] if isinstance(raw_messages, list) else []
+        if strict and (len(messages) != 5 or any(len(item) < 2 or len(item) > 5000 for item in messages)):
+            raise ApiError(
+                status_code=422,
+                code="AFFILIATE_CONTACT_MESSAGES_INVALID",
+                message="Configure exatamente 5 mensagens preenchidas, com ate 5000 caracteres, para cada contato.",
+                details={"stage": stage, "expected": 5, "received": len(messages)},
+            )
+        if len(messages) != 5 or any(not item for item in messages):
+            messages = list(AFFILIATE_CONTACT_MESSAGE_DEFAULTS[stage])
+        normalized[key] = messages[:5]
+    return normalized
 
 
-def get_affiliate_first_message_config(db: Session, *, user_id: UUID) -> dict:
+def _normalize_affiliate_first_messages(raw_value: dict | None, *, strict: bool = False) -> dict:
+    normalized = _normalize_affiliate_contact_messages(raw_value, strict=False)
+    raw_messages = (raw_value or {}).get("messages") if isinstance(raw_value, dict) else None
+    if strict:
+        messages = [str(item).strip() for item in raw_messages] if isinstance(raw_messages, list) else []
+        if len(messages) != 5 or any(len(item) < 2 or len(item) > 5000 for item in messages):
+            raise ApiError(
+                status_code=422,
+                code="AFFILIATE_FIRST_MESSAGES_INVALID",
+                message="Configure exatamente 5 mensagens preenchidas, com ate 5000 caracteres cada.",
+            )
+        normalized["first_messages"] = messages
+    return {"messages": normalized["first_messages"]}
+
+
+def get_affiliate_contact_message_config(db: Session, *, user_id: UUID) -> dict:
     sender_tenant = ensure_sales_outreach_sender_tenant(db)
     item = db.scalar(
         select(Setting).where(
@@ -2537,12 +2608,12 @@ def get_affiliate_first_message_config(db: Session, *, user_id: UUID) -> dict:
         )
     )
     raw_value = item.value if item and isinstance(item.value, dict) else None
-    return _normalize_affiliate_first_messages(raw_value)
+    return _normalize_affiliate_contact_messages(raw_value)
 
 
-def save_affiliate_first_message_config(db: Session, *, user_id: UUID, payload: dict) -> dict:
+def save_affiliate_contact_message_config(db: Session, *, user_id: UUID, payload: dict) -> dict:
     sender_tenant = ensure_sales_outreach_sender_tenant(db)
-    normalized = _normalize_affiliate_first_messages(payload, strict=True)
+    normalized = _normalize_affiliate_contact_messages(payload, strict=True)
     _upsert_setting(
         db,
         tenant_id=sender_tenant.id,
@@ -2551,6 +2622,19 @@ def save_affiliate_first_message_config(db: Session, *, user_id: UUID, payload: 
     )
     db.commit()
     return normalized
+
+
+def get_affiliate_first_message_config(db: Session, *, user_id: UUID) -> dict:
+    config = get_affiliate_contact_message_config(db, user_id=user_id)
+    return {"messages": config["first_messages"]}
+
+
+def save_affiliate_first_message_config(db: Session, *, user_id: UUID, payload: dict) -> dict:
+    normalized = _normalize_affiliate_first_messages(payload, strict=True)
+    current = get_affiliate_contact_message_config(db, user_id=user_id)
+    current["first_messages"] = normalized["messages"]
+    saved = save_affiliate_contact_message_config(db, user_id=user_id, payload=current)
+    return {"messages": saved["first_messages"]}
 
 
 def _affiliate_available_prospect_query():
@@ -6037,6 +6121,183 @@ def claim_prospect_with_affiliate_first_message(
         "outbound_message_id": outbound_message.id,
         "transport": dispatch_transport,
     }
+
+
+def prepare_affiliate_whatsapp_contact(
+    db: Session,
+    *,
+    prospect_id: UUID,
+    affiliate_user_id: UUID,
+    stage: str,
+    message_index: int,
+    consent_exclusive: bool,
+    consent_responsible_use: bool,
+    human_reply_confirmed: bool = False,
+) -> dict:
+    if not consent_exclusive or not consent_responsible_use:
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_CONTACT_CONSENT_REQUIRED",
+            message="Confirme os dois combinados antes de abrir o WhatsApp.",
+        )
+    if stage not in {"first", "second", "third"}:
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_CONTACT_STAGE_INVALID",
+            message="Escolha o primeiro, segundo ou terceiro contato.",
+        )
+    if stage == "third" and not human_reply_confirmed:
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_THIRD_CONTACT_REPLY_REQUIRED",
+            message="O terceiro contato so pode ser usado depois de uma resposta humana da clinica.",
+        )
+
+    config = get_affiliate_contact_message_config(db, user_id=affiliate_user_id)
+    messages = list(config.get(f"{stage}_messages") or [])
+    if message_index < 0 or message_index >= len(messages):
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_CONTACT_MESSAGE_INDEX_INVALID",
+            message="Escolha uma das 5 mensagens configuradas para este contato.",
+        )
+    message_text = str(messages[message_index] or "").strip()
+    if not message_text:
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_CONTACT_MESSAGE_EMPTY",
+            message="A mensagem escolhida esta vazia.",
+        )
+
+    prospect = db.scalar(
+        select(ProspectAccount)
+        .where(ProspectAccount.id == prospect_id)
+        .with_for_update()
+    )
+    if not prospect:
+        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Clinica nao encontrada.")
+    if prospect.affiliate_owner_user_id and prospect.affiliate_owner_user_id != affiliate_user_id:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_ALREADY_CLAIMED",
+            message="Esta clinica pertence a outro afiliado e nao esta mais disponivel.",
+        )
+    if prospect.do_not_contact:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_DO_NOT_CONTACT",
+            message="Esta clinica esta marcada como nao contactar.",
+        )
+
+    claimed_now = prospect.affiliate_owner_user_id is None
+    if claimed_now:
+        if stage != "first":
+            raise ApiError(
+                status_code=409,
+                code="AFFILIATE_FIRST_CONTACT_REQUIRED",
+                message="Assuma a clinica com uma mensagem de primeiro contato antes dos acompanhamentos.",
+            )
+        if prospect.first_contact_at or str(prospect.status or "").strip() not in {"novo", "pesquisado"}:
+            raise ApiError(
+                status_code=409,
+                code="AFFILIATE_PROSPECT_ALREADY_USED",
+                message="Esta clinica ja teve uso comercial e nao esta mais disponivel para afiliados.",
+            )
+
+    raw_phone, normalized_phone = _prospect_outreach_destination(prospect)
+    now_value = _now()
+    if claimed_now:
+        prospect.affiliate_owner_user_id = affiliate_user_id
+        prospect.affiliate_claimed_at = now_value
+        prospect.first_contact_at = now_value
+        prospect.first_contact_channel = "whatsapp_affiliate_manual"
+        prospect.status = "contato_iniciado"
+
+    snapshot = dict(prospect.proposal_snapshot or {})
+    affiliate_outreach = (
+        dict(snapshot.get("affiliate_outreach") or {})
+        if isinstance(snapshot.get("affiliate_outreach"), dict)
+        else {}
+    )
+    history = (
+        list(affiliate_outreach.get("contact_history") or [])
+        if isinstance(affiliate_outreach.get("contact_history"), list)
+        else []
+    )
+    prepared_entry = {
+        "prepared_at": now_value.isoformat(),
+        "stage": stage,
+        "message_index": message_index,
+        "message_text": message_text,
+        "human_reply_confirmed": bool(human_reply_confirmed) if stage == "third" else None,
+    }
+    history.append(prepared_entry)
+    affiliate_outreach.update(
+        {
+            "affiliate_user_id": str(affiliate_user_id),
+            "claimed_at": (
+                prospect.affiliate_claimed_at.isoformat()
+                if prospect.affiliate_claimed_at
+                else affiliate_outreach.get("claimed_at")
+            ),
+            "last_contact_prepared_at": now_value.isoformat(),
+            "last_contact_stage": stage,
+            "last_message_index": message_index,
+            "last_message_text": message_text,
+            "contact_history": history[-100:],
+        }
+    )
+    snapshot["affiliate_outreach"] = affiliate_outreach
+    prospect.proposal_snapshot = snapshot
+    prospect.last_activity_at = now_value
+    prospect.updated_by = affiliate_user_id
+    _update_outreach_snapshot(
+        prospect,
+        patch={
+            "last_prepared_step": f"affiliate_{stage}",
+            "last_prepared_at": now_value.isoformat(),
+            "affiliate_user_id": str(affiliate_user_id),
+            "dispatch_transport": "whatsapp_deep_link",
+        },
+    )
+    add_timeline(
+        db,
+        prospect,
+        event_type="prospect.affiliate.contact_prepared",
+        event_label=f"{humanize_affiliate_contact_stage(stage)} contato preparado no WhatsApp",
+        actor_id=affiliate_user_id,
+        actor_type="affiliate",
+        payload={
+            "affiliate_user_id": str(affiliate_user_id),
+            "stage": stage,
+            "message_index": message_index,
+            "message_text": message_text,
+            "claimed_now": claimed_now,
+            "destination": raw_phone,
+        },
+    )
+    db.add(prospect)
+    _apply_recalculated_score(db, prospect)
+    whatsapp_url = f"https://api.whatsapp.com/send/?{urlencode({'phone': normalized_phone, 'text': message_text})}"
+    db.commit()
+    db.refresh(prospect)
+    return {
+        "prospect": serialize_prospect(db, prospect),
+        "stage": stage,
+        "message_index": message_index,
+        "destination": raw_phone,
+        "message_text": message_text,
+        "whatsapp_url": whatsapp_url,
+        "claimed_now": claimed_now,
+    }
+
+
+def humanize_affiliate_contact_stage(stage: str) -> str:
+    return {
+        "first": "Primeiro",
+        "second": "Segundo",
+        "third": "Terceiro",
+    }.get(stage, "Contato")
 
 
 def _no_site_outreach_has_human_reply(db: Session, prospect: ProspectAccount, snapshot: dict) -> bool:
