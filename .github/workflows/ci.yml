@@ -70,7 +70,7 @@ jobs:
       - name: Test affiliate CRM regression
         run: >-
           pytest -q tests/unit/test_sales_outreach.py
-          -k "affiliate_first_message_claims_prospect_exclusively or no_site_outreach"
+          -k "affiliate_first_message_claims_prospect_exclusively or affiliate_contact or no_site_outreach"
       - name: Legacy full suite
         continue-on-error: true
         run: pytest -q

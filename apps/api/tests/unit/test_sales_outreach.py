@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 import json
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -1240,6 +1241,146 @@ def test_affiliate_first_message_claims_prospect_exclusively(monkeypatch, seeded
         )
     assert exc_info.value.code == "AFFILIATE_PROSPECT_ALREADY_CLAIMED"
     assert sales_demo_service.get_next_affiliate_prospect(db_session).id == second.id
+
+
+def test_affiliate_contact_messages_keep_all_stages_when_legacy_first_messages_change(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    user_id = seeded_db["admin"].id
+    payload = {
+        "first_messages": ["F1", "F2", "F3", "F4", "F5"],
+        "second_messages": ["S1", "S2", "S3", "S4", "S5"],
+        "third_messages": ["T1", "T2", "T3", "T4", "T5"],
+    }
+
+    saved = sales_demo_service.save_affiliate_contact_message_config(
+        db_session,
+        user_id=user_id,
+        payload=payload,
+    )
+    sales_demo_service.save_affiliate_first_message_config(
+        db_session,
+        user_id=user_id,
+        payload={"messages": ["N1", "N2", "N3", "N4", "N5"]},
+    )
+    refreshed = sales_demo_service.get_affiliate_contact_message_config(db_session, user_id=user_id)
+
+    assert saved == payload
+    assert refreshed["first_messages"] == ["N1", "N2", "N3", "N4", "N5"]
+    assert refreshed["second_messages"] == payload["second_messages"]
+    assert refreshed["third_messages"] == payload["third_messages"]
+
+
+def test_prepare_affiliate_whatsapp_contact_claims_without_queue_and_guards_third_contact(
+    monkeypatch,
+    seeded_db,
+    db_session,
+):
+    sender_tenant = _create_sender_tenant(db_session)
+    affiliate_one = User(
+        tenant_id=None,
+        email="affiliate-contact-one@test.com",
+        full_name="Affiliate Contact One",
+        hashed_password="test",
+        is_active=True,
+    )
+    affiliate_two = User(
+        tenant_id=None,
+        email="affiliate-contact-two@test.com",
+        full_name="Affiliate Contact Two",
+        hashed_password="test",
+        is_active=True,
+    )
+    db_session.add_all([affiliate_one, affiliate_two])
+    prospect = _create_prospect(db_session)
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    payload = {
+        "first_messages": ["Primeira 1", "Primeira 2", "Primeira 3", "Primeira 4", "Primeira 5"],
+        "second_messages": ["Segunda 1", "Segunda 2", "Segunda 3", "Segunda 4", "Segunda 5"],
+        "third_messages": ["Terceira 1", "Terceira 2", "Terceira 3", "Terceira 4", "Terceira 5"],
+    }
+    sales_demo_service.save_affiliate_contact_message_config(
+        db_session,
+        user_id=affiliate_one.id,
+        payload=payload,
+    )
+    before_messages = db_session.scalar(select(func.count(Message.id))) or 0
+    before_outboxes = db_session.scalar(select(func.count(OutboxMessage.id))) or 0
+
+    result = sales_demo_service.prepare_affiliate_whatsapp_contact(
+        db_session,
+        prospect_id=prospect.id,
+        affiliate_user_id=affiliate_one.id,
+        stage="first",
+        message_index=1,
+        consent_exclusive=True,
+        consent_responsible_use=True,
+    )
+
+    db_session.refresh(prospect)
+    query = parse_qs(urlparse(result["whatsapp_url"]).query)
+    assert result["claimed_now"] is True
+    assert result["message_text"] == "Primeira 2"
+    assert result["whatsapp_url"].startswith("https://api.whatsapp.com/send/?")
+    assert query["phone"] == ["5511988881111"]
+    assert query["text"] == ["Primeira 2"]
+    assert prospect.affiliate_owner_user_id == affiliate_one.id
+    assert prospect.first_contact_channel == "whatsapp_affiliate_manual"
+    assert (db_session.scalar(select(func.count(Message.id))) or 0) == before_messages
+    assert (db_session.scalar(select(func.count(OutboxMessage.id))) or 0) == before_outboxes
+
+    with pytest.raises(ApiError) as claimed_error:
+        sales_demo_service.prepare_affiliate_whatsapp_contact(
+            db_session,
+            prospect_id=prospect.id,
+            affiliate_user_id=affiliate_two.id,
+            stage="first",
+            message_index=0,
+            consent_exclusive=True,
+            consent_responsible_use=True,
+        )
+    assert claimed_error.value.code == "AFFILIATE_PROSPECT_ALREADY_CLAIMED"
+
+    second_result = sales_demo_service.prepare_affiliate_whatsapp_contact(
+        db_session,
+        prospect_id=prospect.id,
+        affiliate_user_id=affiliate_one.id,
+        stage="second",
+        message_index=3,
+        consent_exclusive=True,
+        consent_responsible_use=True,
+    )
+    assert second_result["claimed_now"] is False
+    assert second_result["message_text"] == "Segunda 4"
+
+    with pytest.raises(ApiError) as third_error:
+        sales_demo_service.prepare_affiliate_whatsapp_contact(
+            db_session,
+            prospect_id=prospect.id,
+            affiliate_user_id=affiliate_one.id,
+            stage="third",
+            message_index=4,
+            consent_exclusive=True,
+            consent_responsible_use=True,
+            human_reply_confirmed=False,
+        )
+    assert third_error.value.code == "AFFILIATE_THIRD_CONTACT_REPLY_REQUIRED"
+
+    third_result = sales_demo_service.prepare_affiliate_whatsapp_contact(
+        db_session,
+        prospect_id=prospect.id,
+        affiliate_user_id=affiliate_one.id,
+        stage="third",
+        message_index=4,
+        consent_exclusive=True,
+        consent_responsible_use=True,
+        human_reply_confirmed=True,
+    )
+    assert third_result["message_text"] == "Terceira 5"
+    history = (third_result["prospect"]["proposal_snapshot"] or {}).get("affiliate_outreach", {}).get("contact_history", [])
+    assert [item["stage"] for item in history] == ["first", "second", "third"]
 
 
 def test_send_no_site_outreach_bulk_queues_first_stage_for_all_without_site(monkeypatch, seeded_db, db_session):

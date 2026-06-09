@@ -198,11 +198,25 @@ type AffiliateCrmAvailable = {
   available: boolean;
 };
 
-type AffiliateFirstMessageConfig = {
-  messages: string[];
+type NoSiteOutreachStage = "first" | "second" | "third";
+
+type AffiliateContactStage = NoSiteOutreachStage;
+
+type AffiliateContactMessageConfig = {
+  first_messages: string[];
+  second_messages: string[];
+  third_messages: string[];
 };
 
-type NoSiteOutreachStage = "first" | "second" | "third";
+type AffiliateContactPrepareResult = {
+  prospect: Prospect;
+  stage: AffiliateContactStage;
+  message_index: number;
+  destination: string;
+  message_text: string;
+  whatsapp_url: string;
+  claimed_now: boolean;
+};
 
 type NoSiteOutreachStageSnapshot = {
   sent_at?: string | null;
@@ -3462,8 +3476,24 @@ function AffiliateCrm({
 }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<"available" | "mine">("available");
-  const [selectedMessageIndex, setSelectedMessageIndex] = useState(0);
-  const [messageDraft, setMessageDraft] = useState<string[]>(["", "", "", "", ""]);
+  const [messageDraft, setMessageDraft] = useState<AffiliateContactMessageConfig>({
+    first_messages: ["", "", "", "", ""],
+    second_messages: ["", "", "", "", ""],
+    third_messages: ["", "", "", "", ""],
+  });
+  const [selectedMessageIndexes, setSelectedMessageIndexes] = useState<Record<AffiliateContactStage, number>>({
+    first: 0,
+    second: 0,
+    third: 0,
+  });
+  const [selectedStage, setSelectedStage] = useState<AffiliateContactStage>("first");
+  const [editorStage, setEditorStage] = useState<AffiliateContactStage>("first");
+  const [contactProspect, setContactProspect] = useState<Prospect | null>(null);
+  const [selectionOpen, setSelectionOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentExclusive, setConsentExclusive] = useState(false);
+  const [consentResponsible, setConsentResponsible] = useState(false);
 
   const availableQuery = useQuery<AffiliateCrmAvailable>({
     queryKey: ["adm-affiliate-crm-available"],
@@ -3475,257 +3505,262 @@ function AffiliateCrm({
     queryFn: async () => (await api.get("/admin/affiliate-crm/mine", { params: { limit: 200, offset: 0 } })).data,
     retry: false,
   });
-  const messagesQuery = useQuery<AffiliateFirstMessageConfig>({
-    queryKey: ["adm-affiliate-first-messages"],
-    queryFn: async () => (await api.get("/admin/affiliate-crm/first-messages")).data,
+  const messagesQuery = useQuery<AffiliateContactMessageConfig>({
+    queryKey: ["adm-affiliate-contact-messages"],
+    queryFn: async () => (await api.get("/admin/affiliate-crm/contact-messages")).data,
     retry: false,
   });
 
   useEffect(() => {
-    if (!messagesQuery.data?.messages) return;
-    setMessageDraft(messagesQuery.data.messages.slice(0, 5));
+    if (!messagesQuery.data) return;
+    setMessageDraft({
+      first_messages: messagesQuery.data.first_messages.slice(0, 5),
+      second_messages: messagesQuery.data.second_messages.slice(0, 5),
+      third_messages: messagesQuery.data.third_messages.slice(0, 5),
+    });
   }, [messagesQuery.data]);
 
   const saveMessagesMutation = useMutation({
     mutationFn: async () =>
-      (await api.put<AffiliateFirstMessageConfig>("/admin/affiliate-crm/first-messages", { messages: messageDraft })).data,
+      (await api.put<AffiliateContactMessageConfig>("/admin/affiliate-crm/contact-messages", messageDraft)).data,
     onSuccess: (data) => {
-      setMessageDraft(data.messages);
-      toast.success("Suas 5 mensagens iniciais foram salvas.");
-      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-first-messages"] });
+      setMessageDraft(data);
+      setEditorOpen(false);
+      toast.success("Suas mensagens de contato foram salvas.");
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-contact-messages"] });
     },
     onError: (error: unknown) => {
       toast.error(extractApiErrorMessage(error, "Nao foi possivel salvar suas mensagens."));
     },
   });
 
-  const sendFirstMutation = useMutation({
-    mutationFn: async (prospectId: string) =>
+  const prepareContactMutation = useMutation({
+    mutationFn: async ({
+      prospectId,
+      stage,
+      messageIndex,
+    }: {
+      prospectId: string;
+      stage: AffiliateContactStage;
+      messageIndex: number;
+    }) =>
       (
-        await api.post<OutreachResult>(`/admin/affiliate-crm/prospects/${prospectId}/send-first`, {
-          message_index: selectedMessageIndex,
+        await api.post<AffiliateContactPrepareResult>(`/admin/affiliate-crm/prospects/${prospectId}/prepare-contact`, {
+          stage,
+          message_index: messageIndex,
+          consent_exclusive: consentExclusive,
+          consent_responsible_use: consentResponsible,
+          human_reply_confirmed: stage === "third" && consentResponsible,
         })
       ).data,
     onSuccess: (data) => {
-      toast.success(
-        data.transport === "whatsapp_web_bridge"
-          ? "Primeira mensagem entrou na fila. A clinica agora e sua."
-          : "Primeira mensagem registrada. A clinica agora e sua.",
-      );
+      setSelectionOpen(false);
+      setConsentOpen(false);
       setActiveTab("mine");
       queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-available"] });
       queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-mine"] });
       queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
-      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
+      window.location.assign(data.whatsapp_url);
     },
     onError: (error: unknown) => {
-      toast.error(extractApiErrorMessage(error, "Nao foi possivel assumir esta clinica."));
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel preparar este contato."));
       queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-available"] });
       queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-mine"] });
     },
   });
 
   const availableProspect = availableQuery.data?.prospect ?? null;
-  const selectedMessage = messageDraft[selectedMessageIndex] || "";
-  const allMessagesValid = messageDraft.length === 5 && messageDraft.every((message) => message.trim().length >= 2);
+  const allMessagesValid = (["first", "second", "third"] as AffiliateContactStage[]).every((stage) => {
+    const messages = messageDraft[affiliateContactMessagesKey(stage)];
+    return messages.length === 5 && messages.every((message) => message.trim().length >= 2);
+  });
+
+  function openContactSelection(prospect: Prospect, preferredStage: AffiliateContactStage) {
+    const stage = prospect.affiliate_owner_user_id ? preferredStage : "first";
+    setContactProspect(prospect);
+    setSelectedStage(stage);
+    setEditorStage(stage);
+    setConsentExclusive(false);
+    setConsentResponsible(false);
+    setConsentOpen(false);
+    setSelectionOpen(true);
+  }
+
+  function openEditor(stage: AffiliateContactStage) {
+    setEditorStage(stage);
+    setEditorOpen(true);
+  }
+
+  function continueToConsent() {
+    setConsentExclusive(false);
+    setConsentResponsible(false);
+    setSelectionOpen(false);
+    setConsentOpen(true);
+  }
 
   return (
-    <section className="space-y-4">
-      <Card className="overflow-hidden border-sky-200 bg-[radial-gradient(circle_at_top_right,_rgba(14,165,233,0.14),_transparent_42%),linear-gradient(135deg,#ffffff,#f0f9ff)]">
-        <CardContent className="space-y-4 p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-700">CRM do afiliado</p>
-              <h2 className="mt-1 text-2xl font-black text-stone-950">Uma clinica por vez, sem disputa duplicada</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
-                A clinica fica reservada para voce somente quando a primeira mensagem entra na fila. Depois disso,
-                nenhum outro afiliado consegue visualizar ou utilizar esse lead.
-              </p>
-            </div>
-            <Badge className={usesWhatsAppWebBridge ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
-              {usesWhatsAppWebBridge ? "WhatsApp Web local" : "Fila comercial"}
-            </Badge>
-          </div>
-
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Button
-              type="button"
-              variant={activeTab === "available" ? "default" : "outline"}
-              className={cn(activeTab === "available" && "bg-sky-700 text-white hover:bg-sky-600")}
-              onClick={() => setActiveTab("available")}
-            >
-              <Search size={16} />
-              Nova clinica
-            </Button>
-            <Button
-              type="button"
-              variant={activeTab === "mine" ? "default" : "outline"}
-              className={cn(activeTab === "mine" && "bg-sky-700 text-white hover:bg-sky-600")}
-              onClick={() => setActiveTab("mine")}
-            >
-              <Building2 size={16} />
-              Minhas clinicas ({mineQuery.data?.total ?? 0})
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                availableQuery.refetch();
-                mineQuery.refetch();
-              }}
-              disabled={availableQuery.isFetching || mineQuery.isFetching}
-            >
-              <RefreshCw size={16} />
-              Atualizar
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {activeTab === "available" ? (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
-          <Card className="border-stone-200 bg-white">
-            <CardContent className="p-5">
-              {availableQuery.isLoading ? (
-                <div className="py-16 text-center text-sm text-stone-500">Buscando a proxima clinica...</div>
-              ) : availableProspect ? (
-                <div className="space-y-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Clinica disponivel agora</p>
-                      <h3 className="mt-1 text-2xl font-black text-stone-950">{availableProspect.clinic_name}</h3>
-                      <p className="mt-2 text-sm text-stone-600">
-                        {[availableProspect.city, availableProspect.state].filter(Boolean).join(" / ") || "Localizacao nao informada"}
-                      </p>
-                    </div>
-                    <Badge className={getProspectWebsite(availableProspect) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
-                      {getProspectWebsite(availableProspect) ? "Com site" : "Sem site"}
-                    </Badge>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <AffiliateInfo label="WhatsApp" value={availableProspect.whatsapp_phone || availableProspect.phone || "Nao informado"} />
-                    <AffiliateInfo label="Origem" value={humanize(availableProspect.lead_source || "nao informada")} />
-                    <AffiliateInfo label="Score" value={String(availableProspect.score)} />
-                  </div>
-
-                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Mensagem escolhida</p>
-                    <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-800">
-                      {selectedMessage || "Configure suas mensagens no painel ao lado."}
-                    </p>
-                  </div>
-
-                  <Button
-                    type="button"
-                    className="h-12 w-full bg-sky-700 text-white hover:bg-sky-600"
-                    disabled={!canEdit || !allMessagesValid || sendFirstMutation.isPending}
-                    onClick={() => {
-                      const confirmed = window.confirm(
-                        `Enviar a mensagem ${selectedMessageIndex + 1} e assumir ${availableProspect.clinic_name}?`,
-                      );
-                      if (!confirmed) return;
-                      sendFirstMutation.mutate(availableProspect.id);
-                    }}
-                  >
-                    <Send size={17} />
-                    {sendFirstMutation.isPending ? "Enfileirando e reservando..." : "Enviar primeira mensagem e assumir clinica"}
-                  </Button>
-                  <p className="text-center text-xs leading-5 text-stone-500">
-                    Abrir esta tela nao reserva a clinica. A atribuicao acontece junto com o primeiro envio.
-                  </p>
-                </div>
-              ) : (
-                <div className="py-14">
-                  <EmptyState
-                    title="Nenhuma clinica disponivel agora"
-                    description="As clinicas em uso ficam protegidas. Atualize mais tarde para receber a proxima oportunidade livre."
-                  />
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-stone-200 bg-white">
-            <CardContent className="space-y-4 p-5">
+    <>
+      <section className="space-y-4">
+        <Card className="overflow-hidden border-sky-200 bg-[radial-gradient(circle_at_top_right,_rgba(14,165,233,0.14),_transparent_42%),linear-gradient(135deg,#ffffff,#f0f9ff)]">
+          <CardContent className="space-y-4 p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Suas mensagens</p>
-                <h3 className="mt-1 text-xl font-black text-stone-950">5 opcoes de primeiro contato</h3>
-                <p className="mt-2 text-sm leading-6 text-stone-600">
-                  Escolha uma opcao para o envio atual. Voce pode editar e salvar seus textos quando quiser.
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-700">CRM do afiliado</p>
+                <h2 className="mt-1 text-2xl font-black text-stone-950">Uma clinica por vez, sem disputa duplicada</h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+                  A clinica fica reservada quando voce confirma o combinado e abre o primeiro contato. Depois disso,
+                  nenhum outro afiliado consegue visualizar ou utilizar esse lead.
                 </p>
               </div>
+              <Badge className={usesWhatsAppWebBridge ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                {usesWhatsAppWebBridge ? "WhatsApp Web disponivel" : "Mensagem pronta no WhatsApp"}
+              </Badge>
+            </div>
 
-              <div className="grid grid-cols-5 gap-2">
-                {messageDraft.map((_, index) => (
-                  <Button
-                    key={index}
-                    type="button"
-                    variant={selectedMessageIndex === index ? "default" : "outline"}
-                    className={cn(selectedMessageIndex === index && "bg-stone-950 text-white hover:bg-stone-800")}
-                    onClick={() => setSelectedMessageIndex(index)}
-                  >
-                    {index + 1}
-                  </Button>
-                ))}
-              </div>
-
-              <div className="space-y-3">
-                {messageDraft.map((message, index) => (
-                  <label key={index} className={cn("block rounded-xl border p-3", selectedMessageIndex === index ? "border-sky-300 bg-sky-50" : "border-stone-200 bg-stone-50")}>
-                    <span className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-stone-500">
-                      Mensagem {index + 1}
-                    </span>
-                    <textarea
-                      className="min-h-[104px] w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                      value={message}
-                      onFocus={() => setSelectedMessageIndex(index)}
-                      onChange={(event) => {
-                        const next = [...messageDraft];
-                        next[index] = event.target.value;
-                        setMessageDraft(next);
-                      }}
-                      disabled={!canEdit}
-                    />
-                  </label>
-                ))}
-              </div>
-
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant={activeTab === "available" ? "default" : "outline"}
+                className={cn(activeTab === "available" && "bg-sky-700 text-white hover:bg-sky-600")}
+                onClick={() => setActiveTab("available")}
+              >
+                <Search size={16} />
+                Nova clinica
+              </Button>
+              <Button
+                type="button"
+                variant={activeTab === "mine" ? "default" : "outline"}
+                className={cn(activeTab === "mine" && "bg-sky-700 text-white hover:bg-sky-600")}
+                onClick={() => setActiveTab("mine")}
+              >
+                <Building2 size={16} />
+                Minhas clinicas ({mineQuery.data?.total ?? 0})
+              </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="w-full"
-                onClick={() => saveMessagesMutation.mutate()}
-                disabled={!canEdit || !allMessagesValid || saveMessagesMutation.isPending}
+                onClick={() => {
+                  availableQuery.refetch();
+                  mineQuery.refetch();
+                }}
+                disabled={availableQuery.isFetching || mineQuery.isFetching}
               >
-                <CheckCircle2 size={16} />
-                {saveMessagesMutation.isPending ? "Salvando..." : "Salvar minhas 5 mensagens"}
+                <RefreshCw size={16} />
+                Atualizar
               </Button>
-            </CardContent>
-          </Card>
-        </div>
-      ) : (
-        <Card className="border-stone-200 bg-white">
-          <CardContent className="space-y-4 p-5">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Carteira exclusiva</p>
-              <h3 className="mt-1 text-xl font-black text-stone-950">Clinicas que voce ja acessou</h3>
-              <p className="mt-2 text-sm leading-6 text-stone-600">
-                Estas clinicas ficam visiveis para voce e para o administrador principal, mas nao aparecem para outros afiliados.
-              </p>
             </div>
+          </CardContent>
+        </Card>
 
-            {mineQuery.isLoading ? (
-              <div className="py-12 text-center text-sm text-stone-500">Carregando suas clinicas...</div>
-            ) : (mineQuery.data?.data || []).length ? (
-              <div className="grid gap-3 lg:grid-cols-2">
-                {(mineQuery.data?.data || []).map((prospect) => (
-                  <button
-                    key={prospect.id}
-                    type="button"
-                    className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-sky-300 hover:bg-sky-50"
-                    onClick={() => onOpenProspect(prospect)}
-                  >
+        {activeTab === "available" ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
+            <Card className="border-stone-200 bg-white">
+              <CardContent className="p-5">
+                {availableQuery.isLoading ? (
+                  <div className="py-16 text-center text-sm text-stone-500">Buscando a proxima clinica...</div>
+                ) : availableProspect ? (
+                  <div className="space-y-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Clinica disponivel agora</p>
+                        <h3 className="mt-1 text-2xl font-black text-stone-950">{availableProspect.clinic_name}</h3>
+                        <p className="mt-2 text-sm text-stone-600">
+                          {[availableProspect.city, availableProspect.state].filter(Boolean).join(" / ") || "Localizacao nao informada"}
+                        </p>
+                      </div>
+                      <Badge className={getProspectWebsite(availableProspect) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                        {getProspectWebsite(availableProspect) ? "Com site" : "Sem site"}
+                      </Badge>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <AffiliateInfo label="WhatsApp" value={availableProspect.whatsapp_phone || availableProspect.phone || "Nao informado"} />
+                      <AffiliateInfo label="Origem" value={humanize(availableProspect.lead_source || "nao informada")} />
+                      <AffiliateInfo label="Score" value={String(availableProspect.score)} />
+                    </div>
+
+                    <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Como funciona</p>
+                      <p className="mt-2 text-sm leading-6 text-stone-700">
+                        Escolha uma das suas mensagens, confirme o combinado e o WhatsApp abrira com o texto pronto para revisar e enviar.
+                      </p>
+                    </div>
+
+                    <Button
+                      type="button"
+                      className="h-12 w-full bg-sky-700 text-white hover:bg-sky-600"
+                      disabled={!canEdit || !allMessagesValid || messagesQuery.isLoading}
+                      onClick={() => openContactSelection(availableProspect, "first")}
+                    >
+                      <Send size={17} />
+                      Enviar primeira mensagem e assumir clinica
+                    </Button>
+                    <p className="text-center text-xs leading-5 text-stone-500">
+                      Apenas a confirmacao final reserva a clinica para voce.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="py-14">
+                    <EmptyState
+                      title="Nenhuma clinica disponivel agora"
+                      description="As clinicas em uso ficam protegidas. Atualize mais tarde para receber a proxima oportunidade livre."
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-stone-200 bg-white">
+              <CardContent className="space-y-4 p-5">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Suas mensagens</p>
+                  <h3 className="mt-1 text-xl font-black text-stone-950">15 textos organizados por contato</h3>
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
+                    Sao 5 opcoes para cada etapa. Edite seus textos quando quiser e escolha a melhor antes de abrir o WhatsApp.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                  {(["first", "second", "third"] as AffiliateContactStage[]).map((stage) => (
+                    <button
+                      key={stage}
+                      type="button"
+                      className="flex items-center justify-between rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-sky-300 hover:bg-sky-50"
+                      onClick={() => openEditor(stage)}
+                    >
+                      <span>
+                        <span className="block text-sm font-black text-stone-950">{affiliateContactStageLabel(stage)}</span>
+                        <span className="mt-1 block text-xs text-stone-500">5 mensagens editaveis</span>
+                      </span>
+                      <Pencil size={16} className="text-sky-700" />
+                    </button>
+                  ))}
+                </div>
+
+                <Button type="button" variant="outline" className="w-full" onClick={() => openEditor("first")} disabled={!canEdit}>
+                  <Pencil size={16} />
+                  Editar todas as mensagens
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="space-y-4 p-5">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Carteira exclusiva</p>
+                <h3 className="mt-1 text-xl font-black text-stone-950">Clinicas que voce ja acessou</h3>
+                <p className="mt-2 text-sm leading-6 text-stone-600">
+                  Estas clinicas ficam visiveis para voce e para o administrador principal, mas nao aparecem para outros afiliados.
+                </p>
+              </div>
+
+              {mineQuery.isLoading ? (
+                <div className="py-12 text-center text-sm text-stone-500">Carregando suas clinicas...</div>
+              ) : (mineQuery.data?.data || []).length ? (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {(mineQuery.data?.data || []).map((prospect) => (
+                    <div key={prospect.id} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-black text-stone-950">{prospect.clinic_name}</p>
@@ -3742,21 +3777,450 @@ function AffiliateCrm({
                         Desde {formatDateTimeBR(prospect.affiliate_claimed_at || prospect.first_contact_at)}
                       </Badge>
                     </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="py-12">
-                <EmptyState
-                  title="Sua carteira ainda esta vazia"
-                  description="Envie a primeira mensagem na aba Nova clinica para assumir seu primeiro lead."
-                />
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </section>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <Button type="button" variant="outline" onClick={() => onOpenProspect(prospect)}>
+                        <Eye size={16} />
+                        Ver detalhes
+                      </Button>
+                      <Button
+                        type="button"
+                        className="bg-sky-700 text-white hover:bg-sky-600"
+                        onClick={() => openContactSelection(prospect, "second")}
+                        disabled={!canEdit || !allMessagesValid}
+                      >
+                        <Send size={16} />
+                        Enviar contato
+                      </Button>
+                    </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-12">
+                  <EmptyState
+                    title="Sua carteira ainda esta vazia"
+                    description="Envie a primeira mensagem na aba Nova clinica para assumir seu primeiro lead."
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </section>
+
+      <AffiliateMessageSelectionModal
+        open={selectionOpen}
+        prospect={contactProspect}
+        config={messageDraft}
+        stage={selectedStage}
+        selectedIndexes={selectedMessageIndexes}
+        onClose={() => setSelectionOpen(false)}
+        onStageChange={(stage) => {
+          setSelectedStage(stage);
+          setEditorStage(stage);
+        }}
+        onMessageSelect={(stage, index) =>
+          setSelectedMessageIndexes((current) => ({
+            ...current,
+            [stage]: index,
+          }))
+        }
+        onEdit={() => openEditor(selectedStage)}
+        onContinue={continueToConsent}
+      />
+
+      <AffiliateMessageEditorModal
+        open={editorOpen}
+        stage={editorStage}
+        config={messageDraft}
+        canEdit={canEdit}
+        saving={saveMessagesMutation.isPending}
+        valid={allMessagesValid}
+        onClose={() => setEditorOpen(false)}
+        onStageChange={setEditorStage}
+        onMessageChange={(stage, index, value) => {
+          const key = `${stage}_messages` as keyof AffiliateContactMessageConfig;
+          setMessageDraft((current) => {
+            const messages = [...current[key]];
+            messages[index] = value;
+            return { ...current, [key]: messages };
+          });
+        }}
+        onSave={() => saveMessagesMutation.mutate()}
+      />
+
+      <AffiliateContactConsentModal
+        open={consentOpen}
+        prospect={contactProspect}
+        stage={selectedStage}
+        message={messageDraft[affiliateContactMessagesKey(selectedStage)][selectedMessageIndexes[selectedStage]] || ""}
+        consentExclusive={consentExclusive}
+        consentResponsible={consentResponsible}
+        pending={prepareContactMutation.isPending}
+        onClose={() => setConsentOpen(false)}
+        onBack={() => {
+          setConsentOpen(false);
+          setSelectionOpen(true);
+        }}
+        onExclusiveChange={setConsentExclusive}
+        onResponsibleChange={setConsentResponsible}
+        onConfirm={() => {
+          if (!contactProspect) return;
+          prepareContactMutation.mutate({
+            prospectId: contactProspect.id,
+            stage: selectedStage,
+            messageIndex: selectedMessageIndexes[selectedStage],
+          });
+        }}
+      />
+    </>
+  );
+}
+
+function affiliateContactStageLabel(stage: AffiliateContactStage) {
+  return {
+    first: "Primeiro contato",
+    second: "Segundo contato",
+    third: "Terceiro contato",
+  }[stage];
+}
+
+function affiliateContactMessagesKey(stage: AffiliateContactStage): keyof AffiliateContactMessageConfig {
+  return {
+    first: "first_messages",
+    second: "second_messages",
+    third: "third_messages",
+  }[stage] as keyof AffiliateContactMessageConfig;
+}
+
+function AffiliateMessageSelectionModal({
+  open,
+  prospect,
+  config,
+  stage,
+  selectedIndexes,
+  onClose,
+  onStageChange,
+  onMessageSelect,
+  onEdit,
+  onContinue,
+}: {
+  open: boolean;
+  prospect: Prospect | null;
+  config: AffiliateContactMessageConfig;
+  stage: AffiliateContactStage;
+  selectedIndexes: Record<AffiliateContactStage, number>;
+  onClose: () => void;
+  onStageChange: (stage: AffiliateContactStage) => void;
+  onMessageSelect: (stage: AffiliateContactStage, index: number) => void;
+  onEdit: () => void;
+  onContinue: () => void;
+}) {
+  if (!open || !prospect) return null;
+  const isClaimed = Boolean(prospect.affiliate_owner_user_id);
+  const messages = config[affiliateContactMessagesKey(stage)];
+
+  return (
+    <AffiliateModalShell
+      title="Escolha a mensagem"
+      eyebrow={prospect.clinic_name}
+      onClose={onClose}
+      className="max-w-3xl"
+      zIndexClassName="z-[130]"
+    >
+      <div className="space-y-5">
+        <div className="grid gap-2 sm:grid-cols-3">
+          {(["first", "second", "third"] as AffiliateContactStage[]).map((item) => {
+            const disabled = !isClaimed && item !== "first";
+            return (
+              <button
+                key={item}
+                type="button"
+                disabled={disabled}
+                className={cn(
+                  "rounded-xl border px-3 py-3 text-left transition",
+                  stage === item ? "border-sky-500 bg-sky-50 text-sky-950" : "border-stone-200 bg-white text-stone-700",
+                  disabled && "cursor-not-allowed opacity-45",
+                )}
+                onClick={() => onStageChange(item)}
+              >
+                <span className="block text-sm font-black">{affiliateContactStageLabel(item)}</span>
+                <span className="mt-1 block text-xs">
+                  {item === "third" ? "Somente depois de resposta humana" : item === "first" ? "Abordagem inicial" : "Acompanhamento curto"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {!isClaimed ? (
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+            Para uma clinica nova, primeiro assuma o contato. O segundo e o terceiro ficam disponiveis depois na sua carteira.
+          </p>
+        ) : null}
+
+        <div className="space-y-2">
+          {messages.map((message, index) => {
+            const selected = selectedIndexes[stage] === index;
+            return (
+              <button
+                key={index}
+                type="button"
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition",
+                  selected ? "border-sky-500 bg-sky-50 shadow-sm" : "border-stone-200 bg-white hover:border-sky-300",
+                )}
+                onClick={() => onMessageSelect(stage, index)}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full border text-xs font-black",
+                    selected ? "border-sky-600 bg-sky-600 text-white" : "border-stone-300 bg-white text-stone-500",
+                  )}
+                >
+                  {index + 1}
+                </span>
+                <span className="whitespace-pre-wrap text-sm leading-6 text-stone-700">{message}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-stone-200 pt-4 sm:flex-row sm:justify-between">
+          <Button type="button" variant="outline" onClick={onEdit}>
+            <Pencil size={16} />
+            Editar mensagens
+          </Button>
+          <Button type="button" className="bg-sky-700 text-white hover:bg-sky-600" onClick={onContinue}>
+            Continuar
+            <ArrowRight size={16} />
+          </Button>
+        </div>
+      </div>
+    </AffiliateModalShell>
+  );
+}
+
+function AffiliateMessageEditorModal({
+  open,
+  stage,
+  config,
+  canEdit,
+  saving,
+  valid,
+  onClose,
+  onStageChange,
+  onMessageChange,
+  onSave,
+}: {
+  open: boolean;
+  stage: AffiliateContactStage;
+  config: AffiliateContactMessageConfig;
+  canEdit: boolean;
+  saving: boolean;
+  valid: boolean;
+  onClose: () => void;
+  onStageChange: (stage: AffiliateContactStage) => void;
+  onMessageChange: (stage: AffiliateContactStage, index: number, value: string) => void;
+  onSave: () => void;
+}) {
+  if (!open) return null;
+  const messages = config[affiliateContactMessagesKey(stage)];
+
+  return (
+    <AffiliateModalShell
+      title="Editar suas mensagens"
+      eyebrow="5 opcoes por etapa"
+      onClose={onClose}
+      className="max-w-4xl"
+      zIndexClassName="z-[140]"
+    >
+      <div className="space-y-5">
+        <div className="grid gap-2 sm:grid-cols-3">
+          {(["first", "second", "third"] as AffiliateContactStage[]).map((item) => (
+            <Button
+              key={item}
+              type="button"
+              variant={stage === item ? "default" : "outline"}
+              className={cn(stage === item && "bg-stone-950 text-white hover:bg-stone-800")}
+              onClick={() => onStageChange(item)}
+            >
+              {affiliateContactStageLabel(item)}
+            </Button>
+          ))}
+        </div>
+
+        <div className="space-y-3">
+          {messages.map((message, index) => (
+            <label key={index} className="block rounded-2xl border border-stone-200 bg-stone-50 p-3">
+              <span className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-stone-500">
+                Opcao {index + 1}
+              </span>
+              <textarea
+                className="min-h-[112px] w-full resize-y rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                value={message}
+                onChange={(event) => onMessageChange(stage, index, event.target.value)}
+                disabled={!canEdit}
+              />
+            </label>
+          ))}
+        </div>
+
+        <div className="flex justify-end border-t border-stone-200 pt-4">
+          <Button
+            type="button"
+            className="bg-sky-700 text-white hover:bg-sky-600"
+            onClick={onSave}
+            disabled={!canEdit || !valid || saving}
+          >
+            <CheckCircle2 size={16} />
+            {saving ? "Salvando..." : "Salvar as 15 mensagens"}
+          </Button>
+        </div>
+      </div>
+    </AffiliateModalShell>
+  );
+}
+
+function AffiliateContactConsentModal({
+  open,
+  prospect,
+  stage,
+  message,
+  consentExclusive,
+  consentResponsible,
+  pending,
+  onClose,
+  onBack,
+  onExclusiveChange,
+  onResponsibleChange,
+  onConfirm,
+}: {
+  open: boolean;
+  prospect: Prospect | null;
+  stage: AffiliateContactStage;
+  message: string;
+  consentExclusive: boolean;
+  consentResponsible: boolean;
+  pending: boolean;
+  onClose: () => void;
+  onBack: () => void;
+  onExclusiveChange: (checked: boolean) => void;
+  onResponsibleChange: (checked: boolean) => void;
+  onConfirm: () => void;
+}) {
+  if (!open || !prospect) return null;
+  const secondAgreement =
+    stage === "third"
+      ? "Confirmo que a clinica respondeu e que este terceiro contato continua autorizado."
+      : "Vou acompanhar este contato com respeito ate concluir ou encerrar.";
+
+  return (
+    <AffiliateModalShell
+      title="Um combinado rapido"
+      eyebrow="Antes de abrir o WhatsApp"
+      onClose={onClose}
+      className="max-w-xl"
+      zIndexClassName="z-[150]"
+    >
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <p className="text-sm leading-6 text-emerald-950">
+            Esta clinica vai ficar reservada so para voce. Cuide desse contato com atencao e acompanhe ate concluir ou encerrar.
+          </p>
+          <p className="mt-3 text-sm font-black text-emerald-950">Com confianca, Guilherme Gomes.</p>
+        </div>
+
+        <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-stone-500">
+            {affiliateContactStageLabel(stage)} · mensagem escolhida
+          </p>
+          <p className="mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-stone-700">{message}</p>
+        </div>
+
+        <div className="space-y-3">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-stone-200 bg-white p-3">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-sky-700"
+              checked={consentExclusive}
+              onChange={(event) => onExclusiveChange(event.target.checked)}
+            />
+            <span className="text-sm leading-6 text-stone-700">Entendo que esta clinica ficara somente na minha carteira.</span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-stone-200 bg-white p-3">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-sky-700"
+              checked={consentResponsible}
+              onChange={(event) => onResponsibleChange(event.target.checked)}
+            />
+            <span className="text-sm leading-6 text-stone-700">{secondAgreement}</span>
+          </label>
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-stone-200 pt-4 sm:flex-row sm:justify-between">
+          <Button type="button" variant="outline" onClick={onBack} disabled={pending}>
+            Voltar
+          </Button>
+          <Button
+            type="button"
+            className="bg-emerald-600 text-white hover:bg-emerald-500"
+            onClick={onConfirm}
+            disabled={!consentExclusive || !consentResponsible || pending}
+          >
+            <Send size={16} />
+            {pending ? "Reservando..." : "Confirmar e abrir WhatsApp"}
+          </Button>
+        </div>
+      </div>
+    </AffiliateModalShell>
+  );
+}
+
+function AffiliateModalShell({
+  title,
+  eyebrow,
+  onClose,
+  children,
+  className,
+  zIndexClassName,
+}: {
+  title: string;
+  eyebrow: string;
+  onClose: () => void;
+  children: ReactNode;
+  className?: string;
+  zIndexClassName: string;
+}) {
+  return (
+    <div
+      className={cn("fixed inset-0 flex items-start justify-center bg-stone-950/55 p-3 sm:p-6", zIndexClassName)}
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={cn(
+          "flex max-h-[94vh] w-full flex-col overflow-hidden rounded-[26px] border border-stone-200 bg-stone-50 shadow-[0_30px_80px_rgba(15,23,42,0.3)]",
+          className,
+        )}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-4 sm:px-6">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-bold uppercase tracking-[0.16em] text-sky-700">{eyebrow}</p>
+            <h2 className="mt-1 text-xl font-black text-stone-950">{title}</h2>
+          </div>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Fechar
+          </Button>
+        </div>
+        <div className="overflow-y-auto p-4 sm:p-6">{children}</div>
+      </div>
+    </div>
   );
 }
 
