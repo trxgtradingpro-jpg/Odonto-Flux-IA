@@ -16,11 +16,13 @@ from app.models import (
     OutboxMessage,
     Professional,
     ProspectAccount,
+    Role,
     SalesOutreachAutomationBatchItem,
     Setting,
     Tenant,
     Unit,
     User,
+    UserRole,
     WhatsAppAccount,
 )
 from app.models.enums import MessageDirection, MessageStatus, OutboxStatus
@@ -1146,6 +1148,98 @@ def test_send_no_site_outreach_stage_queues_random_message_for_whatsapp_web_brid
     assert metadata["no_site_outreach_stage"] == "first"
     assert metadata["transport"] == "whatsapp_web_bridge"
     assert snapshot["sent_stages"]["first"]["message_text"] == "primeira B"
+
+
+def test_affiliate_first_message_claims_prospect_exclusively(monkeypatch, seeded_db, db_session):
+    sender_tenant = _create_sender_tenant(db_session)
+    affiliate_role = Role(name="sales_affiliate", scope="platform", permissions=["sales.affiliate"])
+    affiliate_one = User(
+        tenant_id=None,
+        email="affiliate-one@test.com",
+        full_name="Affiliate One",
+        hashed_password="test",
+        is_active=True,
+    )
+    affiliate_two = User(
+        tenant_id=None,
+        email="affiliate-two@test.com",
+        full_name="Affiliate Two",
+        hashed_password="test",
+        is_active=True,
+    )
+    db_session.add_all([affiliate_role, affiliate_one, affiliate_two])
+    db_session.flush()
+    db_session.add_all(
+        [
+            UserRole(tenant_id=None, user_id=affiliate_one.id, role_id=affiliate_role.id),
+            UserRole(tenant_id=None, user_id=affiliate_two.id, role_id=affiliate_role.id),
+        ]
+    )
+    first = _create_prospect(db_session)
+    first.score = 90
+    second = ProspectAccount(
+        clinic_name="Clinica Disponivel Dois",
+        whatsapp_phone="+55 11 97777-9999",
+        city="Sao Paulo",
+        state="SP",
+        score=20,
+        legal_basis="interesse_legitimo_b2b",
+    )
+    db_session.add(second)
+    db_session.commit()
+
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_sender_tenant_slug", sender_tenant.slug)
+    monkeypatch.setattr(sales_demo_service.settings, "sales_outreach_transport", "whatsapp_web_bridge")
+    sales_demo_service.save_affiliate_first_message_config(
+        db_session,
+        user_id=affiliate_one.id,
+        payload={"messages": ["A1", "A2", "A3", "A4", "A5"]},
+    )
+    sales_demo_service.save_affiliate_first_message_config(
+        db_session,
+        user_id=affiliate_two.id,
+        payload={"messages": ["B1", "B2", "B3", "B4", "B5"]},
+    )
+
+    available = sales_demo_service.get_next_affiliate_prospect(db_session)
+    assert available.id == first.id
+
+    result = sales_demo_service.claim_prospect_with_affiliate_first_message(
+        db_session,
+        prospect_id=first.id,
+        affiliate_user_id=affiliate_one.id,
+        message_index=2,
+    )
+
+    db_session.refresh(first)
+    assert result["message_text"] == "A3"
+    assert result["step"] == "affiliate_first"
+    assert first.affiliate_owner_user_id == affiliate_one.id
+    assert first.affiliate_claimed_at is not None
+    assert first.first_contact_channel == "whatsapp_affiliate_first_contact"
+    assert first.status == "contato_iniciado"
+
+    affiliate_one_rows = sales_demo_service.list_affiliate_claimed_prospects(
+        db_session,
+        user_id=affiliate_one.id,
+    )
+    affiliate_two_rows = sales_demo_service.list_affiliate_claimed_prospects(
+        db_session,
+        user_id=affiliate_two.id,
+    )
+    assert affiliate_one_rows["total"] == 1
+    assert affiliate_one_rows["data"][0]["id"] == first.id
+    assert affiliate_two_rows["total"] == 0
+
+    with pytest.raises(ApiError) as exc_info:
+        sales_demo_service.claim_prospect_with_affiliate_first_message(
+            db_session,
+            prospect_id=first.id,
+            affiliate_user_id=affiliate_two.id,
+            message_index=0,
+        )
+    assert exc_info.value.code == "AFFILIATE_PROSPECT_ALREADY_CLAIMED"
+    assert sales_demo_service.get_next_affiliate_prospect(db_session).id == second.id
 
 
 def test_send_no_site_outreach_bulk_queues_first_stage_for_all_without_site(monkeypatch, seeded_db, db_session):

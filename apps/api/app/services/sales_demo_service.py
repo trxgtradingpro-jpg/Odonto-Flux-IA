@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 import re
 import secrets
 import unicodedata
@@ -456,6 +457,29 @@ NO_SITE_OUTREACH_STAGE_LABELS = {
     "second": "Segunda mensagem sem site",
     "third": "Terceira mensagem sem site",
 }
+AFFILIATE_FIRST_MESSAGES_SETTING_PREFIX = "sales.affiliate_first_messages"
+AFFILIATE_FIRST_MESSAGE_DEFAULTS = [
+    (
+        "Oi, tudo bem? Encontrei a clinica no Google. Aqui e o time comercial da ClinicFlux AI. "
+        "Posso falar com quem cuida do WhatsApp e dos agendamentos?"
+    ),
+    (
+        "Ola! Aqui e o time comercial da ClinicFlux AI. Vi a clinica no Google e queria apresentar "
+        "uma ideia para melhorar o atendimento e os agendamentos pelo WhatsApp. Quem cuida dessa parte?"
+    ),
+    (
+        "Oi, tudo bem? Meu contato e comercial. Trabalho com a ClinicFlux AI e encontrei a clinica "
+        "em uma busca local. Posso falar com a pessoa responsavel pelo atendimento no WhatsApp?"
+    ),
+    (
+        "Bom dia! Aqui e da ClinicFlux AI. Estamos conversando com clinicas da regiao sobre atendimento "
+        "e agenda pelo WhatsApp. Quem seria a pessoa ideal para eu explicar rapidamente?"
+    ),
+    (
+        "Ola! Encontrei a clinica no Google e gostaria de mostrar uma oportunidade comercial da ClinicFlux AI. "
+        "Com quem posso falar sobre WhatsApp, recepcao e agendamentos?"
+    ),
+]
 NO_SITE_OUTREACH_MESSAGE_DEFAULTS = {
     "first": [
         (
@@ -1588,6 +1612,21 @@ def _serialize_prospect_created_by_user(db: Session, user_id: UUID | None) -> di
     }
 
 
+def _serialize_prospect_affiliate_owner(db: Session, user_id: UUID | None) -> dict[str, object]:
+    if not user_id:
+        return {
+            "affiliate_owner_user_id": None,
+            "affiliate_owner_user_name": None,
+            "affiliate_owner_user_email": None,
+        }
+    user = db.get(User, user_id)
+    return {
+        "affiliate_owner_user_id": user_id,
+        "affiliate_owner_user_name": user.full_name if user else None,
+        "affiliate_owner_user_email": user.email if user else None,
+    }
+
+
 def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_children: bool = True) -> dict:
     units: list[dict] = []
     services: list[dict] = []
@@ -1612,6 +1651,8 @@ def serialize_prospect(db: Session, prospect: ProspectAccount, *, include_childr
         "id": prospect.id,
         "slug": prospect_slug,
         "clinic_name": prospect.clinic_name,
+        **_serialize_prospect_affiliate_owner(db, prospect.affiliate_owner_user_id),
+        "affiliate_claimed_at": prospect.affiliate_claimed_at,
         **_serialize_prospect_created_by_user(db, prospect.created_by),
         "owner_name": prospect.owner_name,
         "manager_name": prospect.manager_name,
@@ -2466,6 +2507,100 @@ def save_no_site_outreach_flow_config(db: Session, payload: dict) -> dict:
     _upsert_setting(db, tenant_id=sender_tenant.id, key=NO_SITE_OUTREACH_FLOW_SETTING_KEY, value=normalized)
     db.commit()
     return normalized
+
+
+def _affiliate_first_messages_setting_key(user_id: UUID) -> str:
+    return f"{AFFILIATE_FIRST_MESSAGES_SETTING_PREFIX}.{user_id}"
+
+
+def _normalize_affiliate_first_messages(raw_value: dict | None, *, strict: bool = False) -> dict:
+    payload = raw_value if isinstance(raw_value, dict) else {}
+    raw_messages = payload.get("messages")
+    messages = [str(item).strip() for item in raw_messages] if isinstance(raw_messages, list) else []
+    if strict and (len(messages) != 5 or any(len(item) < 2 or len(item) > 5000 for item in messages)):
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_FIRST_MESSAGES_INVALID",
+            message="Configure exatamente 5 mensagens preenchidas, com ate 5000 caracteres cada.",
+        )
+    if len(messages) != 5 or any(not item for item in messages):
+        messages = list(AFFILIATE_FIRST_MESSAGE_DEFAULTS)
+    return {"messages": messages[:5]}
+
+
+def get_affiliate_first_message_config(db: Session, *, user_id: UUID) -> dict:
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    item = db.scalar(
+        select(Setting).where(
+            Setting.tenant_id == sender_tenant.id,
+            Setting.key == _affiliate_first_messages_setting_key(user_id),
+        )
+    )
+    raw_value = item.value if item and isinstance(item.value, dict) else None
+    return _normalize_affiliate_first_messages(raw_value)
+
+
+def save_affiliate_first_message_config(db: Session, *, user_id: UUID, payload: dict) -> dict:
+    sender_tenant = ensure_sales_outreach_sender_tenant(db)
+    normalized = _normalize_affiliate_first_messages(payload, strict=True)
+    _upsert_setting(
+        db,
+        tenant_id=sender_tenant.id,
+        key=_affiliate_first_messages_setting_key(user_id),
+        value=normalized,
+    )
+    db.commit()
+    return normalized
+
+
+def _affiliate_available_prospect_query():
+    return (
+        select(ProspectAccount)
+        .where(
+            ProspectAccount.affiliate_owner_user_id.is_(None),
+            ProspectAccount.first_contact_at.is_(None),
+            ProspectAccount.do_not_contact.is_(False),
+            ProspectAccount.status.in_(["novo", "pesquisado"]),
+            or_(ProspectAccount.whatsapp_phone.is_not(None), ProspectAccount.phone.is_not(None)),
+        )
+        .order_by(ProspectAccount.score.desc(), ProspectAccount.created_at.asc())
+    )
+
+
+def get_next_affiliate_prospect(db: Session) -> ProspectAccount | None:
+    candidates = db.execute(_affiliate_available_prospect_query().limit(100)).scalars().all()
+    return next(
+        (
+            prospect
+            for prospect in candidates
+            if normalize_phone(prospect.whatsapp_phone or prospect.phone)
+        ),
+        None,
+    )
+
+
+def list_affiliate_claimed_prospects(
+    db: Session,
+    *,
+    user_id: UUID,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict:
+    filters = [ProspectAccount.affiliate_owner_user_id == user_id]
+    rows = db.execute(
+        select(ProspectAccount)
+        .where(*filters)
+        .order_by(ProspectAccount.affiliate_claimed_at.desc().nullslast(), ProspectAccount.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).scalars().all()
+    total = db.scalar(select(func.count(ProspectAccount.id)).where(*filters)) or 0
+    return {
+        "data": [serialize_prospect(db, prospect) for prospect in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 def _sales_outreach_ai_is_enabled() -> bool:
@@ -5713,6 +5848,197 @@ def send_no_site_outreach_stage(
     }
 
 
+def claim_prospect_with_affiliate_first_message(
+    db: Session,
+    *,
+    prospect_id: UUID,
+    affiliate_user_id: UUID,
+    message_index: int,
+) -> dict:
+    config = get_affiliate_first_message_config(db, user_id=affiliate_user_id)
+    messages = list(config.get("messages") or [])
+    if message_index < 0 or message_index >= len(messages):
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_FIRST_MESSAGE_INDEX_INVALID",
+            message="Escolha uma das 5 mensagens iniciais configuradas.",
+        )
+    message_text = str(messages[message_index] or "").strip()
+    if not message_text:
+        raise ApiError(
+            status_code=422,
+            code="AFFILIATE_FIRST_MESSAGE_EMPTY",
+            message="A mensagem inicial escolhida esta vazia.",
+        )
+
+    prospect = db.scalar(
+        select(ProspectAccount)
+        .where(ProspectAccount.id == prospect_id)
+        .with_for_update()
+    )
+    if not prospect:
+        raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Clinica nao encontrada.")
+    if prospect.affiliate_owner_user_id:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_ALREADY_CLAIMED",
+            message="Esta clinica acabou de ser assumida por outro afiliado. Atualize para receber a proxima.",
+        )
+    if prospect.first_contact_at or str(prospect.status or "").strip() not in {"novo", "pesquisado"}:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_ALREADY_USED",
+            message="Esta clinica ja teve uso comercial e nao esta mais disponivel para afiliados.",
+        )
+    if prospect.do_not_contact:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_DO_NOT_CONTACT",
+            message="Esta clinica esta marcada como nao contactar.",
+        )
+
+    raw_phone, _ = _prospect_outreach_destination(prospect)
+    sender_tenant = _sales_outreach_sender_tenant(db)
+    conversation = _ensure_outreach_conversation(db, sender_tenant=sender_tenant, prospect=prospect)
+    previous_outbound = db.scalar(
+        select(Message.id)
+        .where(
+            Message.conversation_id == conversation.id,
+            Message.direction == MessageDirection.OUTBOUND.value,
+        )
+        .limit(1)
+    )
+    if previous_outbound:
+        raise ApiError(
+            status_code=409,
+            code="AFFILIATE_PROSPECT_ALREADY_USED",
+            message="Esta clinica ja recebeu contato comercial e nao esta mais disponivel.",
+        )
+
+    dispatch_transport = resolve_sales_outreach_transport()
+    outbound_message = Message(
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        direction=MessageDirection.OUTBOUND.value,
+        channel="whatsapp",
+        sender_type="user",
+        sender_user_id=affiliate_user_id,
+        body=message_text,
+        message_type="text",
+        payload={
+            "source": "sales_outreach",
+            "flow": "affiliate_first_contact",
+            "prospect_account_id": str(prospect.id),
+            "step": "affiliate_first",
+            "affiliate_user_id": str(affiliate_user_id),
+            "variant_index": message_index,
+        },
+        status=MessageStatus.QUEUED.value,
+    )
+    db.add(outbound_message)
+    db.flush()
+
+    outbox = queue_outbound_message(
+        db,
+        tenant_id=sender_tenant.id,
+        conversation_id=conversation.id,
+        to=raw_phone,
+        body=message_text,
+        message_type="text",
+        metadata={
+            "source": "sales_outreach",
+            "flow": "affiliate_first_contact",
+            "prospect_account_id": str(prospect.id),
+            "step": "affiliate_first",
+            "affiliate_user_id": str(affiliate_user_id),
+            "variant_index": message_index,
+            "outbound_message_id": str(outbound_message.id),
+            "transport": dispatch_transport,
+        },
+        immediate_dispatch=False if dispatch_transport == WHATSAPP_WEB_BRIDGE_TRANSPORT else None,
+        commit=False,
+    )
+    if outbox.status in {OutboxStatus.FAILED.value, OutboxStatus.DEAD_LETTER.value}:
+        db.rollback()
+        raise ApiError(
+            status_code=400,
+            code="AFFILIATE_FIRST_MESSAGE_DISPATCH_FAILED",
+            message=outbox.last_error or "Nao foi possivel colocar a primeira mensagem na fila do WhatsApp.",
+        )
+
+    now_value = _now()
+    prospect.affiliate_owner_user_id = affiliate_user_id
+    prospect.affiliate_claimed_at = now_value
+    prospect.first_contact_at = now_value
+    prospect.first_contact_channel = "whatsapp_affiliate_first_contact"
+    prospect.status = "contato_iniciado"
+    prospect.last_activity_at = now_value
+    prospect.updated_by = affiliate_user_id
+    snapshot = dict(prospect.proposal_snapshot or {})
+    snapshot["affiliate_outreach"] = {
+        "affiliate_user_id": str(affiliate_user_id),
+        "claimed_at": now_value.isoformat(),
+        "first_message_sent_at": now_value.isoformat(),
+        "first_message_text": message_text,
+        "first_message_index": message_index,
+        "conversation_id": str(conversation.id),
+        "outbox_id": str(outbox.id),
+        "outbound_message_id": str(outbound_message.id),
+        "dispatch_transport": dispatch_transport,
+    }
+    prospect.proposal_snapshot = snapshot
+    _update_outreach_snapshot(
+        prospect,
+        patch={
+            "last_step": "affiliate_first",
+            "last_sent_at": now_value.isoformat(),
+            "last_outbox_id": str(outbox.id),
+            "last_dispatch_status": outbox.status,
+            "sender_tenant_id": str(sender_tenant.id),
+            "conversation_id": str(conversation.id),
+            "dispatch_transport": dispatch_transport,
+            "affiliate_user_id": str(affiliate_user_id),
+        },
+    )
+    outbound_message.payload = {
+        **(outbound_message.payload if isinstance(outbound_message.payload, dict) else {}),
+        "queued_outbox_id": str(outbox.id),
+    }
+    db.add(outbound_message)
+    db.add(prospect)
+    add_timeline(
+        db,
+        prospect,
+        event_type="prospect.affiliate.claimed",
+        event_label="Clinica assumida por afiliado apos primeira mensagem",
+        actor_id=affiliate_user_id,
+        actor_type="affiliate",
+        payload={
+            "affiliate_user_id": str(affiliate_user_id),
+            "conversation_id": str(conversation.id),
+            "outbox_id": str(outbox.id),
+            "message_index": message_index,
+            "message_text": message_text,
+        },
+    )
+    _apply_recalculated_score(db, prospect)
+    db.commit()
+    db.refresh(prospect)
+    db.refresh(outbound_message)
+    return {
+        "prospect": serialize_prospect(db, prospect),
+        "step": "affiliate_first",
+        "destination": raw_phone,
+        "message_text": message_text,
+        "demo_login_url": None,
+        "video_url": None,
+        "sender_tenant_id": sender_tenant.id,
+        "conversation_id": conversation.id,
+        "outbound_message_id": outbound_message.id,
+        "transport": dispatch_transport,
+    }
+
+
 def _no_site_outreach_has_human_reply(db: Session, prospect: ProspectAccount, snapshot: dict) -> bool:
     if bool(snapshot.get("human_reply_received")):
         return True
@@ -6437,7 +6763,13 @@ def sync_prospect_outreach_reply(
         pass
 
 
-def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectAccount:
+def create_prospect(
+    db: Session,
+    payload,
+    *,
+    actor_id: UUID | None,
+    affiliate_owner_user_id: UUID | None = None,
+) -> ProspectAccount:
     duplicate_filter = []
     if payload.whatsapp_phone:
         duplicate_filter.append(ProspectAccount.whatsapp_phone == payload.whatsapp_phone)
@@ -6477,6 +6809,8 @@ def create_prospect(db: Session, payload, *, actor_id: UUID | None) -> ProspectA
         tags=payload.tags,
         test_phone_number=payload.test_phone_number,
         proposal_snapshot=sanitized_snapshot,
+        affiliate_owner_user_id=affiliate_owner_user_id,
+        affiliate_claimed_at=_now() if affiliate_owner_user_id else None,
         created_by=actor_id,
         updated_by=actor_id,
         tenant_seed_key=_friendly_prospect_key(
@@ -8217,14 +8551,52 @@ def change_initial_admin_password(db: Session, *, user: User, current_password: 
     db.commit()
 
 
-def overview(db: Session) -> dict:
-    total = db.scalar(select(func.count(ProspectAccount.id))) or 0
-    demos_created = db.scalar(select(func.count(ProspectAccount.id)).where(ProspectAccount.demo_tenant_id.is_not(None))) or 0
-    demos_accessed = db.scalar(select(func.count(ProspectAccount.id)).where(ProspectAccount.demo_first_login_at.is_not(None))) or 0
-    hot_leads = db.scalar(select(func.count(ProspectAccount.id)).where(ProspectAccount.temperature.in_(["quente", "muito_quente"]))) or 0
-    meetings = db.scalar(select(func.count(ProspectAccount.id)).where(ProspectAccount.status == "reuniao_marcada")) or 0
-    won = db.scalar(select(func.count(ProspectAccount.id)).where(ProspectAccount.status == "fechado_ganho")) or 0
-    recent = db.execute(select(ProspectTimelineEvent).order_by(ProspectTimelineEvent.created_at.desc()).limit(12)).scalars().all()
+def overview(db: Session, *, affiliate_owner_user_id: UUID | None = None) -> dict:
+    owner_filter = (
+        [ProspectAccount.affiliate_owner_user_id == affiliate_owner_user_id]
+        if affiliate_owner_user_id
+        else []
+    )
+    total = db.scalar(select(func.count(ProspectAccount.id)).where(*owner_filter)) or 0
+    demos_created = db.scalar(
+        select(func.count(ProspectAccount.id)).where(
+            *owner_filter,
+            ProspectAccount.demo_tenant_id.is_not(None),
+        )
+    ) or 0
+    demos_accessed = db.scalar(
+        select(func.count(ProspectAccount.id)).where(
+            *owner_filter,
+            ProspectAccount.demo_first_login_at.is_not(None),
+        )
+    ) or 0
+    hot_leads = db.scalar(
+        select(func.count(ProspectAccount.id)).where(
+            *owner_filter,
+            ProspectAccount.temperature.in_(["quente", "muito_quente"]),
+        )
+    ) or 0
+    meetings = db.scalar(
+        select(func.count(ProspectAccount.id)).where(
+            *owner_filter,
+            ProspectAccount.status == "reuniao_marcada",
+        )
+    ) or 0
+    won = db.scalar(
+        select(func.count(ProspectAccount.id)).where(
+            *owner_filter,
+            ProspectAccount.status == "fechado_ganho",
+        )
+    ) or 0
+    recent_query = select(ProspectTimelineEvent)
+    if affiliate_owner_user_id:
+        recent_query = recent_query.join(
+            ProspectAccount,
+            ProspectAccount.id == ProspectTimelineEvent.prospect_account_id,
+        ).where(ProspectAccount.affiliate_owner_user_id == affiliate_owner_user_id)
+    recent = db.execute(
+        recent_query.order_by(ProspectTimelineEvent.created_at.desc()).limit(12)
+    ).scalars().all()
     return {
         "total_prospects": total,
         "demos_created": demos_created,

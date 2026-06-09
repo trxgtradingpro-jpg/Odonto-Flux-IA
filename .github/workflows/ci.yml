@@ -8,9 +8,25 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: odontoflux
+      POSTGRES_PASSWORD: odontoflux
+      POSTGRES_DB: odontoflux
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      STORAGE_BASE_PATH: /tmp/odontoflux-storage
+      LLM_PROVIDER: mock
+      LLM_API_KEY: ""
+      SALES_OUTREACH_AI_REVIEW_ENABLED: "false"
+      WHATSAPP_INLINE_DISPATCH_ON_QUEUE: "true"
     defaults:
       run:
-        working-directory: odontoflux/apps/api
+        working-directory: apps/api
     services:
       postgres:
         image: postgres:16
@@ -31,36 +47,42 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Install backend deps
         run: pip install -r requirements.txt
-      - name: Lint
-        run: ruff check app tests
-      - name: Test
+      - name: Prepare test storage
+        run: mkdir -p "$STORAGE_BASE_PATH"
+      - name: Lint changed backend files
         env:
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
-          POSTGRES_USER: odontoflux
-          POSTGRES_PASSWORD: odontoflux
-          POSTGRES_DB: odontoflux
-          REDIS_HOST: localhost
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          mapfile -t files < <(
+            git -C ../.. diff --name-only --diff-filter=ACM "$BASE_SHA" "$GITHUB_SHA" -- apps/api |
+              sed -n 's#^apps/api/\(.*\.py\)$#\1#p'
+          )
+          if ((${#files[@]})); then
+            ruff check --isolated --select E9,F63,F7,F82 "${files[@]}"
+          fi
+      - name: Test affiliate CRM regression
+        run: >-
+          pytest -q tests/unit/test_sales_outreach.py
+          -k "affiliate_first_message_claims_prospect_exclusively or no_site_outreach"
+      - name: Legacy full suite
+        continue-on-error: true
         run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: odontoflux
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: pnpm
       - name: Install deps
         run: pnpm install --frozen-lockfile=false

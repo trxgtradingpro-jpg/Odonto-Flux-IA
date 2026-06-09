@@ -168,6 +168,18 @@ class ProspectOutreachInput(BaseModel):
     video_url: str | None = None
 
 
+class AffiliateFirstMessageConfigInput(BaseModel):
+    messages: list[str] = Field(min_length=5, max_length=5)
+
+
+class AffiliateFirstMessageConfigOutput(BaseModel):
+    messages: list[str]
+
+
+class AffiliateFirstMessageSendInput(BaseModel):
+    message_index: int = Field(default=0, ge=0, le=4)
+
+
 class ProspectNoSiteOutreachInput(BaseModel):
     stage: Literal["first", "second", "third"] = "first"
 
@@ -378,6 +390,10 @@ class ProspectOutput(BaseModel):
     id: UUID
     slug: str | None = None
     clinic_name: str
+    affiliate_owner_user_id: UUID | None = None
+    affiliate_owner_user_name: str | None = None
+    affiliate_owner_user_email: str | None = None
+    affiliate_claimed_at: datetime | None = None
     created_by_user_id: UUID | None = None
     created_by_user_name: str | None = None
     created_by_user_email: str | None = None
@@ -481,6 +497,11 @@ class ProspectListOutput(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AffiliateCrmAvailableOutput(BaseModel):
+    prospect: ProspectOutput | None = None
+    available: bool
 
 
 class ProspectOverviewOutput(BaseModel):

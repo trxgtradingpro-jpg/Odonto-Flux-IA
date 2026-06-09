@@ -161,6 +161,11 @@ class ProspectAccount(UUIDTimestampMixin, Base):
     score_explanation: Mapped[dict] = mapped_column(JSONB, default=dict)
     proposal_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
     roi_inputs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    affiliate_owner_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+    )
+    affiliate_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     updated_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 

@@ -37,6 +37,10 @@ from app.schemas.admin_sales import (
     AdminLoginOutput,
     AdminPageDefinitionOutput,
     AdminSessionOutput,
+    AffiliateCrmAvailableOutput,
+    AffiliateFirstMessageConfigInput,
+    AffiliateFirstMessageConfigOutput,
+    AffiliateFirstMessageSendInput,
     DemoAccessOutput,
     DemoActivityOutput,
     DemoEventInput,
@@ -180,7 +184,7 @@ def _is_affiliate_prospect_scope(principal) -> bool:
 
 def _prospect_visibility_filter(principal):
     if _is_affiliate_prospect_scope(principal):
-        return ProspectAccount.created_by == principal.user.id
+        return ProspectAccount.affiliate_owner_user_id == principal.user.id
     return None
 
 
@@ -190,7 +194,7 @@ def _apply_prospect_visibility(query, principal):
 
 
 def _require_prospect_visible_to_principal(prospect: ProspectAccount, principal) -> None:
-    if _is_affiliate_prospect_scope(principal) and prospect.created_by != principal.user.id:
+    if _is_affiliate_prospect_scope(principal) and prospect.affiliate_owner_user_id != principal.user.id:
         raise ApiError(status_code=404, code="PROSPECT_NOT_FOUND", message="Prospect nao encontrado")
 
 
@@ -198,6 +202,15 @@ def _get_visible_prospect(db: Session, prospect_id: UUID, principal) -> Prospect
     prospect = _get_prospect(db, prospect_id)
     _require_prospect_visible_to_principal(prospect, principal)
     return prospect
+
+
+def _require_affiliate_principal(principal) -> None:
+    if not _is_affiliate_prospect_scope(principal):
+        raise ApiError(
+            status_code=403,
+            code="AFFILIATE_CRM_FORBIDDEN",
+            message="Esta area e exclusiva para usuarios afiliados.",
+        )
 
 
 def _current_principal_optional(request: Request, db: Session):
@@ -794,7 +807,92 @@ def ensure_admin_whatsapp_test_contact(
 @router.get("/admin/prospects/overview", response_model=ProspectOverviewOutput)
 def prospects_overview(principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "view")
-    return sales.overview(db)
+    return sales.overview(
+        db,
+        affiliate_owner_user_id=principal.user.id if _is_affiliate_prospect_scope(principal) else None,
+    )
+
+
+@router.get("/admin/affiliate-crm/available", response_model=AffiliateCrmAvailableOutput)
+def affiliate_crm_available(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+    _require_affiliate_principal(principal)
+    prospect = sales.get_next_affiliate_prospect(db)
+    return {
+        "prospect": sales.serialize_prospect(db, prospect) if prospect else None,
+        "available": bool(prospect),
+    }
+
+
+@router.get("/admin/affiliate-crm/mine", response_model=ProspectListOutput)
+def affiliate_crm_mine(
+    limit: int = 200,
+    offset: int = 0,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+    _require_affiliate_principal(principal)
+    return sales.list_affiliate_claimed_prospects(
+        db,
+        user_id=principal.user.id,
+        limit=min(max(limit, 1), 500),
+        offset=max(offset, 0),
+    )
+
+
+@router.get(
+    "/admin/affiliate-crm/first-messages",
+    response_model=AffiliateFirstMessageConfigOutput,
+)
+def affiliate_crm_first_messages(
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "view")
+    _require_affiliate_principal(principal)
+    return sales.get_affiliate_first_message_config(db, user_id=principal.user.id)
+
+
+@router.put(
+    "/admin/affiliate-crm/first-messages",
+    response_model=AffiliateFirstMessageConfigOutput,
+)
+def update_affiliate_crm_first_messages(
+    payload: AffiliateFirstMessageConfigInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
+    _require_affiliate_principal(principal)
+    return sales.save_affiliate_first_message_config(
+        db,
+        user_id=principal.user.id,
+        payload=payload.model_dump(),
+    )
+
+
+@router.post(
+    "/admin/affiliate-crm/prospects/{prospect_id}/send-first",
+    response_model=ProspectOutreachOutput,
+)
+def affiliate_crm_send_first_message(
+    prospect_id: UUID,
+    payload: AffiliateFirstMessageSendInput,
+    principal=Depends(get_current_principal),
+    db: Session = Depends(get_db),
+):
+    sales.require_adm_page_permission(principal, "adm_crm", "edit")
+    _require_affiliate_principal(principal)
+    return sales.claim_prospect_with_affiliate_first_message(
+        db,
+        prospect_id=prospect_id,
+        affiliate_user_id=principal.user.id,
+        message_index=payload.message_index,
+    )
 
 
 @router.get("/admin/outreach/runtime", response_model=AdminOutreachRuntimeOutput)
@@ -1274,7 +1372,12 @@ def import_google_places(
 @router.post("/admin/prospects", response_model=ProspectOutput)
 def create_prospect(payload: ProspectCreate, principal=Depends(get_current_principal), db: Session = Depends(get_db)):
     sales.require_adm_page_permission(principal, "adm_crm", "create")
-    prospect = sales.create_prospect(db, payload, actor_id=principal.user.id)
+    prospect = sales.create_prospect(
+        db,
+        payload,
+        actor_id=principal.user.id,
+        affiliate_owner_user_id=principal.user.id if _is_affiliate_prospect_scope(principal) else None,
+    )
     return sales.serialize_prospect(db, prospect)
 
 
