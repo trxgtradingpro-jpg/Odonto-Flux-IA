@@ -53,6 +53,10 @@ type Prospect = {
   id: string;
   slug?: string | null;
   clinic_name: string;
+  affiliate_owner_user_id?: string | null;
+  affiliate_owner_user_name?: string | null;
+  affiliate_owner_user_email?: string | null;
+  affiliate_claimed_at?: string | null;
   created_by_user_id?: string | null;
   created_by_user_name?: string | null;
   created_by_user_email?: string | null;
@@ -187,6 +191,15 @@ type OutreachResult = {
   conversation_id: string;
   outbound_message_id: string;
   transport?: string | null;
+};
+
+type AffiliateCrmAvailable = {
+  prospect: Prospect | null;
+  available: boolean;
+};
+
+type AffiliateFirstMessageConfig = {
+  messages: string[];
 };
 
 type NoSiteOutreachStage = "first" | "second" | "third";
@@ -489,21 +502,19 @@ function buildExternalWebsiteUrl(rawWebsite?: string | null) {
 }
 
 function prospectOwnerLabel(prospect: Prospect, isAffiliateUser = false) {
-  if (isAffiliateUser && prospect.created_by_user_id) return "Minha conta";
-  if (!prospect.created_by_user_id) return "Sem dono";
-  if (prospect.created_by_user_is_affiliate) return "Afiliado";
-  return "Interno";
+  if (isAffiliateUser && prospect.affiliate_owner_user_id) return "Minha clinica";
+  if (prospect.affiliate_owner_user_id) return "Afiliado";
+  return "Sem afiliado";
 }
 
 function prospectOwnerDetail(prospect: Prospect, isAffiliateUser = false) {
-  if (isAffiliateUser && prospect.created_by_user_id) return prospect.created_by_user_name || "Voce";
-  return prospect.created_by_user_name || prospect.created_by_user_email || "Nao atribuido";
+  if (isAffiliateUser && prospect.affiliate_owner_user_id) return prospect.affiliate_owner_user_name || "Voce";
+  return prospect.affiliate_owner_user_name || prospect.affiliate_owner_user_email || "Disponivel";
 }
 
 function prospectOwnerBadgeClass(prospect: Prospect) {
-  if (!prospect.created_by_user_id) return "bg-stone-200 text-stone-700";
-  if (prospect.created_by_user_is_affiliate) return "bg-sky-100 text-sky-800";
-  return "bg-emerald-100 text-emerald-700";
+  if (!prospect.affiliate_owner_user_id) return "bg-stone-200 text-stone-700";
+  return "bg-sky-100 text-sky-800";
 }
 
 function resolveProspectBookingLink(prospect: Prospect | null, origin: string) {
@@ -2323,6 +2334,7 @@ export default function AdmPage() {
   const [prospectDetailOpen, setProspectDetailOpen] = useState(false);
   const [admWhatsappProspectId, setAdmWhatsappProspectId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [affiliateSelectedProspect, setAffiliateSelectedProspect] = useState<Prospect | null>(null);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   const [officialWhatsAppProspect, setOfficialWhatsAppProspect] = useState<Prospect | null>(null);
@@ -2416,7 +2428,7 @@ export default function AdmPage() {
           },
         })
       ).data,
-    enabled: sessionReady && canViewCrm,
+    enabled: sessionReady && canViewCrm && !isAffiliateUser,
     retry: false,
   });
 
@@ -2435,9 +2447,12 @@ export default function AdmPage() {
   });
 
   const selectedProspect = useMemo(() => {
+    if (isAffiliateUser && affiliateSelectedProspect?.id === selectedId) {
+      return affiliateSelectedProspect;
+    }
     const rows = prospectsQuery.data?.data ?? [];
     return rows.find((item) => item.id === selectedId) ?? null;
-  }, [prospectsQuery.data?.data, selectedId]);
+  }, [affiliateSelectedProspect, isAffiliateUser, prospectsQuery.data?.data, selectedId]);
   const outreachRuntime = outreachRuntimeQuery.data ?? null;
   const usesWhatsAppWebBridge = outreachRuntime?.transport === "whatsapp_web_bridge";
 
@@ -2485,12 +2500,13 @@ export default function AdmPage() {
 
   useEffect(() => {
     if (!selectedId) return;
+    if (isAffiliateUser && affiliateSelectedProspect?.id === selectedId) return;
     const exists = (prospectsQuery.data?.data ?? []).some((item) => item.id === selectedId);
     if (!exists) {
       setSelectedId(null);
       setProspectDetailOpen(false);
     }
-  }, [prospectsQuery.data?.data, selectedId]);
+  }, [affiliateSelectedProspect?.id, isAffiliateUser, prospectsQuery.data?.data, selectedId]);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -2900,7 +2916,7 @@ export default function AdmPage() {
             <div className="hidden lg:block">
               <AdmMenuButtons
                 activeSection={activeSection}
-                canCreateCrm={canCreateCrm}
+                canCreateCrm={canCreateCrm && !isAffiliateUser}
                 canViewAdmWhatsapp={canViewAdmWhatsapp}
                 canViewAgentSettings={canViewAgentSettings}
                 canViewAffiliates={canViewAffiliates}
@@ -2954,6 +2970,17 @@ export default function AdmPage() {
         ) : null}
 
         {activeSection === "crm" && canViewCrm ? (
+          isAffiliateUser ? (
+            <AffiliateCrm
+              canEdit={canEditCrm}
+              usesWhatsAppWebBridge={usesWhatsAppWebBridge}
+              onOpenProspect={(prospect) => {
+                setAffiliateSelectedProspect(prospect);
+                setSelectedId(prospect.id);
+                setProspectDetailOpen(true);
+              }}
+            />
+          ) : (
           <>
         {canCreateCrm ? (
           <CreateProspectForm
@@ -3044,7 +3071,7 @@ export default function AdmPage() {
             <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
               <div className={cn("hidden gap-3 border-b border-stone-200 bg-stone-50 px-4 py-3 text-xs font-bold uppercase tracking-wide text-stone-500 md:grid", CRM_PROSPECT_GRID_CLASS)}>
                 <span>Clinica</span>
-                <span>Dono</span>
+                <span>Afiliado responsavel</span>
                 <span>Site</span>
                 <span>Status</span>
                 <span>Temperatura</span>
@@ -3239,6 +3266,7 @@ export default function AdmPage() {
 
         </div>
           </>
+          )
         ) : null}
         {activeSection === "crm" && !canViewCrm ? (
           <Card className="border-stone-200 bg-white">
@@ -3315,7 +3343,7 @@ export default function AdmPage() {
             </div>
             <AdmMenuButtons
               activeSection={activeSection}
-              canCreateCrm={canCreateCrm}
+              canCreateCrm={canCreateCrm && !isAffiliateUser}
               canViewAdmWhatsapp={canViewAdmWhatsapp}
               canViewAgentSettings={canViewAgentSettings}
               canViewAffiliates={canViewAffiliates}
@@ -3420,6 +3448,324 @@ export default function AdmPage() {
         canViewCommercialOutreach={canViewCommercialOutreach}
       />
     </main>
+  );
+}
+
+function AffiliateCrm({
+  canEdit,
+  usesWhatsAppWebBridge,
+  onOpenProspect,
+}: {
+  canEdit: boolean;
+  usesWhatsAppWebBridge: boolean;
+  onOpenProspect: (prospect: Prospect) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<"available" | "mine">("available");
+  const [selectedMessageIndex, setSelectedMessageIndex] = useState(0);
+  const [messageDraft, setMessageDraft] = useState<string[]>(["", "", "", "", ""]);
+
+  const availableQuery = useQuery<AffiliateCrmAvailable>({
+    queryKey: ["adm-affiliate-crm-available"],
+    queryFn: async () => (await api.get("/admin/affiliate-crm/available")).data,
+    retry: false,
+  });
+  const mineQuery = useQuery<{ data: Prospect[]; total: number }>({
+    queryKey: ["adm-affiliate-crm-mine"],
+    queryFn: async () => (await api.get("/admin/affiliate-crm/mine", { params: { limit: 200, offset: 0 } })).data,
+    retry: false,
+  });
+  const messagesQuery = useQuery<AffiliateFirstMessageConfig>({
+    queryKey: ["adm-affiliate-first-messages"],
+    queryFn: async () => (await api.get("/admin/affiliate-crm/first-messages")).data,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!messagesQuery.data?.messages) return;
+    setMessageDraft(messagesQuery.data.messages.slice(0, 5));
+  }, [messagesQuery.data]);
+
+  const saveMessagesMutation = useMutation({
+    mutationFn: async () =>
+      (await api.put<AffiliateFirstMessageConfig>("/admin/affiliate-crm/first-messages", { messages: messageDraft })).data,
+    onSuccess: (data) => {
+      setMessageDraft(data.messages);
+      toast.success("Suas 5 mensagens iniciais foram salvas.");
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-first-messages"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel salvar suas mensagens."));
+    },
+  });
+
+  const sendFirstMutation = useMutation({
+    mutationFn: async (prospectId: string) =>
+      (
+        await api.post<OutreachResult>(`/admin/affiliate-crm/prospects/${prospectId}/send-first`, {
+          message_index: selectedMessageIndex,
+        })
+      ).data,
+    onSuccess: (data) => {
+      toast.success(
+        data.transport === "whatsapp_web_bridge"
+          ? "Primeira mensagem entrou na fila. A clinica agora e sua."
+          : "Primeira mensagem registrada. A clinica agora e sua.",
+      );
+      setActiveTab("mine");
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-available"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-mine"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-overview"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-outreach-runtime"] });
+    },
+    onError: (error: unknown) => {
+      toast.error(extractApiErrorMessage(error, "Nao foi possivel assumir esta clinica."));
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-available"] });
+      queryClient.invalidateQueries({ queryKey: ["adm-affiliate-crm-mine"] });
+    },
+  });
+
+  const availableProspect = availableQuery.data?.prospect ?? null;
+  const selectedMessage = messageDraft[selectedMessageIndex] || "";
+  const allMessagesValid = messageDraft.length === 5 && messageDraft.every((message) => message.trim().length >= 2);
+
+  return (
+    <section className="space-y-4">
+      <Card className="overflow-hidden border-sky-200 bg-[radial-gradient(circle_at_top_right,_rgba(14,165,233,0.14),_transparent_42%),linear-gradient(135deg,#ffffff,#f0f9ff)]">
+        <CardContent className="space-y-4 p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-700">CRM do afiliado</p>
+              <h2 className="mt-1 text-2xl font-black text-stone-950">Uma clinica por vez, sem disputa duplicada</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+                A clinica fica reservada para voce somente quando a primeira mensagem entra na fila. Depois disso,
+                nenhum outro afiliado consegue visualizar ou utilizar esse lead.
+              </p>
+            </div>
+            <Badge className={usesWhatsAppWebBridge ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+              {usesWhatsAppWebBridge ? "WhatsApp Web local" : "Fila comercial"}
+            </Badge>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              type="button"
+              variant={activeTab === "available" ? "default" : "outline"}
+              className={cn(activeTab === "available" && "bg-sky-700 text-white hover:bg-sky-600")}
+              onClick={() => setActiveTab("available")}
+            >
+              <Search size={16} />
+              Nova clinica
+            </Button>
+            <Button
+              type="button"
+              variant={activeTab === "mine" ? "default" : "outline"}
+              className={cn(activeTab === "mine" && "bg-sky-700 text-white hover:bg-sky-600")}
+              onClick={() => setActiveTab("mine")}
+            >
+              <Building2 size={16} />
+              Minhas clinicas ({mineQuery.data?.total ?? 0})
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                availableQuery.refetch();
+                mineQuery.refetch();
+              }}
+              disabled={availableQuery.isFetching || mineQuery.isFetching}
+            >
+              <RefreshCw size={16} />
+              Atualizar
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {activeTab === "available" ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)]">
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="p-5">
+              {availableQuery.isLoading ? (
+                <div className="py-16 text-center text-sm text-stone-500">Buscando a proxima clinica...</div>
+              ) : availableProspect ? (
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Clinica disponivel agora</p>
+                      <h3 className="mt-1 text-2xl font-black text-stone-950">{availableProspect.clinic_name}</h3>
+                      <p className="mt-2 text-sm text-stone-600">
+                        {[availableProspect.city, availableProspect.state].filter(Boolean).join(" / ") || "Localizacao nao informada"}
+                      </p>
+                    </div>
+                    <Badge className={getProspectWebsite(availableProspect) ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                      {getProspectWebsite(availableProspect) ? "Com site" : "Sem site"}
+                    </Badge>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <AffiliateInfo label="WhatsApp" value={availableProspect.whatsapp_phone || availableProspect.phone || "Nao informado"} />
+                    <AffiliateInfo label="Origem" value={humanize(availableProspect.lead_source || "nao informada")} />
+                    <AffiliateInfo label="Score" value={String(availableProspect.score)} />
+                  </div>
+
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-800">Mensagem escolhida</p>
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-stone-800">
+                      {selectedMessage || "Configure suas mensagens no painel ao lado."}
+                    </p>
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="h-12 w-full bg-sky-700 text-white hover:bg-sky-600"
+                    disabled={!canEdit || !allMessagesValid || sendFirstMutation.isPending}
+                    onClick={() => {
+                      const confirmed = window.confirm(
+                        `Enviar a mensagem ${selectedMessageIndex + 1} e assumir ${availableProspect.clinic_name}?`,
+                      );
+                      if (!confirmed) return;
+                      sendFirstMutation.mutate(availableProspect.id);
+                    }}
+                  >
+                    <Send size={17} />
+                    {sendFirstMutation.isPending ? "Enfileirando e reservando..." : "Enviar primeira mensagem e assumir clinica"}
+                  </Button>
+                  <p className="text-center text-xs leading-5 text-stone-500">
+                    Abrir esta tela nao reserva a clinica. A atribuicao acontece junto com o primeiro envio.
+                  </p>
+                </div>
+              ) : (
+                <div className="py-14">
+                  <EmptyState
+                    title="Nenhuma clinica disponivel agora"
+                    description="As clinicas em uso ficam protegidas. Atualize mais tarde para receber a proxima oportunidade livre."
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-stone-200 bg-white">
+            <CardContent className="space-y-4 p-5">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Suas mensagens</p>
+                <h3 className="mt-1 text-xl font-black text-stone-950">5 opcoes de primeiro contato</h3>
+                <p className="mt-2 text-sm leading-6 text-stone-600">
+                  Escolha uma opcao para o envio atual. Voce pode editar e salvar seus textos quando quiser.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-5 gap-2">
+                {messageDraft.map((_, index) => (
+                  <Button
+                    key={index}
+                    type="button"
+                    variant={selectedMessageIndex === index ? "default" : "outline"}
+                    className={cn(selectedMessageIndex === index && "bg-stone-950 text-white hover:bg-stone-800")}
+                    onClick={() => setSelectedMessageIndex(index)}
+                  >
+                    {index + 1}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="space-y-3">
+                {messageDraft.map((message, index) => (
+                  <label key={index} className={cn("block rounded-xl border p-3", selectedMessageIndex === index ? "border-sky-300 bg-sky-50" : "border-stone-200 bg-stone-50")}>
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-stone-500">
+                      Mensagem {index + 1}
+                    </span>
+                    <textarea
+                      className="min-h-[104px] w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                      value={message}
+                      onFocus={() => setSelectedMessageIndex(index)}
+                      onChange={(event) => {
+                        const next = [...messageDraft];
+                        next[index] = event.target.value;
+                        setMessageDraft(next);
+                      }}
+                      disabled={!canEdit}
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => saveMessagesMutation.mutate()}
+                disabled={!canEdit || !allMessagesValid || saveMessagesMutation.isPending}
+              >
+                <CheckCircle2 size={16} />
+                {saveMessagesMutation.isPending ? "Salvando..." : "Salvar minhas 5 mensagens"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <Card className="border-stone-200 bg-white">
+          <CardContent className="space-y-4 p-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-500">Carteira exclusiva</p>
+              <h3 className="mt-1 text-xl font-black text-stone-950">Clinicas que voce ja acessou</h3>
+              <p className="mt-2 text-sm leading-6 text-stone-600">
+                Estas clinicas ficam visiveis para voce e para o administrador principal, mas nao aparecem para outros afiliados.
+              </p>
+            </div>
+
+            {mineQuery.isLoading ? (
+              <div className="py-12 text-center text-sm text-stone-500">Carregando suas clinicas...</div>
+            ) : (mineQuery.data?.data || []).length ? (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {(mineQuery.data?.data || []).map((prospect) => (
+                  <button
+                    key={prospect.id}
+                    type="button"
+                    className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-sky-300 hover:bg-sky-50"
+                    onClick={() => onOpenProspect(prospect)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-stone-950">{prospect.clinic_name}</p>
+                        <p className="mt-1 text-xs text-stone-500">
+                          {[prospect.city, prospect.state].filter(Boolean).join(" / ") || "Sem localizacao"}
+                        </p>
+                      </div>
+                      <Badge className={temperatureClass(prospect.temperature)}>{humanize(prospect.temperature)}</Badge>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Badge className={statusClass(prospect.status)}>{humanize(prospect.status)}</Badge>
+                      <Badge className="bg-white text-stone-700">Score {prospect.score}</Badge>
+                      <Badge className="bg-sky-100 text-sky-800">
+                        Desde {formatDateTimeBR(prospect.affiliate_claimed_at || prospect.first_contact_at)}
+                      </Badge>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="py-12">
+                <EmptyState
+                  title="Sua carteira ainda esta vazia"
+                  description="Envie a primeira mensagem na aba Nova clinica para assumir seu primeiro lead."
+                />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </section>
+  );
+}
+
+function AffiliateInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-stone-500">{label}</p>
+      <p className="mt-2 truncate text-sm font-semibold text-stone-900">{value}</p>
+    </div>
   );
 }
 
@@ -4024,7 +4370,11 @@ function ProspectDetail({
             <Info label="Score" value={String(prospect.score)} icon={<BarChart3 size={16} />} />
             <Info label="Status" value={humanize(prospect.status)} icon={<Activity size={16} />} />
             <Info label="Demo" value={prospect.demo_tenant_id ? humanize(prospect.demo_status) : "Nao criada"} icon={<ShieldCheck size={16} />} />
-            <Info label="Dono" value={`${prospectOwnerLabel(prospect)} - ${prospectOwnerDetail(prospect)}`} icon={<UserRound size={16} />} />
+            <Info
+              label="Afiliado responsavel"
+              value={`${prospectOwnerLabel(prospect)} - ${prospectOwnerDetail(prospect)}`}
+              icon={<UserRound size={16} />}
+            />
           </div>
 
           <div className="grid gap-2 text-sm">
